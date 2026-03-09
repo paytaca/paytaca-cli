@@ -4,6 +4,8 @@
  * Displays the BCH balance for the current wallet.
  * Shows both BCH and satoshi denominations, plus spendable vs total
  * when they differ (e.g. unconfirmed UTXOs).
+ *
+ * Use --token <category> to display the balance for a specific CashToken.
  */
 
 import { Command } from 'commander'
@@ -25,11 +27,18 @@ export function registerBalanceCommand(program: Command): void {
     .command('balance')
     .description('Display wallet balance')
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
+    .option('--token <id>', 'Show balance for a specific CashToken category (64-character hex)')
     .option('--sats', 'Display balance in satoshis only')
     .action(async (opts) => {
       const isChipnet = Boolean(opts.chipnet)
       const showSatsOnly = Boolean(opts.sats)
       const network = isChipnet ? 'chipnet' : 'mainnet'
+      const tokenId: string = opts.token || ''
+
+      if (tokenId && !/^[a-fA-F0-9]{64}$/.test(tokenId)) {
+        console.log(chalk.red('\nError: Token must be a 64-character hex string.\n'))
+        process.exit(1)
+      }
 
       // ── Validate wallet ──────────────────────────────────────────────
       const data = loadMnemonic()
@@ -45,31 +54,71 @@ export function registerBalanceCommand(program: Command): void {
       const w = loadWallet()!
       const bchWallet = w.forNetwork(isChipnet)
 
-      console.log(chalk.bold(`\n   Balance (${network})\n`))
-
       try {
-        const result = await bchWallet.getBalance()
+        if (tokenId) {
+          // ── Token balance ────────────────────────────────────────────
+          let tokenName = ''
+          let tokenSymbol = ''
+          let decimals = 0
 
-        const balanceSats = bchToSats(result.balance)
-        const spendableSats = bchToSats(result.spendable)
+          try {
+            const info = await bchWallet.getTokenInfo(tokenId)
+            if (info) {
+              tokenName = info.name !== 'Unknown Token' ? info.name : ''
+              tokenSymbol = info.symbol || ''
+              decimals = info.decimals || 0
+            }
+          } catch {
+            // Token info unavailable — proceed without metadata
+          }
 
-        if (showSatsOnly) {
-          console.log(`   Balance:    ${formatSats(balanceSats)} sats`)
+          const label = tokenSymbol || tokenName || 'Token'
+          console.log(chalk.bold(`\n   ${label} Balance (${network})\n`))
+          console.log(chalk.dim(`   Category: ${tokenId}`))
+          if (tokenName) {
+            console.log(chalk.dim(`   Name:     ${tokenName}`))
+          }
+
+          const result = await bchWallet.getTokenBalance(tokenId)
+          const displayBalance = decimals > 0
+            ? (result.balance / 10 ** decimals)
+            : result.balance
+          const displaySpendable = decimals > 0
+            ? (result.spendable / 10 ** decimals)
+            : result.spendable
+          const unit = tokenSymbol || 'tokens'
+
+          console.log(`   Balance:    ${displayBalance} ${unit}`)
           if (result.spendable !== result.balance) {
-            console.log(
-              chalk.dim(`   Spendable:  ${formatSats(spendableSats)} sats`)
-            )
+            console.log(chalk.dim(`   Spendable:  ${displaySpendable} ${unit}`))
           }
         } else {
-          console.log(`   Balance:    ${result.balance} BCH`)
-          console.log(
-            chalk.dim(`               ${formatSats(balanceSats)} sats`)
-          )
-          if (result.spendable !== result.balance) {
-            console.log(`   Spendable:  ${result.spendable} BCH`)
+          // ── BCH balance ──────────────────────────────────────────────
+          console.log(chalk.bold(`\n   Balance (${network})\n`))
+
+          const result = await bchWallet.getBalance()
+
+          const balanceSats = bchToSats(result.balance)
+          const spendableSats = bchToSats(result.spendable)
+
+          if (showSatsOnly) {
+            console.log(`   Balance:    ${formatSats(balanceSats)} sats`)
+            if (result.spendable !== result.balance) {
+              console.log(
+                chalk.dim(`   Spendable:  ${formatSats(spendableSats)} sats`)
+              )
+            }
+          } else {
+            console.log(`   Balance:    ${result.balance} BCH`)
             console.log(
-              chalk.dim(`               ${formatSats(spendableSats)} sats`)
+              chalk.dim(`               ${formatSats(balanceSats)} sats`)
             )
+            if (result.spendable !== result.balance) {
+              console.log(`   Spendable:  ${result.spendable} BCH`)
+              console.log(
+                chalk.dim(`               ${formatSats(spendableSats)} sats`)
+              )
+            }
           }
         }
       } catch (err: any) {
