@@ -1,6 +1,6 @@
 # Paytaca CLI
 
-A command-line interface for the Paytaca wallet. Built with the same core logic as the [Paytaca mobile app](https://github.com/nicefiction/paytaca-app), using [watchtower-cash-js](https://github.com/nicefiction/watchtower-cash-js) for transaction operations and [libauth](https://github.com/bitauth/libauth) for HD key derivation.
+A command-line interface for the Paytaca wallet. Built with the same core logic as the [Paytaca mobile app](https://github.com/paytaca/paytaca-app), using [watchtower-cash-js](https://github.com/paytaca/watchtower-cash-js) for transaction operations and [libauth](https://github.com/bitauth/libauth) for HD key derivation.
 
 Designed to be AI agent-friendly and useful for automation by power users.
 
@@ -91,7 +91,7 @@ Seed phrases are stored in the OS native keychain:
 - **Linux** — GNOME Keyring / KWallet
 - **Windows** — Credential Manager
 
-Powered by [@napi-rs/keyring](https://github.com/nicefiction/keyring) (prebuilt Rust binaries, no node-gyp).
+Powered by [@napi-rs/keyring](https://github.com/Brooooooklyn/keyring-node) (prebuilt Rust binaries, no node-gyp required).
 
 ## Architecture
 
@@ -137,4 +137,4 @@ npm run clean      # Remove dist/
 
 ## License
 
-MIT
+Copyright Paytaca Inc. 2021. All rights reserved. See [LICENSE](LICENSE) for details.

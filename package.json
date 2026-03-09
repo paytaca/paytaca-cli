@@ -15,7 +15,7 @@
     "clean": "rm -rf dist"
   },
   "author": "Paytaca",
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "dependencies": {
     "@bitauth/libauth": "2.0.0-alpha.8",
     "@napi-rs/keyring": "^1.2.0",
