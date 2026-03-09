@@ -13,13 +13,19 @@ Designed to be AI agent-friendly and useful for automation by power users.
 ## Installation
 
 ```bash
-git clone <repo-url> && cd paytaca-cli
+npm install -g paytaca-cli
+```
+
+Or install from source:
+
+```bash
+git clone https://github.com/paytaca/paytaca-cli.git && cd paytaca-cli
 npm install
 npm run build
 npm link
 ```
 
-After linking, the `paytaca` command is available globally.
+After installing, the `paytaca` command is available globally.
 
 ## Commands
 
