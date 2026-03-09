@@ -2,7 +2,7 @@
 
 A command-line interface for the Paytaca [Bitcoin Cash](https://bitcoincash.org) (BCH) wallet. Built with the same core logic as the [Paytaca mobile app](https://github.com/paytaca/paytaca-app), using [watchtower-cash-js](https://github.com/paytaca/watchtower-cash-js) for transaction operations and [libauth](https://github.com/bitauth/libauth) for HD key derivation.
 
-Bitcoin Cash is peer-to-peer electronic cash, enabling fast, low-fee transactions for everyday use. Paytaca CLI brings the full capabilities of the Paytaca wallet to the terminal — create wallets, derive addresses, send and receive BCH, and view transaction history, all from the command line.
+Bitcoin Cash is peer-to-peer electronic cash, enabling fast, low-fee transactions for everyday use. Paytaca CLI brings the full capabilities of the Paytaca wallet to the terminal — create wallets, derive addresses, send and receive BCH, manage CashTokens (fungible tokens and NFTs), and view transaction history, all from the command line.
 
 Designed to be AI agent-friendly and useful for automation by power users.
 
@@ -38,15 +38,20 @@ paytaca wallet export              # Display the stored seed phrase
 ```bash
 paytaca balance                    # Show BCH balance (BCH + sats)
 paytaca balance --sats             # Show in satoshis only
+paytaca balance --token <category> # Show balance for a specific CashToken
 paytaca balance --chipnet          # Query chipnet balance
 ```
 
 ### Receive
 
 ```bash
-paytaca receive                    # Show receiving address with QR code
-paytaca receive 3                  # Show address at index 3
-paytaca receive --no-qr            # Address only, no QR code
+paytaca receive                              # Show receiving address with QR code
+paytaca receive --index 3                    # Show address at index 3
+paytaca receive --no-qr                      # Address only, no QR code
+paytaca receive --amount 0.5                 # BIP21 URI with BCH amount
+paytaca receive --token                      # Token-aware z-prefix address
+paytaca receive --token <category>           # PayPro URI for a specific token
+paytaca receive --token <category> --amount 100  # PayPro URI with token amount
 ```
 
 ### Send
@@ -64,6 +69,7 @@ paytaca history                    # Show recent transactions
 paytaca history --sats             # Amounts in satoshis
 paytaca history --type incoming    # Filter: incoming, outgoing, or all
 paytaca history --page 2           # Pagination
+paytaca history --token <category> # Filter by CashToken category
 ```
 
 ### Address
@@ -71,8 +77,19 @@ paytaca history --page 2           # Pagination
 ```bash
 paytaca address derive             # Derive address at index 0
 paytaca address derive 5           # Derive address at index 5
+paytaca address derive --token     # Derive token-aware z-prefix address
 paytaca address list               # List first 5 addresses
 paytaca address list -n 20         # List first 20 addresses
+paytaca address list --token       # List token-aware z-prefix addresses
+```
+
+### CashTokens
+
+```bash
+paytaca token list                                   # List fungible tokens with balances
+paytaca token info <category>                        # Token metadata, balance, and NFTs
+paytaca token send <address> <amount> --token <cat>  # Send fungible tokens
+paytaca token send-nft <address> --token <cat> --commitment <hex>  # Send an NFT
 ```
 
 ## Network
@@ -101,15 +118,16 @@ Powered by [@napi-rs/keyring](https://github.com/Brooooooklyn/keyring-node) (pre
 src/
   commands/        CLI command definitions (Commander.js)
     wallet.ts        wallet create | import | info | export
-    balance.ts       balance display
-    receive.ts       receiving address + QR code
+    balance.ts       balance display (BCH and CashTokens)
+    receive.ts       receiving address + QR code + payment URIs
     send.ts          BCH sending
-    history.ts       transaction history
-    address.ts       HD address derivation
+    history.ts       transaction history (BCH and CashTokens)
+    address.ts       HD address derivation (standard and z-prefix)
+    token.ts         CashToken commands (list, info, send, send-nft)
   wallet/
     index.ts         Wallet class, mnemonic gen/import/load
-    bch.ts           BchWallet (balance, send, history, subscribe)
-    keys.ts          LibauthHDWallet (HD key derivation)
+    bch.ts           BchWallet (balance, send, history, CashTokens)
+    keys.ts          LibauthHDWallet (HD key derivation, token addresses)
   storage/
     keychain.ts      OS keychain wrapper (@napi-rs/keyring)
   utils/
