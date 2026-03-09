@@ -2,8 +2,8 @@
  * Paytaca CLI — Entry point
  *
  * A command-line interface for the Paytaca Bitcoin Cash wallet.
- * Provides wallet management, address derivation, and BCH sending
- * with the same core logic as the Paytaca mobile app.
+ * Provides wallet management, address derivation, BCH sending,
+ * and CashTokens support with the same core logic as the Paytaca mobile app.
  */
 
 import { Command } from 'commander'
@@ -13,13 +13,14 @@ import { registerSendCommand } from './commands/send.js'
 import { registerBalanceCommand } from './commands/balance.js'
 import { registerReceiveCommand } from './commands/receive.js'
 import { registerHistoryCommand } from './commands/history.js'
+import { registerTokenCommands } from './commands/token.js'
 
 const program = new Command()
 
 program
   .name('paytaca')
   .description('Paytaca — Bitcoin Cash wallet CLI')
-  .version('0.1.0')
+  .version('0.2.0')
 
 registerWalletCommands(program)
 registerAddressCommands(program)
@@ -27,5 +28,6 @@ registerSendCommand(program)
 registerBalanceCommand(program)
 registerReceiveCommand(program)
 registerHistoryCommand(program)
+registerTokenCommands(program)
 
 program.parse()

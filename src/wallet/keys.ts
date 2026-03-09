@@ -141,4 +141,15 @@ export class LibauthHDWallet {
       change: this.getAddressAt({ path: `1/${index}` }),
     }
   }
+
+  /**
+   * Derive token-aware (z-prefix) receiving and change addresses at a given index.
+   * Used for CashToken operations — tokens can only be received at token-aware addresses.
+   */
+  getTokenAddressSetAt(index: number): { receiving: string; change: string } {
+    return {
+      receiving: this.getAddressAt({ path: `0/${index}`, token: true }),
+      change: this.getAddressAt({ path: `1/${index}`, token: true }),
+    }
+  }
 }

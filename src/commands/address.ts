@@ -4,6 +4,8 @@
  * Derives Bitcoin Cash addresses from the stored seed phrase
  * using the HD path m/44'/145'/0'/0/{index} (receiving)
  * and m/44'/145'/0'/1/{index} (change).
+ *
+ * Use --token to derive token-aware (z-prefix) addresses for CashTokens.
  */
 
 import { Command } from 'commander'
@@ -21,8 +23,10 @@ export function registerAddressCommands(program: Command): void {
     .description('Derive receiving and change addresses at a given index')
     .argument('[index]', 'Address index (default: 0)', '0')
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
+    .option('--token', 'Show token-aware (z-prefix) addresses for CashTokens')
     .action((_index, opts) => {
       const isChipnet = Boolean(opts.chipnet)
+      const isToken = Boolean(opts.token)
       const index = parseInt(_index, 10)
 
       if (isNaN(index) || index < 0) {
@@ -42,11 +46,17 @@ export function registerAddressCommands(program: Command): void {
       const bchWallet = w.forNetwork(isChipnet)
       const network = isChipnet ? 'chipnet' : 'mainnet'
 
-      const addressSet = bchWallet.getAddressSetAt(index)
+      const addressSet = isToken
+        ? bchWallet.getTokenAddressSetAt(index)
+        : bchWallet.getAddressSetAt(index)
 
-      console.log(chalk.bold(`\n   Address at index ${index} (${network})\n`))
+      const label = isToken ? 'Token address' : 'Address'
+      console.log(chalk.bold(`\n   ${label} at index ${index} (${network})\n`))
       console.log(`   Receiving:  ${addressSet.receiving}`)
       console.log(chalk.dim(`   Change:     ${addressSet.change}`))
+      if (isToken) {
+        console.log(chalk.dim('   Type:       token-aware (z-prefix)'))
+      }
       console.log()
     })
 
@@ -56,8 +66,10 @@ export function registerAddressCommands(program: Command): void {
     .description('List derived receiving addresses')
     .option('-n, --count <count>', 'Number of addresses to derive', '5')
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
+    .option('--token', 'Show token-aware (z-prefix) addresses for CashTokens')
     .action((_opts) => {
       const isChipnet = Boolean(_opts.chipnet)
+      const isToken = Boolean(_opts.token)
       const count = parseInt(_opts.count, 10)
 
       if (isNaN(count) || count < 1) {
@@ -77,7 +89,8 @@ export function registerAddressCommands(program: Command): void {
       const bchWallet = w.forNetwork(isChipnet)
       const network = isChipnet ? 'chipnet' : 'mainnet'
 
-      console.log(chalk.bold(`\n   Addresses (${network})\n`))
+      const typeLabel = isToken ? 'Token Addresses' : 'Addresses'
+      console.log(chalk.bold(`\n   ${typeLabel} (${network})\n`))
       console.log(
         chalk.dim(
           `   ${'Index'.padEnd(8)}${'Receiving Address'}`
@@ -86,7 +99,9 @@ export function registerAddressCommands(program: Command): void {
       console.log(chalk.dim(`   ${'─'.repeat(70)}`))
 
       for (let i = 0; i < count; i++) {
-        const addressSet = bchWallet.getAddressSetAt(i)
+        const addressSet = isToken
+          ? bchWallet.getTokenAddressSetAt(i)
+          : bchWallet.getAddressSetAt(i)
         console.log(`   ${String(i).padEnd(8)}${addressSet.receiving}`)
       }
 

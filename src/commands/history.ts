@@ -4,6 +4,8 @@
  * Displays transaction history for the current wallet.
  * Fetches paginated records from the Watchtower API, showing
  * direction (incoming/outgoing), amount, date, and txid.
+ *
+ * Use --token to filter history for a specific CashToken.
  */
 
 import { Command } from 'commander'
@@ -46,6 +48,7 @@ export function registerHistoryCommand(program: Command): void {
       'Filter by type: all, incoming, outgoing (default: all)',
       'all'
     )
+    .option('--token <id>', 'Filter by CashToken category ID (64-character hex)')
     .option('--sats', 'Display amounts in satoshis')
     .action(async (opts) => {
       const isChipnet = Boolean(opts.chipnet)
@@ -53,6 +56,7 @@ export function registerHistoryCommand(program: Command): void {
       const network = isChipnet ? 'chipnet' : 'mainnet'
       const page = parseInt(opts.page, 10)
       const recordType: string = opts.type
+      const tokenId: string = opts.token || ''
 
       if (isNaN(page) || page < 1) {
         console.log(chalk.red('\nError: Page must be a positive integer.\n'))
@@ -65,6 +69,11 @@ export function registerHistoryCommand(program: Command): void {
             '\nError: Type must be "all", "incoming", or "outgoing".\n'
           )
         )
+        process.exit(1)
+      }
+
+      if (tokenId && !/^[a-fA-F0-9]{64}$/.test(tokenId)) {
+        console.log(chalk.red('\nError: Token must be a 64-character hex string.\n'))
         process.exit(1)
       }
 
@@ -82,17 +91,37 @@ export function registerHistoryCommand(program: Command): void {
       const w = loadWallet()!
       const bchWallet = w.forNetwork(isChipnet)
 
-      console.log(chalk.bold(`\n   Transaction History (${network})\n`))
+      // Resolve token label for header
+      let headerLabel = 'Transaction History'
+      if (tokenId) {
+        try {
+          const info = await bchWallet.getTokenInfo(tokenId)
+          if (info?.symbol) {
+            headerLabel = `${info.symbol} Transaction History`
+          } else if (info?.name && info.name !== 'Unknown Token') {
+            headerLabel = `${info.name} Transaction History`
+          } else {
+            headerLabel = `Token Transaction History`
+          }
+        } catch {
+          headerLabel = 'Token Transaction History'
+        }
+      }
+
+      console.log(chalk.bold(`\n   ${headerLabel} (${network})\n`))
+
+      if (tokenId) {
+        console.log(chalk.dim(`   Category: ${tokenId}\n`))
+      }
 
       try {
-        const result = await bchWallet.getHistory({ page, recordType })
+        const result = await bchWallet.getHistory({ page, recordType, tokenId })
 
         if (!result.history || result.history.length === 0) {
           console.log(chalk.dim('   No transactions found.\n'))
           return
         }
 
-        // ── Table header ───────────────────────────────────────────────
         const explorer = isChipnet
           ? 'https://chipnet.chaingraph.cash/tx/'
           : 'https://bchexplorer.info/tx/'
@@ -103,9 +132,12 @@ export function registerHistoryCommand(program: Command): void {
             ? chalk.green('  IN')
             : chalk.red(' OUT')
 
-          const amount = showSats
-            ? `${bchToSats(tx.amount).toLocaleString('en-US')} sats`
-            : `${tx.amount} BCH`
+          // When filtering by token, the amount is the token amount (not BCH)
+          const amount = tokenId
+            ? `${tx.amount}`
+            : showSats
+              ? `${bchToSats(tx.amount).toLocaleString('en-US')} sats`
+              : `${tx.amount} BCH`
 
           const amountColored = isIncoming
             ? chalk.green(`+${amount}`)
@@ -122,11 +154,12 @@ export function registerHistoryCommand(program: Command): void {
 
         // ── Pagination info ────────────────────────────────────────────
         const pageNum = parseInt(result.page, 10) || page
+        const tokenFlag = tokenId ? ` --token ${tokenId}` : ''
         console.log(
           chalk.dim(
             `   Page ${pageNum} of ${result.num_pages}` +
               (result.has_next
-                ? `  —  next: paytaca history --page ${pageNum + 1}${isChipnet ? ' --chipnet' : ''}`
+                ? `  —  next: paytaca history --page ${pageNum + 1}${tokenFlag}${isChipnet ? ' --chipnet' : ''}`
                 : '')
           )
         )
