@@ -1,6 +1,8 @@
 # Paytaca CLI
 
-A command-line interface for the Paytaca wallet. Built with the same core logic as the [Paytaca mobile app](https://github.com/paytaca/paytaca-app), using [watchtower-cash-js](https://github.com/paytaca/watchtower-cash-js) for transaction operations and [libauth](https://github.com/bitauth/libauth) for HD key derivation.
+A command-line interface for the Paytaca [Bitcoin Cash](https://bitcoincash.org) (BCH) wallet. Built with the same core logic as the [Paytaca mobile app](https://github.com/paytaca/paytaca-app), using [watchtower-cash-js](https://github.com/paytaca/watchtower-cash-js) for transaction operations and [libauth](https://github.com/bitauth/libauth) for HD key derivation.
+
+Bitcoin Cash is peer-to-peer electronic cash, enabling fast, low-fee transactions for everyday use. Paytaca CLI brings the full capabilities of the Paytaca wallet to the terminal — create wallets, derive addresses, send and receive BCH, and view transaction history, all from the command line.
 
 Designed to be AI agent-friendly and useful for automation by power users.
 

@@ -8,11 +8,30 @@
   "bin": {
     "paytaca": "./bin/paytaca.js"
   },
+  "files": [
+    "bin/",
+    "dist/",
+    "LICENSE",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node bin/paytaca.js",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "keywords": [
+    "bitcoin-cash",
+    "bch",
+    "wallet",
+    "cli",
+    "paytaca",
+    "cryptocurrency"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/paytaca/paytaca-cli.git"
   },
   "author": "Paytaca",
   "license": "SEE LICENSE IN LICENSE",
