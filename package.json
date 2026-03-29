@@ -11,6 +11,7 @@
   "files": [
     "bin/",
     "dist/",
+    "skills/",
     "LICENSE",
     "README.md"
   ],
@@ -19,6 +20,8 @@
     "dev": "tsc --watch",
     "start": "node bin/paytaca.js",
     "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "prepublishOnly": "npm run clean && npm run build"
   },
   "keywords": [
@@ -49,7 +52,9 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/qrcode-terminal": "^0.12.2",
-    "typescript": "^5.9.3"
+    "@vitest/ui": "^4.1.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.2"
   },
   "engines": {
     "node": ">=20.0.0"
