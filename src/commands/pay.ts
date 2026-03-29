@@ -29,6 +29,43 @@ interface PayOptions {
   chipnet: boolean
   maxAmount?: string
   changeAddress?: string
+  dryRun: boolean
+  json: boolean
+}
+
+interface DryRunInfo {
+  url: string
+  method: string
+  willRequirePayment: boolean
+  payment?: {
+    acceptsBch: boolean
+    paymentUrl: string
+    amountSats: string
+    maxTimeoutMs: number
+    resourceId: string
+    payerAddress: string
+    changeAddress: string
+    network: string
+  }
+  balanceCheck?: {
+    available: string
+    required: string
+    sufficient: boolean
+  }
+}
+
+interface JsonResult {
+  success: boolean
+  status?: number
+  statusText?: string
+  headers?: Record<string, string>
+  data?: any
+  payment?: {
+    required: boolean
+    txid?: string
+    error?: string
+  }
+  error?: string
 }
 
 export function registerPayCommand(program: Command): void {
@@ -42,15 +79,22 @@ export function registerPayCommand(program: Command): void {
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .option('--max-amount <amount>', 'Maximum payment amount in satoshis (overrides server\'s max-amount)')
     .option('--change-address <address>', 'Change address for BCH transaction')
+    .option('--dry-run', 'Show what would happen without making payment')
+    .option('--json', 'Output results as JSON')
     .action(async (url: string, opts: PayOptions) => {
       const isChipnet = Boolean(opts.chipnet)
       const network = isChipnet ? 'chipnet' : 'mainnet'
+      const isJson = Boolean(opts.json)
+      const isDryRun = Boolean(opts.dryRun)
 
       const data = loadMnemonic()
       if (!data) {
-        console.log(
-          chalk.red('\nNo wallet found. Run `paytaca wallet create` or `paytaca wallet import` first.\n')
-        )
+        const err = 'No wallet found. Run `paytaca wallet create` or `paytaca wallet import` first.'
+        if (isJson) {
+          console.log(JSON.stringify({ success: false, error: err }))
+        } else {
+          console.log(chalk.red(`\n${err}\n`))
+        }
         process.exit(1)
       }
 
@@ -69,7 +113,12 @@ export function registerPayCommand(program: Command): void {
         for (const h of opts.header) {
           const idx = h.indexOf(':')
           if (idx === -1) {
-            console.log(chalk.red(`\n   Error: Invalid header format: ${h}. Expected "Key: Value"\n`))
+            const err = `Invalid header format: ${h}. Expected "Key: Value"`
+            if (isJson) {
+              console.log(JSON.stringify({ success: false, error: err }))
+            } else {
+              console.log(chalk.red(`\n   Error: ${err}\n`))
+            }
             process.exit(1)
           }
           const key = h.substring(0, idx).trim()
@@ -81,173 +130,341 @@ export function registerPayCommand(program: Command): void {
       const method = opts.method?.toUpperCase() || 'GET'
       const body = opts.body
 
-      console.log(`\n   ${chalk.bold(method)} ${url}`)
-      console.log(chalk.dim(`   Network: ${chalk.cyan(network)}`))
-      console.log(chalk.dim(`   Payer: ${x402Payer.getPayerAddress()}`))
-      if (Object.keys(headers).length > 0) {
-        console.log(chalk.dim(`   Headers: ${JSON.stringify(headers)}`))
+      if (isJson) {
+        await runPayJson(url, method, headers, body, opts, x402Payer, bchWallet, isChipnet)
+      } else if (isDryRun) {
+        await runPayDryRun(url, method, headers, body, opts, x402Payer, bchWallet, isChipnet)
+      } else {
+        await runPayHuman(url, method, headers, body, opts, x402Payer, bchWallet, isChipnet)
       }
-      console.log()
+    })
+}
 
-      try {
-        const response = await fetch(url, {
-          method,
-          headers,
-          body: ['POST', 'PUT', 'PATCH'].includes(method) ? body : undefined,
-        })
+async function runPayHuman(
+  url: string,
+  method: string,
+  headers: Record<string, string>,
+  body: string | undefined,
+  opts: PayOptions,
+  x402Payer: X402Payer,
+  bchWallet: BchWallet,
+  isChipnet: boolean
+): Promise<void> {
+  const network = isChipnet ? 'chipnet' : 'mainnet'
 
-        const responseHeaders: Record<string, string> = {}
-        response.headers.forEach((value, key) => {
-          responseHeaders[key] = value
-        })
+  console.log(`\n   ${chalk.bold(method)} ${url}`)
+  console.log(chalk.dim(`   Network: ${chalk.cyan(network)}`))
+  console.log(chalk.dim(`   Payer: ${x402Payer.getPayerAddress()}`))
+  if (Object.keys(headers).length > 0) {
+    console.log(chalk.dim(`   Headers: ${JSON.stringify(headers)}`))
+  }
+  console.log()
 
-        const responseText = await response.text()
-        let responseData: any
-        try {
-          responseData = JSON.parse(responseText)
-        } catch {
-          responseData = responseText
-        }
+  try {
+    const result = await executePay(url, method, headers, body, opts, x402Payer, bchWallet, false)
 
-        if (response.status === 402) {
-          console.log(chalk.yellow('   402 PAYMENT REQUIRED'))
-          console.log(chalk.dim('   Parsing payment requirements...\n'))
+    if (result.payment?.required && result.payment.txid) {
+      const explorer = isChipnet
+        ? 'https://chipnet.chaingraph.cash/tx/'
+        : 'https://bchexplorer.info/tx/'
+      console.log(chalk.dim(`   Payment txid: ${explorer}${result.payment.txid}`))
+    }
 
-          const paymentHeaders: PaymentRequired = {}
-          for (const [key, value] of Object.entries(responseHeaders)) {
-            paymentHeaders[key.toLowerCase()] = value
-          }
+    console.log(chalk.green(`\n   Response: ${result.status} ${result.statusText}`))
+    console.log()
+    console.log(formatResponse(result.data))
+  } catch (err: any) {
+    console.log(chalk.red(`\n   Error: ${err.message || err}\n`))
+    process.exit(1)
+  }
 
-          const requirements = parsePaymentRequired(paymentHeaders)
-          if (!requirements) {
-            console.log(chalk.red('   Error: Could not parse PAYMENT-REQUIRED headers'))
-            process.exit(1)
-          }
+  console.log()
+}
 
-          const bchRequirements = selectBchPaymentRequirements(requirements)
-          if (!bchRequirements) {
-            console.log(chalk.red('   Error: Server does not accept BCH payment'))
-            console.log(chalk.dim(`   Accepted currencies: ${requirements.acceptCurrencies.join(', ')}`))
-            process.exit(1)
-          }
+async function runPayDryRun(
+  url: string,
+  method: string,
+  headers: Record<string, string>,
+  body: string | undefined,
+  opts: PayOptions,
+  x402Payer: X402Payer,
+  bchWallet: BchWallet,
+  isChipnet: boolean
+): Promise<void> {
+  const network = isChipnet ? 'chipnet' : 'mainnet'
+  const dryRunInfo: DryRunInfo = {
+    url,
+    method,
+    willRequirePayment: false,
+  }
 
-          bchRequirements.payer = x402Payer.getPayerAddress()
+  console.log(`\n   ${chalk.bold(method)} ${url} ${chalk.dim('[DRY RUN]')}`)
+  console.log(chalk.dim(`   Network: ${chalk.cyan(network)}`))
+  console.log(chalk.dim(`   Payer: ${x402Payer.getPayerAddress()}`))
+  console.log()
 
-          const maxAmountSat = opts.maxAmount
-            ? BigInt(opts.maxAmount)
-            : bchRequirements.maxAmount
+  try {
+    const response = await fetch(url, {
+      method,
+      headers,
+      body: ['POST', 'PUT', 'PATCH'].includes(method) ? body : undefined,
+    })
 
-          if (bchRequirements.maxAmount > 0n && maxAmountSat > bchRequirements.maxAmount) {
-            console.log(
-              chalk.yellow(`   Warning: --max-amount (${maxAmountSat}) exceeds server max (${bchRequirements.maxAmount})`)
-            )
-          }
+    const responseHeaders: Record<string, string> = {}
+    response.headers.forEach((value, key) => {
+      responseHeaders[key] = value
+    })
 
-          console.log(chalk.dim(`   Payment URL: ${bchRequirements.paymentUrl}`))
-          console.log(chalk.dim(`   Max timeout: ${bchRequirements.maxTimeoutMs}ms`))
-          console.log(chalk.dim(`   Max amount: ${bchRequirements.maxAmount} satoshis`))
-          console.log()
+    if (response.status === 402) {
+      dryRunInfo.willRequirePayment = true
 
-          const recipients = [
-            {
-              address: bchRequirements.paymentUrl.split(':')[1]?.replace(/^\/\//, '') || '',
-              amount: bchRequirements.maxAmount,
-              currency: 'BCH',
-            },
-          ]
+      const paymentHeaders: PaymentRequired = {}
+      for (const [key, value] of Object.entries(responseHeaders)) {
+        paymentHeaders[key.toLowerCase()] = value
+      }
 
-          if (!recipients[0].address) {
-            console.log(chalk.red('   Error: Invalid payment URL in requirements'))
-            process.exit(1)
-          }
-
-          console.log(chalk.dim(`   Sending payment to: ${recipients[0].address}`))
-          console.log(chalk.dim(`   Amount: ${recipients[0].amount} satoshis`))
-
-          const changeAddressSet = bchWallet.getAddressSetAt(0)
-          const changeAddress = opts.changeAddress || changeAddressSet.change
-          console.log(chalk.dim(`   Change address: ${changeAddress}`))
-          console.log()
-
-          console.log(chalk.cyan('   Broadcasting BCH transaction...'))
-          const sendResult = await bchWallet.sendBch(
-            Number(recipients[0].amount) / 1e8,
-            recipients[0].address,
-            changeAddress
-          )
-
-          if (!sendResult.success) {
-            console.log(chalk.red(`   Payment failed: ${sendResult.error}`))
-            if (sendResult.lackingSats) {
-              console.log(chalk.yellow(`   Insufficient balance. Short by ${sendResult.lackingSats} satoshis.`))
-            }
-            process.exit(1)
-          }
-
-          console.log(chalk.green('   Payment successful!'))
-          console.log(chalk.dim(`   txid: ${sendResult.txid}`))
-          console.log()
-
-          console.log(chalk.cyan('   Retrying original request with payment...'))
-
-          const authHeader = await x402Payer.createAuthorization(
-            bchRequirements,
-            {
-              scheme: 'utxo',
-              network: bchRequirements.network,
-              max_timeout_ms: bchRequirements.maxTimeoutMs,
-              resource_id: bchRequirements.resourceId,
-              payment: {
-                scheme: 'utxo',
-                network: bchRequirements.network,
-                recipients: recipients.map(r => ({
-                  address: r.address,
-                  amount: r.amount.toString(),
-                  currency: r.currency,
-                })),
-              },
-              payer: x402Payer.getPayerAddress(),
-            }
-          )
-
-          headers['Authorization'] = `x402 ${authHeader}`
-
-          const retryResponse = await fetch(url, {
-            method,
-            headers,
-            body: ['POST', 'PUT', 'PATCH'].includes(method) ? body : undefined,
-          })
-
-          const retryResponseText = await retryResponse.text()
-          let retryResponseData: any
-          try {
-            retryResponseData = JSON.parse(retryResponseText)
-          } catch {
-            retryResponseData = retryResponseText
-          }
-
-          console.log(chalk.green(`\n   Response: ${retryResponse.status} ${retryResponse.statusText}`))
-          console.log()
-          console.log(formatResponse(retryResponseData))
-
-          if (sendResult.txid) {
-            const explorer = isChipnet
-              ? 'https://chipnet.chaingraph.cash/tx/'
-              : 'https://bchexplorer.info/tx/'
-            console.log(chalk.dim(`   Payment txid: ${explorer}${sendResult.txid}`))
-          }
-        } else {
-          console.log(chalk.green(`   Response: ${response.status} ${response.statusText}`))
-          console.log()
-          console.log(formatResponse(responseData))
-        }
-      } catch (err: any) {
-        console.log(chalk.red(`\n   Error: ${err.message || err}\n`))
+      const requirements = parsePaymentRequired(paymentHeaders)
+      if (!requirements) {
+        console.log(chalk.red('   Error: Could not parse PAYMENT-REQUIRED headers'))
         process.exit(1)
       }
 
-      console.log()
+      const bchRequirements = selectBchPaymentRequirements(requirements)
+      if (!bchRequirements) {
+        console.log(chalk.red('   Error: Server does not accept BCH payment'))
+        console.log(chalk.dim(`   Accepted currencies: ${requirements.acceptCurrencies.join(', ')}`))
+        process.exit(1)
+      }
+
+      const changeAddressSet = bchWallet.getAddressSetAt(0)
+      const changeAddress = opts.changeAddress || changeAddressSet.change
+      const amountSats = bchRequirements.maxAmount.toString()
+
+      dryRunInfo.payment = {
+        acceptsBch: true,
+        paymentUrl: bchRequirements.paymentUrl,
+        amountSats,
+        maxTimeoutMs: bchRequirements.maxTimeoutMs,
+        resourceId: bchRequirements.resourceId,
+        payerAddress: x402Payer.getPayerAddress(),
+        changeAddress,
+        network: bchRequirements.network,
+      }
+
+      try {
+        const balanceResult = await bchWallet.getBalance()
+        const available = (balanceResult.spendable * 1e8).toFixed(0)
+        const required = amountSats
+        const sufficient = BigInt(available) >= BigInt(required)
+
+        dryRunInfo.balanceCheck = {
+          available,
+          required,
+          sufficient,
+        }
+
+        console.log(chalk.yellow('   402 PAYMENT REQUIRED'))
+        console.log(chalk.dim('   Payment details:'))
+        console.log(chalk.dim(`     URL:        ${bchRequirements.paymentUrl}`))
+        console.log(chalk.dim(`     Amount:     ${amountSats} sats (${(Number(amountSats) / 1e8).toFixed(8)} BCH)`))
+        console.log(chalk.dim(`     Timeout:    ${bchRequirements.maxTimeoutMs}ms`))
+        console.log(chalk.dim(`     Resource:   ${bchRequirements.resourceId}`))
+        console.log()
+        console.log(chalk.dim('   Wallet:'))
+        console.log(chalk.dim(`     Payer:      ${x402Payer.getPayerAddress()}`))
+        console.log(chalk.dim(`     Change:     ${changeAddress}`))
+        console.log()
+        if (sufficient) {
+          console.log(chalk.green(`   Balance OK: ${available} sats available, ${required} sats required`))
+        } else {
+          console.log(chalk.red(`   Insufficient: ${available} sats available, ${required} sats required`))
+        }
+      } catch (balanceErr) {
+        console.log(chalk.dim(`   (Could not check balance: ${(balanceErr as Error).message})`))
+      }
+    } else {
+      console.log(chalk.green(`   Response: ${response.status} ${response.statusText} (no payment required)`))
+    }
+
+    console.log()
+    console.log(chalk.dim('   To execute: paytaca pay ' + url))
+  } catch (err: any) {
+    console.log(chalk.red(`\n   Error: ${err.message || err}\n`))
+    process.exit(1)
+  }
+}
+
+async function runPayJson(
+  url: string,
+  method: string,
+  headers: Record<string, string>,
+  body: string | undefined,
+  opts: PayOptions,
+  x402Payer: X402Payer,
+  bchWallet: BchWallet,
+  isChipnet: boolean
+): Promise<void> {
+  try {
+    const result = await executePay(url, method, headers, body, opts, x402Payer, bchWallet, false)
+    console.log(JSON.stringify(result, null, 2))
+  } catch (err: any) {
+    const errorResult: JsonResult = { success: false, error: err.message || String(err) }
+    console.log(JSON.stringify(errorResult, null, 2))
+    process.exit(1)
+  }
+}
+
+async function executePay(
+  url: string,
+  method: string,
+  headers: Record<string, string>,
+  body: string | undefined,
+  opts: PayOptions,
+  x402Payer: X402Payer,
+  bchWallet: BchWallet,
+  skipPayment: boolean
+): Promise<JsonResult> {
+  const isChipnet = Boolean(opts.chipnet)
+
+  const response = await fetch(url, {
+    method,
+    headers,
+    body: ['POST', 'PUT', 'PATCH'].includes(method) ? body : undefined,
+  })
+
+  const responseHeaders: Record<string, string> = {}
+  response.headers.forEach((value, key) => {
+    responseHeaders[key] = value
+  })
+
+  const responseText = await response.text()
+  let responseData: any
+  try {
+    responseData = JSON.parse(responseText)
+  } catch {
+    responseData = responseText
+  }
+
+  if (response.status === 402) {
+    const paymentHeaders: PaymentRequired = {}
+    for (const [key, value] of Object.entries(responseHeaders)) {
+      paymentHeaders[key.toLowerCase()] = value
+    }
+
+    const requirements = parsePaymentRequired(paymentHeaders)
+    if (!requirements) {
+      return { success: false, status: 402, error: 'Could not parse PAYMENT-REQUIRED headers' }
+    }
+
+    const bchRequirements = selectBchPaymentRequirements(requirements)
+    if (!bchRequirements) {
+      return {
+        success: false,
+        status: 402,
+        error: 'Server does not accept BCH payment',
+        data: { acceptCurrencies: requirements.acceptCurrencies },
+      }
+    }
+
+    if (skipPayment) {
+      return {
+        success: true,
+        status: 402,
+        payment: { required: true },
+      }
+    }
+
+    bchRequirements.payer = x402Payer.getPayerAddress()
+
+    const recipients = [
+      {
+        address: bchRequirements.paymentUrl.split(':')[1]?.replace(/^\/\//, '') || '',
+        amount: bchRequirements.maxAmount,
+        currency: 'BCH',
+      },
+    ]
+
+    if (!recipients[0].address) {
+      return { success: false, status: 402, error: 'Invalid payment URL in requirements' }
+    }
+
+    const changeAddressSet = bchWallet.getAddressSetAt(0)
+    const changeAddress = opts.changeAddress || changeAddressSet.change
+
+    const sendResult = await bchWallet.sendBch(
+      Number(recipients[0].amount) / 1e8,
+      recipients[0].address,
+      changeAddress
+    )
+
+    if (!sendResult.success) {
+      return {
+        success: false,
+        status: 402,
+        payment: { required: true, error: sendResult.error },
+        error: sendResult.error,
+      }
+    }
+
+    const authHeader = await x402Payer.createAuthorization(
+      bchRequirements,
+      {
+        scheme: 'utxo',
+        network: bchRequirements.network,
+        max_timeout_ms: bchRequirements.maxTimeoutMs,
+        resource_id: bchRequirements.resourceId,
+        payment: {
+          scheme: 'utxo',
+          network: bchRequirements.network,
+          recipients: recipients.map(r => ({
+            address: r.address,
+            amount: r.amount.toString(),
+            currency: r.currency,
+          })),
+        },
+        payer: x402Payer.getPayerAddress(),
+      }
+    )
+
+    headers['Authorization'] = `x402 ${authHeader}`
+
+    const retryResponse = await fetch(url, {
+      method,
+      headers,
+      body: ['POST', 'PUT', 'PATCH'].includes(method) ? body : undefined,
     })
+
+    const retryResponseHeaders: Record<string, string> = {}
+    retryResponse.headers.forEach((value, key) => {
+      retryResponseHeaders[key] = value
+    })
+
+    const retryResponseText = await retryResponse.text()
+    let retryResponseData: any
+    try {
+      retryResponseData = JSON.parse(retryResponseText)
+    } catch {
+      retryResponseData = retryResponseText
+    }
+
+    return {
+      success: retryResponse.ok,
+      status: retryResponse.status,
+      statusText: retryResponse.statusText,
+      headers: retryResponseHeaders,
+      data: retryResponseData,
+      payment: { required: true, txid: sendResult.txid },
+    }
+  }
+
+  return {
+    success: response.ok,
+    status: response.status,
+    statusText: response.statusText,
+    headers: responseHeaders,
+    data: responseData,
+    payment: { required: false },
+  }
 }
 
 function formatResponse(data: any): string {
