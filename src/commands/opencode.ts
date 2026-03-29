@@ -10,6 +10,7 @@ import chalk from 'chalk'
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
+import { fileURLToPath } from 'url'
 
 const OPENCODE_SKILLS_DIR = path.join(os.homedir(), '.config', 'opencode', 'skills')
 
@@ -42,7 +43,8 @@ function getSkillSourcePath(): string {
     const packageDir = path.dirname(modulePath)
     return path.join(packageDir, 'skills', 'paytaca', 'SKILL.md')
   } catch {
-    const srcPath = path.dirname(new URL(import.meta.url).pathname)
+    const currentFilePath = fileURLToPath(import.meta.url)
+    const srcPath = path.dirname(currentFilePath)
     return path.join(srcPath, '..', '..', 'skills', 'paytaca', 'SKILL.md')
   }
 }
