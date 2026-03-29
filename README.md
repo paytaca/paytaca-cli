@@ -98,6 +98,37 @@ paytaca token send <address> <amount> --token <cat>  # Send fungible tokens
 paytaca token send-nft <address> --token <cat> --commitment <hex>  # Send an NFT
 ```
 
+### x402 Payments
+
+The x402 protocol enables HTTP payments via BCH. Some APIs (like nanogpt) require payment to access.
+
+```bash
+paytaca check <url>                 # Check if URL requires payment, shows estimated cost
+paytaca pay <url>                    # Make a paid HTTP request (handles 402 automatically)
+paytaca pay <url> --json             # JSON output (recommended for AI agents)
+paytaca pay <url> --dry-run          # Preview payment without executing
+paytaca pay <url> --method POST      # POST request with body
+paytaca pay <url> --body '{"prompt":"hello"}'
+```
+
+**Example workflow:**
+```bash
+paytaca check https://api.nanogpt.com/v1/complete --json
+# → {"paymentRequired": true, "estimatedCostSats": "100"}
+
+paytaca pay https://api.nanogpt.com/v1/complete --method POST --body '{"prompt":"hello"}'
+# → Handles 402 → pays → returns response
+```
+
+### AI Agent Integration
+
+```bash
+paytaca opencode                    # Install Paytaca x402 skill for OpenCode AI agents
+paytaca claude                      # Install Paytaca x402 skill for Claude Code agents
+```
+
+This enables AI agents to autonomously handle HTTP 402 payment responses when calling x402-enabled APIs.
+
 ## Network
 
 All commands default to **mainnet**. Pass `--chipnet` for testnet:
@@ -130,15 +161,23 @@ src/
     history.ts       transaction history (BCH and CashTokens)
     address.ts       HD address derivation (standard and z-prefix)
     token.ts         CashToken commands (list, info, send, send-nft)
+    pay.ts           x402 BCH payment handler for HTTP requests
+    check.ts         Check if URL requires x402 payment
+    opencode.ts      Install x402 skill for OpenCode AI agents
+    claude.ts        Install x402 skill for Claude Code AI agents
   wallet/
     index.ts         Wallet class, mnemonic gen/import/load
     bch.ts           BchWallet (balance, send, history, CashTokens)
     keys.ts          LibauthHDWallet (HD key derivation, token addresses)
+    x402.ts          X402Payer (BCH payment signing and verification)
   storage/
     keychain.ts      OS keychain wrapper (@napi-rs/keyring)
   utils/
     crypto.ts        pubkey -> CashAddress pipeline
     network.ts       Watchtower URLs, derivation paths
+    x402.ts          x402 header parsing, payment requirement selection
+  types/
+    x402.ts          x402 payment types (PaymentRequired, PaymentPayload, etc.)
 ```
 
 ## Key Dependencies
@@ -160,6 +199,22 @@ npm run dev        # Watch mode (recompile on change)
 npm run build      # One-time build
 npm run clean      # Remove dist/
 ```
+
+## x402 Server
+
+A reference x402 server implementation is included for testing:
+
+```bash
+cd x402-server
+npm install
+npm run dev        # Start dev server on port 3001
+```
+
+The server implements the x402-bch v2.2 specification and provides:
+- `GET /api/quote` — Returns a quote (requires payment)
+- `POST /api/generate` — Text generation endpoint (requires payment)
+
+Useful for testing the `paytaca pay` workflow locally.
 
 ## License
 
