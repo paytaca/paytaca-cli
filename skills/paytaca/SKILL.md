@@ -70,16 +70,27 @@ When preparing to call an unfamiliar API that might require payment:
 
 1. **First check**: `paytaca check <url> --json`
    - If `paymentRequired: false` → proceed normally
-   - If `paymentRequired: true` and `acceptsBch: true` → use paytaca pay
+   - If `paymentRequired: true` and `acceptsBch: true` → inform user of cost and **seek explicit approval** before paying
    - If `paymentRequired: true` but `acceptsBch: false` → inform user
 
 2. **When encountering HTTP 402**:
    - Parse the `PAYMENT-REQUIRED` headers
-   - Use `paytaca pay <url> --json` to handle payment automatically
+   - **Seek explicit user approval** before spending any BCH
+   - Once approved, use `paytaca pay <url> --json` to handle payment
    - The command handles: parse headers → build BCH tx → broadcast → retry with signature
 
 3. **For known paid APIs**:
-   - Just use `paytaca pay <url>` directly - it handles 402 automatically
+   - **Always seek user approval first**, then use `paytaca pay <url>` - it handles 402 automatically
+
+## ⚠️ User Approval Required Before Any Payment
+
+**CRITICAL**: The agent MUST NOT execute `paytaca pay` without explicit user approval. Since `paytaca pay` spends real BCH from the user's wallet, always:
+
+1. Inform the user of the cost (e.g., "This API costs ~1000 sats")
+2. Wait for explicit user confirmation (e.g., "yes", "go ahead", "pay")
+3. Only then execute the payment
+
+Do NOT assume the user wants to pay - even if the cost seems small.
 
 ## AI Agent Workflow
 
@@ -87,6 +98,9 @@ When preparing to call an unfamiliar API that might require payment:
 Task: Call nanogpt API
 Agent: paytaca check https://api.nanogpt.com/v1/complete --json
   → {"acceptsBch": true, "estimatedCostSats": "100"}
+
+Agent: Informs user "This API costs 100 sats (0.00000100 BCH). Approve to proceed?"
+User: "yes"
 
 Agent: paytaca pay https://api.nanogpt.com/v1/complete --method POST --body '{"prompt":"hello"}' --json
   → Handles 402 → pays 100 sats → returns response with txid
