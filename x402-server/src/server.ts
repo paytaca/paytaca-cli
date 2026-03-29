@@ -173,6 +173,14 @@ async function verifyPayment(
     payloadObj = { payload: auth.payload }
   }
 
+  console.log(`[PAYMENT REQUEST]`, JSON.stringify({
+    payer: payloadObj.payer,
+    payment: payloadObj.payment,
+    resource_id: payloadObj.resource_id,
+    resource_meta: payloadObj.resource_meta,
+    nonce: payloadObj.nonce,
+  }, null, 2))
+
   const payment = payloadObj?.payment || auth.payment
   if (!payment?.recipients?.length) {
     return { valid: false, error: 'Missing payment recipients' }
@@ -232,7 +240,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     // Otherwise assume it's a legacy address and wrap with proper prefix
     const addr = RECEIVE_ADDRESS.toLowerCase()
     if (addr.startsWith('bitcoincash:') || addr.startsWith('bchtest:') || addr.startsWith('bch:')) {
-      return `bch:${RECEIVE_ADDRESS}`
+      return RECEIVE_ADDRESS
     }
     // Legacy address - wrap with proper CashAddress prefix
     const prefix = bchNetwork.name === 'mainnet' ? 'bitcoincash' : 'bchtest'

@@ -29,6 +29,7 @@ interface PayOptions {
   chipnet: boolean
   maxAmount?: string
   changeAddress?: string
+  payer?: string
   dryRun: boolean
   json: boolean
 }
@@ -64,6 +65,7 @@ interface JsonResult {
     required: boolean
     txid?: string
     error?: string
+    recipientAddress?: string
   }
   error?: string
 }
@@ -79,6 +81,7 @@ export function registerPayCommand(program: Command): void {
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .option('--max-amount <amount>', 'Maximum payment amount in satoshis (overrides server\'s max-amount)')
     .option('--change-address <address>', 'Change address for BCH transaction')
+    .option('--payer <value>', 'Payer identifier (defaults to wallet address index 0, or pass custom value like user ID for server-side lookups)')
     .option('--dry-run', 'Show what would happen without making payment')
     .option('--json', 'Output results as JSON')
     .action(async (url: string, opts: PayOptions) => {
@@ -154,7 +157,7 @@ async function runPayHuman(
 
   console.log(`\n   ${chalk.bold(method)} ${url}`)
   console.log(chalk.dim(`   Network: ${chalk.cyan(network)}`))
-  console.log(chalk.dim(`   Payer: ${x402Payer.getPayerAddress()}`))
+  console.log(chalk.dim(`   Payer: ${opts.payer || x402Payer.getPayerAddress()}`))
   if (Object.keys(headers).length > 0) {
     console.log(chalk.dim(`   Headers: ${JSON.stringify(headers)}`))
   }
@@ -168,6 +171,9 @@ async function runPayHuman(
         ? 'https://chipnet.chaingraph.cash/tx/'
         : 'https://bchexplorer.info/tx/'
       console.log(chalk.dim(`   Payment txid: ${explorer}${result.payment.txid}`))
+      if (result.payment.recipientAddress) {
+        console.log(chalk.dim(`   Recipient:   ${result.payment.recipientAddress}`))
+      }
     }
 
     console.log(chalk.green(`\n   Response: ${result.status} ${result.statusText}`))
@@ -200,7 +206,7 @@ async function runPayDryRun(
 
   console.log(`\n   ${chalk.bold(method)} ${url} ${chalk.dim('[DRY RUN]')}`)
   console.log(chalk.dim(`   Network: ${chalk.cyan(network)}`))
-  console.log(chalk.dim(`   Payer: ${x402Payer.getPayerAddress()}`))
+  console.log(chalk.dim(`   Payer: ${opts.payer || x402Payer.getPayerAddress()}`))
   console.log()
 
   try {
@@ -246,7 +252,7 @@ async function runPayDryRun(
         amountSats,
         maxTimeoutMs: bchRequirements.maxTimeoutMs,
         resourceId: bchRequirements.resourceId,
-        payerAddress: x402Payer.getPayerAddress(),
+        payerAddress: opts.payer || x402Payer.getPayerAddress(),
         changeAddress,
         network: bchRequirements.network,
       }
@@ -271,7 +277,7 @@ async function runPayDryRun(
         console.log(chalk.dim(`     Resource:   ${bchRequirements.resourceId}`))
         console.log()
         console.log(chalk.dim('   Wallet:'))
-        console.log(chalk.dim(`     Payer:      ${x402Payer.getPayerAddress()}`))
+  console.log(chalk.dim(`   Payer: ${opts.payer || x402Payer.getPayerAddress()}`))
         console.log(chalk.dim(`     Change:     ${changeAddress}`))
         console.log()
         if (sufficient) {
@@ -374,12 +380,17 @@ async function executePay(
       }
     }
 
-    bchRequirements.payer = x402Payer.getPayerAddress()
+    bchRequirements.payer = opts.payer || x402Payer.getPayerAddress()
 
+    let address: string
     const addressMatch = bchRequirements.paymentUrl.match(/:([a-z0-9]+):([a-z0-9]+)$/i)
-    let address = addressMatch 
-      ? `${addressMatch[1]}:${addressMatch[2]}` 
-      : bchRequirements.paymentUrl.split(':').pop()?.replace(/^\/\//, '') || ''
+    if (addressMatch) {
+      address = `${addressMatch[1]}:${addressMatch[2]}`
+    } else if (bchRequirements.paymentUrl.startsWith('bitcoincash:') || bchRequirements.paymentUrl.startsWith('bchtest:') || bchRequirements.paymentUrl.startsWith('bch:')) {
+      address = bchRequirements.paymentUrl.replace(/^bch:/, '')
+    } else {
+      address = `bitcoincash:${bchRequirements.paymentUrl}`
+    }
 
     const recipients = [
       {
@@ -427,7 +438,7 @@ async function executePay(
             currency: r.currency,
           })),
         },
-        payer: x402Payer.getPayerAddress(),
+        payer: opts.payer || x402Payer.getPayerAddress(),
       }
     )
 
@@ -458,7 +469,7 @@ async function executePay(
       statusText: retryResponse.statusText,
       headers: retryResponseHeaders,
       data: retryResponseData,
-      payment: { required: true, txid: sendResult.txid },
+      payment: { required: true, txid: sendResult.txid, recipientAddress: address },
     }
   }
 
