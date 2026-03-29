@@ -14,6 +14,7 @@ import { registerBalanceCommand } from './commands/balance.js'
 import { registerReceiveCommand } from './commands/receive.js'
 import { registerHistoryCommand } from './commands/history.js'
 import { registerTokenCommands } from './commands/token.js'
+import { registerPayCommand } from './commands/pay.js'
 
 const program = new Command()
 
@@ -29,5 +30,6 @@ registerBalanceCommand(program)
 registerReceiveCommand(program)
 registerHistoryCommand(program)
 registerTokenCommands(program)
+registerPayCommand(program)
 
 program.parse()
