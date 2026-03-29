@@ -15,11 +15,12 @@
 
 import { Command } from 'commander'
 import chalk from 'chalk'
+import readline from 'readline'
 import { loadWallet, loadMnemonic } from '../wallet/index.js'
 import { LibauthHDWallet } from '../wallet/keys.js'
 import { BchWallet } from '../wallet/bch.js'
 import { X402Payer } from '../wallet/x402.js'
-import { parsePaymentRequiredJson, selectBchPaymentRequirements, signMessageBCH } from '../utils/x402.js'
+import { parsePaymentRequiredJson, selectBchPaymentRequirements } from '../utils/x402.js'
 import { BCH_DERIVATION_PATH } from '../utils/network.js'
 import { PaymentRequired, PaymentRequirements, BCH_ASSET_ID } from '../types/x402.js'
 
@@ -375,6 +376,22 @@ async function executePay(
     const changeAddressSet = bchWallet.getAddressSetAt(0)
     const changeAddress = opts.changeAddress || changeAddressSet.change
 
+    console.log(chalk.yellow('\n   ⚠ Payment Required'))
+    console.log(chalk.dim(`   Amount:     ${amountBch} BCH (${requirements.amount} sats)`))
+    console.log(chalk.dim(`   To:         ${address}`))
+    console.log(chalk.dim(`   Change:     ${changeAddress}`))
+    console.log(chalk.dim(`   Payer:      ${payerAddress}`))
+
+    const confirmed = await promptConfirmation('Confirm payment?')
+    if (!confirmed) {
+      return {
+        success: false,
+        status: 402,
+        payment: { required: true, error: 'Payment rejected by user' },
+        error: 'Payment rejected by user',
+      }
+    }
+
     const sendResult = await bchWallet.sendBch(amountBch, address, changeAddress)
 
     if (!sendResult.success) {
@@ -447,4 +464,19 @@ function formatResponse(data: any): string {
     }
   }
   return String(data)
+}
+
+async function promptConfirmation(message: string): Promise<boolean> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  })
+
+  return new Promise((resolve) => {
+    rl.question(chalk.bold(`\n   ${message} (y/N): `), (answer) => {
+      rl.close()
+      const confirmed = answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes'
+      resolve(confirmed)
+    })
+  })
 }

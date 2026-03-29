@@ -11,7 +11,6 @@ import {
   buildPaymentPayload,
   buildAuthorization,
   signAuthorization,
-  parsePaymentResponse,
   signMessageBCH,
 } from '../utils/x402.js'
 import {
