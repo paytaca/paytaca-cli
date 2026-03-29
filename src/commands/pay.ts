@@ -376,9 +376,14 @@ async function executePay(
 
     bchRequirements.payer = x402Payer.getPayerAddress()
 
+    const addressMatch = bchRequirements.paymentUrl.match(/:([a-z0-9]+):([a-z0-9]+)$/i)
+    let address = addressMatch 
+      ? `${addressMatch[1]}:${addressMatch[2]}` 
+      : bchRequirements.paymentUrl.split(':').pop()?.replace(/^\/\//, '') || ''
+
     const recipients = [
       {
-        address: bchRequirements.paymentUrl.split(':')[1]?.replace(/^\/\//, '') || '',
+        address,
         amount: bchRequirements.maxAmount,
         currency: 'BCH',
       },

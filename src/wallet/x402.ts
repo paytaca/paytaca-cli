@@ -103,7 +103,7 @@ export class X402Payer {
       scheme: 'utxo',
       network: requirements.network,
       resource_id: requirements.resourceId,
-      payload: payloadSignature,
+      payload: payloadJson,
       payload_signature: payloadSignature,
       nonce,
       payer: this.signer.address,
