@@ -13,6 +13,7 @@ import os from 'os'
 import { fileURLToPath } from 'url'
 
 const OPENCODE_SKILLS_DIR = path.join(os.homedir(), '.config', 'opencode', 'skills')
+const CLAUDE_SKILLS_DIR = path.join(os.homedir(), '.claude', 'skills')
 
 export function registerOpencodeCommand(program: Command): void {
   program
@@ -22,13 +23,34 @@ export function registerOpencodeCommand(program: Command): void {
     .action(async (action: string) => {
       switch (action) {
         case 'install':
-          installSkill()
+          installSkill(OPENCODE_SKILLS_DIR, 'opencode')
           break
         case 'uninstall':
-          uninstallSkill()
+          uninstallSkill(OPENCODE_SKILLS_DIR)
           break
         case 'status':
-          checkStatus()
+          checkStatus(OPENCODE_SKILLS_DIR, 'opencode')
+          break
+        default:
+          console.log(chalk.yellow(`Unknown action: ${action}`))
+          console.log('Use: install, uninstall, or status')
+      }
+    })
+
+  program
+    .command('claude')
+    .description('Set up paytaca x402 payments for Claude Code AI assistant')
+    .argument('[action]', 'Action: install, uninstall, status', 'status')
+    .action(async (action: string) => {
+      switch (action) {
+        case 'install':
+          installSkill(CLAUDE_SKILLS_DIR, 'Claude Code')
+          break
+        case 'uninstall':
+          uninstallSkill(CLAUDE_SKILLS_DIR)
+          break
+        case 'status':
+          checkStatus(CLAUDE_SKILLS_DIR, 'Claude Code')
           break
         default:
           console.log(chalk.yellow(`Unknown action: ${action}`))
@@ -49,15 +71,15 @@ function getSkillSourcePath(): string {
   }
 }
 
-function getSkillDestPath(): string {
-  return path.join(OPENCODE_SKILLS_DIR, 'paytaca', 'SKILL.md')
+function getSkillDestPath(skillsDir: string): string {
+  return path.join(skillsDir, 'paytaca', 'SKILL.md')
 }
 
-function installSkill(): void {
+function installSkill(skillsDir: string, assistantName: string): void {
   try {
     const sourcePath = getSkillSourcePath()
-    const destDir = path.join(OPENCODE_SKILLS_DIR, 'paytaca')
-    const destPath = getSkillDestPath()
+    const destDir = path.join(skillsDir, 'paytaca')
+    const destPath = getSkillDestPath(skillsDir)
 
     if (!fs.existsSync(sourcePath)) {
       console.log(chalk.red('Skill source file not found. Is paytaca-cli properly installed?'))
@@ -69,24 +91,24 @@ function installSkill(): void {
     const content = fs.readFileSync(sourcePath, 'utf8')
     fs.writeFileSync(destPath, content)
 
-    console.log(chalk.green('\n✓ Skill installed successfully!\n'))
+    console.log(chalk.green(`\n✓ Skill installed successfully for ${assistantName}!\n`))
     console.log(chalk.bold('What this does:'))
-    console.log('  When opencode encounters HTTP 402 or calls x402-enabled APIs,')
+    console.log('  When the AI assistant encounters HTTP 402 or calls x402-enabled APIs,')
     console.log('  it will automatically use paytaca to handle payments.\n')
     console.log(chalk.dim('Location: ') + destPath)
     console.log(chalk.dim('Source:   ') + sourcePath)
     console.log()
-    console.log('Restart opencode to load the new skill.\n')
+    console.log(`Restart ${assistantName} to load the new skill.\n`)
   } catch (err: any) {
     console.log(chalk.red(`\nFailed to install skill: ${err.message}\n`))
     process.exit(1)
   }
 }
 
-function uninstallSkill(): void {
+function uninstallSkill(skillsDir: string): void {
   try {
-    const destDir = path.join(OPENCODE_SKILLS_DIR, 'paytaca')
-    const destPath = getSkillDestPath()
+    const destDir = path.join(skillsDir, 'paytaca')
+    const destPath = getSkillDestPath(skillsDir)
 
     if (!fs.existsSync(destPath)) {
       console.log(chalk.yellow('\nSkill is not installed.\n'))
@@ -101,15 +123,15 @@ function uninstallSkill(): void {
   }
 }
 
-function checkStatus(): void {
-  const destPath = getSkillDestPath()
+function checkStatus(skillsDir: string, assistantName: string): void {
+  const destPath = getSkillDestPath(skillsDir)
 
   if (fs.existsSync(destPath)) {
     console.log(chalk.green('\n✓ Paytaca skill is installed\n'))
     console.log(chalk.dim('Location: ') + destPath)
   } else {
-    console.log(chalk.yellow('\n○ Paytaca skill is not installed\n'))
-    console.log('Run: paytaca skill install')
+    console.log(chalk.yellow(`\n○ Paytaca skill is not installed for ${assistantName}\n`))
+    console.log(`Run: paytaca ${assistantName.toLowerCase()} install`)
     console.log()
   }
 }
