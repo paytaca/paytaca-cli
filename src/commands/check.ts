@@ -1,7 +1,7 @@
 /**
  * CLI command: check <url>
  *
- * Check if a URL accepts x402 BCH payments without making the actual request.
+ * Check if a URL accepts x402-bch v2.2 BCH payments without making the actual request.
  * Useful for AI to determine if payment will be required before committing.
  *
  * Usage:
@@ -15,7 +15,7 @@ import chalk from 'chalk'
 import { loadWallet, loadMnemonic } from '../wallet/index.js'
 import { LibauthHDWallet } from '../wallet/keys.js'
 import { BchWallet } from '../wallet/bch.js'
-import { parsePaymentRequired, selectBchPaymentRequirements } from '../utils/x402.js'
+import { parsePaymentRequiredJson, selectBchPaymentRequirements } from '../utils/x402.js'
 import { BCH_DERIVATION_PATH } from '../utils/network.js'
 import { PaymentRequired } from '../types/x402.js'
 
@@ -35,16 +35,15 @@ interface CheckResult {
   estimatedCostSats?: string
   costInBch?: string
   paymentUrl?: string
-  maxTimeoutMs?: number
-  resourceId?: string
-  acceptCurrencies?: string[]
+  maxTimeoutSeconds?: number
+  resourceUrl?: string
   error?: string
 }
 
 export function registerCheckCommand(program: Command): void {
   program
     .command('check')
-    .description('Check if a URL accepts x402 BCH payments')
+    .description('Check if a URL accepts x402-bch v2.2 BCH payments')
     .argument('<url>', 'URL to check')
     .option('-X, --method <method>', 'HTTP method to test (default: GET)', 'GET')
     .option('-H, --header <header>', 'Add header to request (repeatable)')
@@ -156,30 +155,25 @@ async function checkUrl(
   result.paymentRequired = response.status === 402
 
   if (response.status === 402) {
-    const responseHeaders: Record<string, string> = {}
-    response.headers.forEach((value, key) => {
-      responseHeaders[key] = value
-    })
+    try {
+      const responseBody = await response.json()
+      const paymentRequired = parsePaymentRequiredJson(responseBody)
 
-    const paymentHeaders: PaymentRequired = {}
-    for (const [key, value] of Object.entries(responseHeaders)) {
-      paymentHeaders[key.toLowerCase()] = value
-    }
+      if (paymentRequired) {
+        result.acceptsX402 = paymentRequired.x402Version === 2
+        result.resourceUrl = paymentRequired.resource?.url
 
-    const requirements = parsePaymentRequired(paymentHeaders)
-    if (requirements) {
-      result.acceptsX402 = true
-      result.acceptCurrencies = requirements.acceptCurrencies
-      result.maxTimeoutMs = requirements.maxTimeoutMs
-      result.resourceId = requirements.resourceId
-
-      const bchReqs = selectBchPaymentRequirements(requirements)
-      if (bchReqs) {
-        result.acceptsBch = true
-        result.paymentUrl = bchReqs.paymentUrl
-        result.estimatedCostSats = bchReqs.maxAmount.toString()
-        result.costInBch = (Number(bchReqs.maxAmount) / 1e8).toFixed(8)
+        const bchReqs = selectBchPaymentRequirements(paymentRequired, isChipnet ? 'chipnet' : 'mainnet')
+        if (bchReqs) {
+          result.acceptsBch = true
+          result.paymentUrl = bchReqs.payTo
+          result.estimatedCostSats = bchReqs.amount
+          result.costInBch = (Number(bchReqs.amount) / 1e8).toFixed(8)
+          result.maxTimeoutSeconds = bchReqs.maxTimeoutSeconds
+        }
       }
+    } catch (e) {
+      result.error = 'Failed to parse 402 response body'
     }
   }
 
@@ -191,20 +185,19 @@ function printCheckResult(result: CheckResult): void {
     console.log(chalk.yellow('   Payment Required'))
 
     if (result.acceptsX402) {
-      console.log(chalk.green('   ✓ Accepts x402 protocol'))
+      console.log(chalk.green('   ✓ Accepts x402-bch v2.2 protocol'))
 
       if (result.acceptsBch) {
         console.log(chalk.green(`   ✓ Accepts BCH payment`))
-        console.log(chalk.dim(`     Amount: ${result.estimatedCostSats} sats (${result.costInBch} BCH)`))
+        console.log(chalk.dim(`     Amount:      ${result.estimatedCostSats} sats (${result.costInBch} BCH)`))
         console.log(chalk.dim(`     Payment URL: ${result.paymentUrl}`))
-        console.log(chalk.dim(`     Timeout: ${result.maxTimeoutMs}ms`))
-        console.log(chalk.dim(`     Resource: ${result.resourceId}`))
+        console.log(chalk.dim(`     Timeout:     ${result.maxTimeoutSeconds}s`))
+        console.log(chalk.dim(`     Resource:    ${result.resourceUrl}`))
       } else {
         console.log(chalk.red('   ✗ Does not accept BCH'))
-        console.log(chalk.dim(`     Accepted currencies: ${result.acceptCurrencies?.join(', ')}`))
       }
     } else {
-      console.log(chalk.red('   ✗ Unknown payment protocol (not x402)'))
+      console.log(chalk.red('   ✗ Unknown payment protocol (not x402-bch v2.2)'))
     }
   } else {
     console.log(chalk.green('   ✓ No payment required'))

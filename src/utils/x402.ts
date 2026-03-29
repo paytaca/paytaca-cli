@@ -1,21 +1,24 @@
 /**
  * x402 utility functions for BCH payments
- * Parses PAYMENT-REQUIRED headers, builds payment payloads, handles signatures
+ * Implements x402-bch v2.2 specification
+ * https://github.com/x402-bch/x402-bch/blob/master/specs/x402-bch-specification-v2.2.md
  */
 
-import { binToHex, hexToBin } from '@bitauth/libauth'
+import crypto from 'crypto'
 import {
   PaymentRequired,
   PaymentRequirements,
-  BchPaymentRequirements,
   PaymentPayload,
   Authorization,
   ResourceInfo,
-  SettlementResponse,
+  VerifyResponse,
+  BCH_ASSET_ID,
+  BCH_MAINNET_NETWORK,
+  BCH_CHIPNET_NETWORK,
 } from '../types/x402.js'
+import { secp256k1 } from '@bitauth/libauth'
 
-export const BCH_MAINNET_NETWORK = 'bip122:000000000000000000651ef99cb9fcbe'
-export const BCH_CHIPNET_NETWORK = 'bip122:000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f'
+export { BCH_MAINNET_NETWORK, BCH_CHIPNET_NETWORK, BCH_ASSET_ID }
 
 export function isBchNetwork(network: string): boolean {
   return network === BCH_MAINNET_NETWORK || network === BCH_CHIPNET_NETWORK
@@ -25,195 +28,140 @@ export function isChipnetNetwork(network: string): boolean {
   return network === BCH_CHIPNET_NETWORK
 }
 
-function getHeaderValue(header: PaymentRequired[string]): string | undefined {
-  if (Array.isArray(header)) return header[0]
-  return header
-}
+export function parsePaymentRequiredJson(body: any): PaymentRequired | null {
+  if (!body || typeof body !== 'object') return null
+  if (body.x402Version !== 2) return null
 
-export function parsePaymentRequired(headers: PaymentRequired): PaymentRequirements | null {
-  const scheme = getHeaderValue(headers['x-scheme'])
-  if (!scheme) return null
-
-  const acceptCurrenciesStr = getHeaderValue(headers['accept-currencies']) || ''
-  const acceptCurrencies = acceptCurrenciesStr.split(',').map(s => s.trim()).filter(Boolean)
-
-  const maxTimeoutMsStr = getHeaderValue(headers['max-timeout-ms'])
-  const maxTimeoutMs = maxTimeoutMsStr ? parseInt(maxTimeoutMsStr, 10) : 60000
-
-  const maxAmountStr = getHeaderValue(headers['max-amount'])
-  const maxAmount = maxAmountStr ? BigInt(maxAmountStr) : BigInt(0)
-
-  const resourceId = getHeaderValue(headers['resource-id']) || ''
-  const resourceMeta = getHeaderValue(headers['resource-meta'])
-  const paymentUrl = getHeaderValue(headers['payment-url']) || ''
-  const mimeType = getHeaderValue(headers['mime-type'])
-  const wwwAuthenticate = getHeaderValue(headers['www-authenticate'])
-
-  const walledGardenStr = getHeaderValue(headers['walled-garden'])
-  const walledGarden = walledGardenStr === 'true'
-
-  const walledGardenNetwork = getHeaderValue(headers['walled-garden-network'])
-
-  return {
-    scheme,
-    network: getHeaderValue(headers['x-network']) || '',
-    paymentUrl,
-    maxTimeoutMs,
-    maxAmount,
-    resourceId,
-    resourceMeta,
-    walledGarden,
-    walledGardenNetwork,
-    acceptCurrencies,
-    mimeType,
-    wwwAuthenticate,
+  const pr: PaymentRequired = {
+    x402Version: body.x402Version,
+    error: body.error,
+    resource: body.resource || { url: '' },
+    accepts: [],
+    extensions: body.extensions || {},
   }
+
+  if (Array.isArray(body.accepts)) {
+    for (const accept of body.accepts) {
+      if (accept.scheme && accept.network && accept.payTo) {
+        pr.accepts.push({
+          scheme: accept.scheme,
+          network: accept.network,
+          amount: accept.amount,
+          asset: accept.asset || BCH_ASSET_ID,
+          payTo: accept.payTo,
+          maxTimeoutSeconds: accept.maxTimeoutSeconds || 60,
+          extra: accept.extra || {},
+        })
+      }
+    }
+  }
+
+  return pr
 }
 
 export function selectBchPaymentRequirements(
-  requirements: PaymentRequirements
-): BchPaymentRequirements | null {
-  if (requirements.scheme !== 'utxo') return null
-  if (!isBchNetwork(requirements.network)) return null
-
-  const acceptedCurrencies = ['BCH', 'bch', 'BCHn', 'bitcoincash']
-  const hasAcceptedCurrency = requirements.acceptCurrencies.some(c =>
-    acceptedCurrencies.includes(c)
-  )
-  if (!hasAcceptedCurrency && requirements.acceptCurrencies.length > 0) return null
-
-  return requirements as BchPaymentRequirements
+  requirements: PaymentRequired,
+  clientNetwork: 'mainnet' | 'chipnet'
+): PaymentRequirements | null {
+  const clientNetworkId = clientNetwork === 'chipnet' ? BCH_CHIPNET_NETWORK : BCH_MAINNET_NETWORK
+  for (const accept of requirements.accepts) {
+    if (accept.scheme === 'utxo' && accept.network === clientNetworkId) {
+      return accept
+    }
+  }
+  return null
 }
 
 export function buildPaymentPayload(
-  requirements: BchPaymentRequirements,
+  accepted: PaymentRequirements,
+  resourceUrl: string,
   payer: string,
-  recipients: { address: string; amount: bigint; currency: string }[],
-  opts?: {
-    resourceMeta?: string
-    nonce?: string
-    attestation?: string
-    broadcaster?: string
-  }
+  txid: string,
+  vout: number | null,
+  amount: string | null
 ): PaymentPayload {
+  const resource: ResourceInfo = {
+    url: resourceUrl,
+    description: '',
+    mimeType: 'application/json',
+  }
+
   return {
-    scheme: 'utxo',
-    network: requirements.network,
-    max_timeout_ms: requirements.maxTimeoutMs,
-    resource_id: requirements.resourceId,
-    resource_meta: opts?.resourceMeta || requirements.resourceMeta,
-    broadcaster: opts?.broadcaster,
-    payment: {
-      scheme: 'utxo',
-      network: requirements.network,
-      recipients: recipients.map(r => ({
-        address: r.address,
-        amount: r.amount.toString(),
-        currency: r.currency,
-      })),
+    x402Version: 2,
+    resource,
+    accepted,
+    payload: {
+      signature: '',
+      authorization: {
+        from: payer,
+        to: accepted.payTo,
+        value: accepted.amount,
+        txid,
+        vout,
+        amount,
+      },
     },
-    nonce: opts?.nonce,
-    attestation: opts?.attestation,
-    payer,
+    extensions: {},
   }
 }
 
-export function encodePaymentSignature(auth: Authorization): string {
-  const data = JSON.stringify({
-    scheme: auth.scheme,
-    network: auth.network,
-    resource_id: auth.resource_id,
-    payload: auth.payload,
-    payload_signature: auth.payload_signature,
-    nonce: auth.nonce,
-    attestation: auth.attestation,
-  })
-  return Buffer.from(data).toString('base64')
-}
-
-export function decodePaymentSignature(encoded: string): Authorization | null {
-  try {
-    const data = Buffer.from(encoded, 'base64').toString('utf8')
-    const parsed = JSON.parse(data)
-    if (!parsed.scheme || !parsed.network || !parsed.payload || !parsed.payload_signature) {
-      return null
-    }
-    return parsed as Authorization
-  } catch {
-    return null
+export function buildAuthorization(
+  accepted: PaymentRequirements,
+  resourceUrl: string,
+  payer: string,
+  txid: string,
+  vout: number | null,
+  amount: string | null
+): Authorization {
+  return {
+    from: payer,
+    to: accepted.payTo,
+    value: accepted.amount,
+    txid,
+    vout,
+    amount,
   }
 }
 
-export function parsePaymentResponse(data: any): SettlementResponse {
-  if (!data) return { success: false, error: 'No response data' }
-
-  if (data.error) {
-    return { success: false, error: data.error }
-  }
-
-  if (data.txid) {
-    return {
-      success: true,
-      txid: data.txid,
-      vout: data.vout,
-      settle_address: data.settle_address,
-      preimage: data.preimage,
-      signature: data.signature,
-    }
-  }
-
-  return { success: false, error: 'Unknown settlement response format' }
-}
-
-export function createResourceInfo(
-  url: string,
-  method: string,
-  headers: Record<string, string> = {},
-  body?: string
-): ResourceInfo {
-  return { url, method, headers, body }
-}
-
-export async function buildAuthorizationHeader(
-  payload: PaymentPayload,
-  payloadSignature: string,
-  nonce: string,
-  attestation?: string
-): Promise<string> {
-  const auth: Authorization = {
-    scheme: payload.scheme,
-    network: payload.network,
-    resource_id: payload.resource_id,
-    payload: payloadSignature,
-    payload_signature: payloadSignature,
-    nonce,
-    attestation,
-  }
-  return encodePaymentSignature(auth)
-}
-
-export async function signMessageBCH(
+export function signMessageBCH(
   message: string,
   privateKeyHex: string,
   compressed: boolean = true
-): Promise<string> {
-  const { sign } = await import('bitcoinjs-message')
+): string {
+  const prefix = '\x18Bitcoin Signed Message:\n'
+  const messageBytes = Buffer.from(message, 'utf8')
+  const prefixBytes = Buffer.from(prefix, 'utf8')
+  const lengthByte = Buffer.from([messageBytes.length])
+  const prefixedMessage = Buffer.concat([prefixBytes, lengthByte, messageBytes])
+  const hash = crypto.createHash('sha256').update(crypto.createHash('sha256').update(prefixedMessage).digest()).digest()
   const privateKey = Buffer.from(privateKeyHex, 'hex')
-  const signatureBuffer = sign(message, privateKey, compressed)
-  return signatureBuffer.toString('base64')
+  const signature = secp256k1.signMessageHashDER(hash, privateKey)
+  return Buffer.from(signature).toString('base64')
 }
 
-export function getDefaultSigner(hdWallet: any, index: number = 0): {
-  address: string
+export async function signAuthorization(
+  authorization: Authorization,
   signMessage: (message: string) => Promise<string>
-} {
-  const addressSet = hdWallet.getAddressSetAt(index)
-  return {
-    address: addressSet.receiving,
-    signMessage: async (message: string) => {
-      const node = hdWallet.getNodeAt(`0/${index}`)
-      const privKeyHex = Buffer.from(node.privateKey).toString('hex')
-      return signMessageBCH(message, privKeyHex, true)
-    },
+): Promise<string> {
+  const message = JSON.stringify(authorization)
+  return signMessage(message)
+}
+
+export function parsePaymentResponse(data: any): VerifyResponse {
+  if (!data) return { isValid: false, invalidReason: 'no_response_data' }
+
+  if (typeof data.isValid === 'boolean') {
+    return {
+      isValid: data.isValid,
+      payer: data.payer,
+      invalidReason: data.invalidReason,
+      remainingBalanceSat: data.remainingBalanceSat,
+    }
   }
+
+  if (data.error) {
+    return { isValid: false, invalidReason: data.error }
+  }
+
+  return { isValid: false, invalidReason: 'unknown_response_format' }
 }

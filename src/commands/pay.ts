@@ -1,15 +1,16 @@
 /**
  * CLI command: pay <url>
  *
- * Makes an HTTP request to a URL, handling x402 payment requirements.
+ * Makes an HTTP request to a URL, handling x402-bch v2.2 payment requirements.
  * If the server returns 402 PAYMENT-REQUIRED, the wallet pays for the request.
  *
  * Flow:
  *   1. Make HTTP request to URL
- *   2. If 402 response, parse PAYMENT-REQUIRED headers
+ *   2. If 402 response, parse PaymentRequired JSON body
  *   3. Build BCH transaction to pay the required amount
  *   4. Broadcast transaction
- *   5. Retry original request with PAYMENT-SIGNATURE header
+ *   5. Build PaymentPayload per x402-bch v2.2 spec
+ *   6. Retry original request with PAYMENT-SIGNATURE header containing JSON PayloadPayload
  */
 
 import { Command } from 'commander'
@@ -18,9 +19,9 @@ import { loadWallet, loadMnemonic } from '../wallet/index.js'
 import { LibauthHDWallet } from '../wallet/keys.js'
 import { BchWallet } from '../wallet/bch.js'
 import { X402Payer } from '../wallet/x402.js'
-import { parsePaymentRequired, selectBchPaymentRequirements } from '../utils/x402.js'
+import { parsePaymentRequiredJson, selectBchPaymentRequirements, signMessageBCH } from '../utils/x402.js'
 import { BCH_DERIVATION_PATH } from '../utils/network.js'
-import { PaymentRequired, BchPaymentRequirements } from '../types/x402.js'
+import { PaymentRequired, PaymentRequirements, BCH_ASSET_ID } from '../types/x402.js'
 
 interface PayOptions {
   method?: string
@@ -42,8 +43,8 @@ interface DryRunInfo {
     acceptsBch: boolean
     paymentUrl: string
     amountSats: string
-    maxTimeoutMs: number
-    resourceId: string
+    maxTimeoutSeconds: number
+    resourceUrl: string
     payerAddress: string
     changeAddress: string
     network: string
@@ -73,7 +74,7 @@ interface JsonResult {
 export function registerPayCommand(program: Command): void {
   program
     .command('pay')
-    .description('Make a paid HTTP request with BCH payment via x402 protocol')
+    .description('Make a paid HTTP request with BCH payment via x402-bch v2.2 protocol')
     .argument('<url>', 'URL to request')
     .option('-X, --method <method>', 'HTTP method (default: GET)', 'GET')
     .option('-H, --header <header>', 'Add header to request (repeatable)')
@@ -216,51 +217,43 @@ async function runPayDryRun(
       body: ['POST', 'PUT', 'PATCH'].includes(method) ? body : undefined,
     })
 
-    const responseHeaders: Record<string, string> = {}
-    response.headers.forEach((value, key) => {
-      responseHeaders[key] = value
-    })
-
     if (response.status === 402) {
       dryRunInfo.willRequirePayment = true
 
-      const paymentHeaders: PaymentRequired = {}
-      for (const [key, value] of Object.entries(responseHeaders)) {
-        paymentHeaders[key.toLowerCase()] = value
-      }
+      const responseBody = await response.json()
+      const paymentRequired = parsePaymentRequiredJson(responseBody)
 
-      const requirements = parsePaymentRequired(paymentHeaders)
-      if (!requirements) {
-        console.log(chalk.red('   Error: Could not parse PAYMENT-REQUIRED headers'))
+      if (!paymentRequired) {
+        console.log(chalk.red('   Error: Could not parse PaymentRequired from 402 response body'))
         process.exit(1)
       }
 
-      const bchRequirements = selectBchPaymentRequirements(requirements)
-      if (!bchRequirements) {
+      const requirements = selectBchPaymentRequirements(paymentRequired, isChipnet ? 'chipnet' : 'mainnet')
+      if (!requirements) {
         console.log(chalk.red('   Error: Server does not accept BCH payment'))
-        console.log(chalk.dim(`   Accepted currencies: ${requirements.acceptCurrencies.join(', ')}`))
+        const acceptedSchemes = paymentRequired.accepts.map(a => `${a.scheme}:${a.network}`).join(', ')
+        console.log(chalk.dim(`   Accepted schemes: ${acceptedSchemes}`))
         process.exit(1)
       }
 
       const changeAddressSet = bchWallet.getAddressSetAt(0)
       const changeAddress = opts.changeAddress || changeAddressSet.change
-      const amountSats = bchRequirements.maxAmount.toString()
 
       dryRunInfo.payment = {
         acceptsBch: true,
-        paymentUrl: bchRequirements.paymentUrl,
-        amountSats,
-        maxTimeoutMs: bchRequirements.maxTimeoutMs,
-        resourceId: bchRequirements.resourceId,
+        paymentUrl: requirements.payTo,
+        amountSats: requirements.amount,
+        maxTimeoutSeconds: requirements.maxTimeoutSeconds,
+        resourceUrl: paymentRequired.resource.url,
         payerAddress: opts.payer || x402Payer.getPayerAddress(),
         changeAddress,
-        network: bchRequirements.network,
+        network: requirements.network,
       }
 
       try {
         const balanceResult = await bchWallet.getBalance()
         const available = (balanceResult.spendable * 1e8).toFixed(0)
-        const required = amountSats
+        const required = requirements.amount
         const sufficient = BigInt(available) >= BigInt(required)
 
         dryRunInfo.balanceCheck = {
@@ -271,13 +264,13 @@ async function runPayDryRun(
 
         console.log(chalk.yellow('   402 PAYMENT REQUIRED'))
         console.log(chalk.dim('   Payment details:'))
-        console.log(chalk.dim(`     URL:        ${bchRequirements.paymentUrl}`))
-        console.log(chalk.dim(`     Amount:     ${amountSats} sats (${(Number(amountSats) / 1e8).toFixed(8)} BCH)`))
-        console.log(chalk.dim(`     Timeout:    ${bchRequirements.maxTimeoutMs}ms`))
-        console.log(chalk.dim(`     Resource:   ${bchRequirements.resourceId}`))
+        console.log(chalk.dim(`     PayTo:      ${requirements.payTo}`))
+        console.log(chalk.dim(`     Amount:     ${requirements.amount} sats (${(Number(requirements.amount) / 1e8).toFixed(8)} BCH)`))
+        console.log(chalk.dim(`     Timeout:    ${requirements.maxTimeoutSeconds}s`))
+        console.log(chalk.dim(`     Resource:   ${paymentRequired.resource.url}`))
         console.log()
         console.log(chalk.dim('   Wallet:'))
-  console.log(chalk.dim(`   Payer: ${opts.payer || x402Payer.getPayerAddress()}`))
+        console.log(chalk.dim(`     Payer:     ${opts.payer || x402Payer.getPayerAddress()}`))
         console.log(chalk.dim(`     Change:     ${changeAddress}`))
         console.log()
         if (sufficient) {
@@ -330,8 +323,6 @@ async function executePay(
   bchWallet: BchWallet,
   skipPayment: boolean
 ): Promise<JsonResult> {
-  const isChipnet = Boolean(opts.chipnet)
-
   const response = await fetch(url, {
     method,
     headers,
@@ -352,23 +343,18 @@ async function executePay(
   }
 
   if (response.status === 402) {
-    const paymentHeaders: PaymentRequired = {}
-    for (const [key, value] of Object.entries(responseHeaders)) {
-      paymentHeaders[key.toLowerCase()] = value
+    const paymentRequired = parsePaymentRequiredJson(responseData)
+    if (!paymentRequired) {
+      return { success: false, status: 402, error: 'Could not parse PaymentRequired from 402 response body' }
     }
 
-    const requirements = parsePaymentRequired(paymentHeaders)
+    const requirements = selectBchPaymentRequirements(paymentRequired, opts.chipnet ? 'chipnet' : 'mainnet')
     if (!requirements) {
-      return { success: false, status: 402, error: 'Could not parse PAYMENT-REQUIRED headers' }
-    }
-
-    const bchRequirements = selectBchPaymentRequirements(requirements)
-    if (!bchRequirements) {
       return {
         success: false,
         status: 402,
         error: 'Server does not accept BCH payment',
-        data: { acceptCurrencies: requirements.acceptCurrencies },
+        data: { acceptedSchemes: paymentRequired.accepts.map(a => ({ scheme: a.scheme, network: a.network })) },
       }
     }
 
@@ -380,38 +366,16 @@ async function executePay(
       }
     }
 
-    bchRequirements.payer = opts.payer || x402Payer.getPayerAddress()
+    const payerAddress = opts.payer || x402Payer.getPayerAddress()
 
-    let address: string
-    const addressMatch = bchRequirements.paymentUrl.match(/:([a-z0-9]+):([a-z0-9]+)$/i)
-    if (addressMatch) {
-      address = `${addressMatch[1]}:${addressMatch[2]}`
-    } else if (bchRequirements.paymentUrl.startsWith('bitcoincash:') || bchRequirements.paymentUrl.startsWith('bchtest:') || bchRequirements.paymentUrl.startsWith('bch:')) {
-      address = bchRequirements.paymentUrl.replace(/^bch:/, '')
-    } else {
-      address = `bitcoincash:${bchRequirements.paymentUrl}`
-    }
+    const address = requirements.payTo
 
-    const recipients = [
-      {
-        address,
-        amount: bchRequirements.maxAmount,
-        currency: 'BCH',
-      },
-    ]
-
-    if (!recipients[0].address) {
-      return { success: false, status: 402, error: 'Invalid payment URL in requirements' }
-    }
+    const amountBch = Number(requirements.amount) / 1e8
 
     const changeAddressSet = bchWallet.getAddressSetAt(0)
     const changeAddress = opts.changeAddress || changeAddressSet.change
 
-    const sendResult = await bchWallet.sendBch(
-      Number(recipients[0].amount) / 1e8,
-      recipients[0].address,
-      changeAddress
-    )
+    const sendResult = await bchWallet.sendBch(amountBch, address, changeAddress)
 
     if (!sendResult.success) {
       return {
@@ -422,27 +386,17 @@ async function executePay(
       }
     }
 
-    const authHeader = await x402Payer.createAuthorization(
-      bchRequirements,
-      {
-        scheme: 'utxo',
-        network: bchRequirements.network,
-        max_timeout_ms: bchRequirements.maxTimeoutMs,
-        resource_id: bchRequirements.resourceId,
-        payment: {
-          scheme: 'utxo',
-          network: bchRequirements.network,
-          recipients: recipients.map(r => ({
-            address: r.address,
-            amount: r.amount.toString(),
-            currency: r.currency,
-          })),
-        },
-        payer: opts.payer || x402Payer.getPayerAddress(),
-      }
+    const txid = sendResult.txid!
+
+    const paymentPayload = await x402Payer.createPaymentPayload(
+      requirements,
+      paymentRequired.resource.url,
+      txid,
+      0,
+      requirements.amount
     )
 
-    headers['Authorization'] = `x402 ${authHeader}`
+    headers['PAYMENT-SIGNATURE'] = JSON.stringify(paymentPayload)
 
     const retryResponse = await fetch(url, {
       method,
@@ -469,7 +423,7 @@ async function executePay(
       statusText: retryResponse.statusText,
       headers: retryResponseHeaders,
       data: retryResponseData,
-      payment: { required: true, txid: sendResult.txid, recipientAddress: address },
+      payment: { required: true, txid, recipientAddress: address },
     }
   }
 

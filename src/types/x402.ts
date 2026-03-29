@@ -1,101 +1,64 @@
 /**
  * x402 BCH type definitions
  * Implements x402-bch v2.2 specification
- * https://github.com/x402-bch/x402-bch
+ * https://github.com/x402-bch/x402-bch/blob/master/specs/x402-bch-specification-v2.2.md
  */
 
-export interface PaymentRequired {
-  [key: string]: string | string[] | undefined
-  'x-scheme'?: string | string[]
-  'max-timeout-ms'?: string | string[]
-  'payment-url'?: string | string[]
-  'max-amount'?: string | string[]
-  '匪-async'?: string | string[]
-  'resource-id'?: string | string[]
-  'resource-meta'?: string | string[]
-  'walled-garden'?: string | string[]
-  'walled-garden-network'?: string | string[]
-  'accept-currencies'?: string | string[]
-  'cai'?: string | string[]
-  'cai-lease-duration-ms'?: string | string[]
-  'mime-type'?: string | string[]
-  'www-authenticate'?: string | string[]
+export const BCH_ASSET_ID = '0x0000000000000000000000000000000000000001'
+export const BCH_MAINNET_NETWORK = 'bip122:000000000000000000651ef99cb9fcbe'
+export const BCH_CHIPNET_NETWORK = 'bip122:000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f'
+
+export interface ResourceInfo {
+  url: string
+  description?: string
+  mimeType?: string
 }
 
 export interface PaymentRequirements {
   scheme: string
   network: string
-  paymentUrl: string
-  maxTimeoutMs: number
-  maxAmount: bigint
-  resourceId: string
-  resourceMeta?: string
-  walledGarden?: boolean
-  walledGardenNetwork?: string
-  acceptCurrencies: string[]
-  mimeType?: string
-  wwwAuthenticate?: string
+  amount: string
+  asset: string
+  payTo: string
+  maxTimeoutSeconds: number
+  extra: object
 }
 
-export interface BchPaymentRequirements extends PaymentRequirements {
-  scheme: 'utxo'
-  network: 'bip122:000000000000000000651ef99cb9fcbe' | 'bip122:000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f'
-  payer: string
-  signature: string
-  attested?: boolean
-}
-
-export interface PaymentPayload {
-  scheme: string
-  network: string
-  max_timeout_ms: number
-  resource_id: string
-  resource_meta?: string
-  attractor?: string
-  broadcaster?: string
-  payment: {
-    scheme: string
-    network: string
-    recipients: {
-      address: string
-      amount: string
-      currency: string
-      metadata?: Record<string, string>
-    }[]
-    required_utxo_count?: number
-  }
-  nonce?: string
-  attestation?: string
-  payer?: string
-  payer_attestation?: string
+export interface PaymentRequired {
+  x402Version: number
+  error?: string
+  resource: ResourceInfo
+  accepts: PaymentRequirements[]
+  extensions: object
 }
 
 export interface Authorization {
-  scheme: string
-  network: string
-  resource_id: string
-  payload: string
-  payload_signature: string
-  nonce: string
-  attestation?: string
+  from: string
+  to: string
+  value: string
+  txid: string
+  vout: number | null
+  amount: string | null
+}
+
+export interface Payload {
+  signature: string
+  authorization: Authorization
+}
+
+export interface PaymentPayload {
+  x402Version: number
+  resource?: ResourceInfo
+  accepted: PaymentRequirements
+  payload: Payload
+  extensions: object
+}
+
+export interface VerifyResponse {
+  isValid: boolean
   payer?: string
-}
-
-export interface ResourceInfo {
-  url: string
-  method: string
-  headers: Record<string, string>
-  body?: string
-}
-
-export interface SettlementResponse {
-  success: boolean
-  txid?: string
-  vout?: number
-  settle_address?: string
-  preimage?: string
-  signature?: string
-  error?: string
+  invalidReason?: string
+  remainingBalanceSat?: string
 }
 
 export interface X402PaymentResult {
@@ -108,5 +71,24 @@ export interface X402PaymentResult {
   }
   error?: string
   txid?: string
-  settlement?: SettlementResponse
+  settlement?: {
+    success: boolean
+    txid?: string
+    error?: string
+  }
 }
+
+export type ErrorCode =
+  | 'missing_authorization'
+  | 'invalid_payload'
+  | 'invalid_scheme'
+  | 'invalid_network'
+  | 'invalid_receiver_address'
+  | 'invalid_exact_bch_payload_signature'
+  | 'insufficient_utxo_balance'
+  | 'utxo_not_found'
+  | 'no_utxo_found_for_address'
+  | 'unexpected_utxo_validation_error'
+  | 'unexpected_verify_error'
+  | 'unexpected_settle_error'
+  | 'invalid_x402_version'

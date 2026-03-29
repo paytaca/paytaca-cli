@@ -1,14 +1,15 @@
 /**
- * Reference x402 Server Implementation accepting BCH payments
+ * Reference x402-bch Server Implementation
  * 
- * This server demonstrates how to accept x402 payments using BCH.
+ * Conforms to x402-bch specification v2.2
+ * https://github.com/x402-bch/x402-bch/blob/master/specs/x402-bch-specification-v2.2.md
+ * 
  * Run with: npm start
  * 
  * Endpoints:
- *   GET /api/quote     - Returns a random quote (costs 100 sats)
+ *   GET /api/quote     - Returns a random quote (costs 1000 sats)
  *   GET /api/weather   - Returns fake weather data (costs 50 sats)
  *   GET /api/status    - Returns server status (costs 1 sat)
- *   GET /api/echo/<m> - Echoes back message (costs 10 sats)
  */
 
 import http from 'http'
@@ -29,18 +30,62 @@ const BCH_CHIPNET = {
 
 const bchNetwork = BCH_NETWORK === 'chipnet' ? BCH_CHIPNET : BCH_MAINNET
 const NETWORK_ID = `bip122:${bchNetwork.bip122}`
+const ASSET_ID = '0x0000000000000000000000000000000000000001'
+const MAX_TIMEOUT_SECONDS = 60
 
 const RECEIVE_ADDRESS = process.env.RECEIVE_ADDRESS || null
 
-interface PaymentHeaders {
-  'x-scheme': string
-  'x-network': string
-  'max-timeout-ms': string
-  'payment-url': string
-  'max-amount': string
-  'resource-id': string
-  'accept-currencies': string
-  'mime-type': string
+interface PaymentRequirements {
+  scheme: string
+  network: string
+  amount: string
+  asset: string
+  payTo: string
+  maxTimeoutSeconds: number
+  extra: object
+}
+
+interface ResourceInfo {
+  url: string
+  description?: string
+  mimeType?: string
+}
+
+interface PaymentRequired {
+  x402Version: number
+  error?: string
+  resource: ResourceInfo
+  accepts: PaymentRequirements[]
+  extensions: object
+}
+
+interface Authorization {
+  from: string
+  to: string
+  value: string
+  txid: string
+  vout: number | null
+  amount: string | null
+}
+
+interface Payload {
+  signature: string
+  authorization: Authorization
+}
+
+interface PaymentPayload {
+  x402Version: number
+  resource?: ResourceInfo
+  accepted: PaymentRequirements
+  payload: Payload
+  extensions: object
+}
+
+interface VerifyResponse {
+  isValid: boolean
+  payer?: string
+  invalidReason?: string
+  remainingBalanceSat?: string
 }
 
 interface RouteConfig {
@@ -95,125 +140,141 @@ const routes: Record<string, RouteConfig> = {
   },
 }
 
-function parseResourceId(path: string, query: URLSearchParams): string {
-  return `${path}${query.toString() ? '?' + query.toString() : ''}`
+function getPayToAddress(): string {
+  if (!RECEIVE_ADDRESS) {
+    return bchNetwork.name === 'mainnet' 
+      ? 'bitcoincash:placeholder' 
+      : 'bchtest:placeholder'
+  }
+  const addr = RECEIVE_ADDRESS.toLowerCase()
+  if (addr.startsWith('bitcoincash:') || addr.startsWith('bchtest:') || addr.startsWith('bch:')) {
+    return RECEIVE_ADDRESS
+  }
+  const prefix = bchNetwork.name === 'mainnet' ? 'bitcoincash' : 'bchtest'
+  return `bch:${prefix}:${RECEIVE_ADDRESS}`
 }
 
-function buildPaymentHeaders(resourceId: string, priceSats: number, paymentUrl: string, networkId: string): PaymentHeaders {
+function buildPaymentRequired(resourceUrl: string, priceSats: number): PaymentRequired {
   return {
-    'x-scheme': 'utxo',
-    'x-network': networkId,
-    'max-timeout-ms': '60000',
-    'payment-url': paymentUrl,
-    'max-amount': priceSats.toString(),
-    'resource-id': resourceId,
-    'accept-currencies': 'BCH,bch,BCHn,bitcoincash',
-    'mime-type': 'application/json',
+    x402Version: 2,
+    error: 'PAYMENT-SIGNATURE header is required',
+    resource: {
+      url: resourceUrl,
+      description: routes[resourceUrl]?.description || '',
+      mimeType: 'application/json',
+    },
+    accepts: [{
+      scheme: 'utxo',
+      network: NETWORK_ID,
+      amount: priceSats.toString(),
+      asset: ASSET_ID,
+      payTo: getPayToAddress(),
+      maxTimeoutSeconds: MAX_TIMEOUT_SECONDS,
+      extra: {},
+    }],
+    extensions: {},
   }
 }
 
-function send402Response(
-  res: http.ServerResponse,
-  headers: PaymentHeaders
-): void {
+function send402Response(res: http.ServerResponse, paymentRequired: PaymentRequired): void {
   res.writeHead(402, 'Payment Required', {
     'Content-Type': 'application/json',
-    ...Object.fromEntries(
-      Object.entries(headers).map(([k, v]) => [k, String(v)])
-    )
   })
-  res.end(JSON.stringify({
-    error: 'Payment required',
-    message: 'This endpoint requires payment via x402 protocol',
-    scheme: headers['x-scheme'],
-    maxAmount: headers['max-amount'],
-    resourceId: headers['resource-id'],
-  }))
+  res.end(JSON.stringify(paymentRequired, null, 2))
 }
 
-async function verifyPayment(
-  authHeader: string,
-  resourceId: string,
-  maxAmount: bigint,
-  paymentUrl: string
-): Promise<{ valid: boolean; error?: string; txid?: string }> {
-  if (!authHeader.startsWith('x402 ')) {
-    return { valid: false, error: 'Invalid authorization scheme' }
+function sendErrorResponse(res: http.ServerResponse, statusCode: number, invalidReason: string, paymentRequired?: PaymentRequired): void {
+  res.writeHead(statusCode, 'Payment Failed', {
+    'Content-Type': 'application/json',
+  })
+  const body: any = {
+    isValid: false,
+    invalidReason,
+  }
+  if (paymentRequired) {
+    body.paymentRequired = paymentRequired
+  }
+  res.end(JSON.stringify(body, null, 2))
+}
+
+function parsePaymentPayload(headerValue: string): { payload?: PaymentPayload; error?: string } {
+  if (!headerValue) {
+    return { error: 'missing_authorization' }
   }
 
-  const encoded = authHeader.slice(5)
-  let auth: any
-
+  let paymentPayload: PaymentPayload
   try {
-    auth = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'))
+    paymentPayload = JSON.parse(headerValue)
   } catch {
-    return { valid: false, error: 'Invalid base64 encoding' }
+    return { error: 'invalid_payload' }
   }
 
-  if (auth.scheme !== 'utxo') {
-    return { valid: false, error: `Unsupported scheme: ${auth.scheme}` }
+  if (paymentPayload.x402Version !== 2) {
+    return { error: 'invalid_x402_version' }
   }
 
-  if (auth.network !== NETWORK_ID) {
-    return { valid: false, error: `Wrong network: ${auth.network}` }
+  return { payload: paymentPayload }
+}
+
+function verifyPaymentPayload(payload: PaymentPayload, resourceUrl: string, maxAmountSats: bigint): { valid: boolean; invalidReason?: string; txid?: string; payer?: string } {
+  const accepted = payload.accepted
+
+  if (accepted.scheme !== 'utxo') {
+    return { valid: false, invalidReason: 'invalid_scheme' }
   }
 
-  if (auth.resource_id !== resourceId) {
-    return { valid: false, error: `Resource mismatch: ${auth.resource_id} !== ${resourceId}` }
+  if (accepted.network !== NETWORK_ID) {
+    return { valid: false, invalidReason: 'invalid_network' }
   }
 
-  if (!auth.payload_signature) {
-    return { valid: false, error: 'Missing payload signature' }
+  if (accepted.payTo !== getPayToAddress()) {
+    return { valid: false, invalidReason: 'invalid_receiver_address' }
   }
 
-  let payloadObj: any
-  try {
-    payloadObj = typeof auth.payload === 'string' ? JSON.parse(auth.payload) : auth.payload
-  } catch {
-    payloadObj = { payload: auth.payload }
+  const acceptedAmount = BigInt(accepted.amount)
+  if (acceptedAmount > maxAmountSats) {
+    return { valid: false, invalidReason: 'insufficient_utxo_balance' }
   }
+
+  if (accepted.asset !== ASSET_ID) {
+    return { valid: false, invalidReason: 'invalid_payload' }
+  }
+
+  const auth = payload.payload?.authorization
+  if (!auth) {
+    return { valid: false, invalidReason: 'missing_authorization' }
+  }
+
+  const valueSats = BigInt(auth.value)
+  if (valueSats > maxAmountSats) {
+    return { valid: false, invalidReason: 'insufficient_utxo_balance' }
+  }
+
+  if (auth.to !== accepted.payTo) {
+    return { valid: false, invalidReason: 'invalid_receiver_address' }
+  }
+
+  const txid = auth.txid === '*' ? crypto.randomUUID() : auth.txid
+  const payer = auth.from
 
   console.log(`[PAYMENT REQUEST]`, JSON.stringify({
-    payer: payloadObj.payer,
-    payment: payloadObj.payment,
-    resource_id: payloadObj.resource_id,
-    resource_meta: payloadObj.resource_meta,
-    nonce: payloadObj.nonce,
+    payer,
+    txid,
+    vout: auth.vout,
+    amount: auth.amount,
+    value: auth.value,
+    resource: resourceUrl,
   }, null, 2))
 
-  const payment = payloadObj?.payment || auth.payment
-  if (!payment?.recipients?.length) {
-    return { valid: false, error: 'Missing payment recipients' }
+  if (!payload.payload?.signature) {
+    return { valid: false, invalidReason: 'invalid_exact_bch_payload_signature' }
   }
-
-  const recipient = payment.recipients[0]
-  const amountSats = BigInt(recipient.amount)
-
-  if (amountSats > maxAmount) {
-    return { valid: false, error: `Amount exceeds maximum: ${amountSats} > ${maxAmount}` }
-  }
-
-  const validCurrency = ['BCH', 'bch', 'BCHn', 'bitcoincash'].includes(recipient.currency)
-  if (!validCurrency) {
-    return { valid: false, error: `Unsupported currency: ${recipient.currency}` }
-  }
-
-  if (!auth.nonce) {
-    return { valid: false, error: 'Missing nonce' }
-  }
-
-  if (!auth.payload) {
-    return { valid: false, error: 'Missing payload' }
-  }
-
-  const txid = payloadObj.txid || crypto.randomUUID()
-  const vout = payloadObj.vout || 0
-  const settleAddress = recipient.address
 
   return {
     valid: true,
     txid,
-    error: undefined,
+    payer,
+    invalidReason: undefined,
   }
 }
 
@@ -221,6 +282,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
   const url = new URL(req.url || '/', `http://localhost:${PORT}`)
   const path = url.pathname
   const query = url.searchParams
+  const resourceUrl = `${path}${query.toString() ? '?' + query.toString() : ''}`
 
   const route = routes[path]
   if (!route) {
@@ -229,23 +291,8 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return
   }
 
-  const resourceId = parseResourceId(path, query)
   const priceSats = route.price
-  const paymentUrl = (() => {
-    if (!RECEIVE_ADDRESS) {
-      return `bch:${bchNetwork.name === 'mainnet' ? 'bitcoincash:' : 'bchtest:'}placeholder`
-    }
-    // Return address with bch: prefix, ensuring proper CashAddress format
-    // If address already has bitcoincash: or bchtest: prefix, use as-is after bch:
-    // Otherwise assume it's a legacy address and wrap with proper prefix
-    const addr = RECEIVE_ADDRESS.toLowerCase()
-    if (addr.startsWith('bitcoincash:') || addr.startsWith('bchtest:') || addr.startsWith('bch:')) {
-      return RECEIVE_ADDRESS
-    }
-    // Legacy address - wrap with proper CashAddress prefix
-    const prefix = bchNetwork.name === 'mainnet' ? 'bitcoincash' : 'bchtest'
-    return `bch:${prefix}:${RECEIVE_ADDRESS}`
-  })()
+  const paymentRequired = buildPaymentRequired(`http://localhost:${PORT}${resourceUrl}`, priceSats)
 
   if (req.method !== 'GET') {
     res.writeHead(405, { 'Content-Type': 'application/json' })
@@ -253,29 +300,22 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return
   }
 
-  const authHeader = req.headers.authorization
-  const hasPayment = authHeader?.startsWith('x402 ')
+  const paymentSignature = req.headers['payment-signature'] as string | undefined
+  const parsed = parsePaymentPayload(paymentSignature || '')
 
-  if (!hasPayment) {
-    const headers = buildPaymentHeaders(resourceId, priceSats, paymentUrl, NETWORK_ID)
+  if (!parsed.payload) {
     console.log(`[PAYMENT REQUIRED] ${path} - ${priceSats} sats - ${req.socket.remoteAddress}`)
-    send402Response(res, headers)
+    send402Response(res, paymentRequired)
     return
   }
 
   console.log(`[VERIFYING] ${path} from ${req.socket.remoteAddress}`)
 
-  const verifyResult = await verifyPayment(
-    authHeader!,
-    resourceId,
-    BigInt(priceSats),
-    paymentUrl
-  )
+  const verifyResult = verifyPaymentPayload(parsed.payload, resourceUrl, BigInt(priceSats))
 
   if (!verifyResult.valid) {
-    console.log(`[VERIFICATION FAILED] ${path} - ${verifyResult.error}`)
-    res.writeHead(402, 'Payment Verification Failed', { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: verifyResult.error }))
+    console.log(`[VERIFICATION FAILED] ${path} - ${verifyResult.invalidReason}`)
+    sendErrorResponse(res, 402, verifyResult.invalidReason!, paymentRequired)
     return
   }
 
@@ -283,22 +323,16 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
   try {
     const data = await route.handler(query)
-    const payload = Buffer.from(JSON.stringify({
-      txid: verifyResult.txid,
-      vout: 0,
-      settle_address: RECEIVE_ADDRESS || 'unknown',
-      resource_id: resourceId,
-    })).toString('base64')
+
+    const verifyResponse: VerifyResponse = {
+      isValid: true,
+      payer: verifyResult.payer,
+      remainingBalanceSat: '0',
+    }
 
     res.writeHead(200, {
       'Content-Type': route.mimeType,
-      'PAYMENT-RESPONSE': Buffer.from(JSON.stringify({
-        success: true,
-        txid: verifyResult.txid,
-        vout: 0,
-        settle_address: RECEIVE_ADDRESS || 'unknown',
-        preimage: payload,
-      })).toString('base64'),
+      'PAYMENT-RESPONSE': Buffer.from(JSON.stringify(verifyResponse)).toString('base64'),
     })
     res.end(JSON.stringify(data))
   } catch (err: any) {
@@ -321,7 +355,7 @@ server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════════════════════╗
 ║                                                           ║
-║   x402 BCH Reference Server                               ║
+║   x402-bch Reference Server (v2.2 Compatible)            ║
 ║   Network: ${bchNetwork.name.padEnd(47)}║
 ║   Port:   ${PORT.toString().padEnd(47)}║
 ║                                                           ║
@@ -333,10 +367,6 @@ server.listen(PORT, () => {
 ║   GET /api/status    - ${routes['/api/status'].price} sat   - ${routes['/api/status'].description.padEnd(25)}║
 ║                                                           ║
 ╠═══════════════════════════════════════════════════════════╣
-║                                                           ║
-║   To test with paytaca-cli:                              ║
-║   paytaca check http://localhost:${PORT}/api/quote            ║
-║   paytaca pay http://localhost:${PORT}/api/quote              ║
 ║                                                           ║
 ║   Set RECEIVE_ADDRESS env var to your BCH address         ║
 ║   Set BCH_NETWORK=chipnet for testnet                     ║
