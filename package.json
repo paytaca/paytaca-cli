@@ -1,6 +1,6 @@
 {
   "name": "paytaca-cli",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Command-line interface for the Paytaca Bitcoin Cash wallet",
   "type": "module",
   "main": "dist/index.js",

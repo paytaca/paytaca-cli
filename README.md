@@ -122,10 +122,18 @@ paytaca pay https://api.nanogpt.com/v1/complete --method POST --body '{"prompt":
 
 ### AI Agent Integration
 
+Install the Paytaca x402 skill for your AI agent:
+
 ```bash
-paytaca opencode install            # Install Paytaca x402 skill for OpenCode AI agents
-paytaca claude install              # Install Paytaca x402 skill for Claude Code agents
+# Install from GitHub (supports 45+ AI frameworks)
+npx skills add paytaca/paytaca-cli --skill paytaca-x402 -a opencode -g    # OpenCode
+npx skills add paytaca/paytaca-cli --skill paytaca-x402 -a openclaw -g     # OpenClaw
+npx skills add paytaca/paytaca-cli --skill paytaca-x402 -a claude-code -g  # Claude Code
+npx skills add paytaca/paytaca-cli --skill paytaca-x402 -a cursor -g       # Cursor
+npx skills add paytaca/paytaca-cli --skill paytaca-x402 -a '*' -g        # All frameworks
 ```
+
+**Supported frameworks:** OpenCode, Claude Code, OpenClaw, Cursor, Cline, Windsurf, Roo, Gemini CLI, Codex, GitHub Copilot, Goose, Trae, Kiro CLI, and 30+ more.
 
 This enables AI agents to autonomously handle HTTP 402 payment responses when calling x402-enabled APIs.
 
@@ -163,8 +171,6 @@ src/
     token.ts         CashToken commands (list, info, send, send-nft)
     pay.ts           x402 BCH payment handler for HTTP requests
     check.ts         Check if URL requires x402 payment
-    opencode.ts      Install x402 skill for OpenCode AI agents
-    claude.ts        Install x402 skill for Claude Code AI agents
   wallet/
     index.ts         Wallet class, mnemonic gen/import/load
     bch.ts           BchWallet (balance, send, history, CashTokens)
