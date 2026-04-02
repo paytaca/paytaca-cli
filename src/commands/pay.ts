@@ -138,7 +138,7 @@ export function registerPayCommand(program: Command): void {
       const body = opts.body
 
       if (isJson) {
-        await runPayJson(url, method, headers, body, opts, x402Payer, bchWallet, isChipnet)
+        await runPayJson(url, method, headers, body, opts, x402Payer, bchWallet, isChipnet, opts.confirmed)
       } else if (isDryRun) {
         await runPayDryRun(url, method, headers, body, opts, x402Payer, bchWallet, isChipnet)
       } else {
@@ -305,10 +305,11 @@ async function runPayJson(
   opts: PayOptions,
   x402Payer: X402Payer,
   bchWallet: BchWallet,
-  isChipnet: boolean
+  isChipnet: boolean,
+  confirmed: boolean = false
 ): Promise<void> {
   try {
-    const result = await executePay(url, method, headers, body, opts, x402Payer, bchWallet, false)
+    const result = await executePay(url, method, headers, body, opts, x402Payer, bchWallet, false, confirmed)
     console.log(JSON.stringify(result, null, 2))
   } catch (err: any) {
     const errorResult: JsonResult = { success: false, error: err.message || String(err) }
@@ -380,11 +381,13 @@ async function executePay(
     const changeAddressSet = bchWallet.getAddressSetAt(0)
     const changeAddress = opts.changeAddress || changeAddressSet.change
 
-    console.log(chalk.yellow('\n   ⚠ Payment Required'))
-    console.log(chalk.dim(`   Amount:     ${amountBch} BCH (${requirements.amount} sats)`))
-    console.log(chalk.dim(`   To:         ${address}`))
-    console.log(chalk.dim(`   Change:     ${changeAddress}`))
-    console.log(chalk.dim(`   Payer:      ${payerAddress}`))
+    if (!confirmed) {
+      console.log(chalk.yellow('\n   ⚠ Payment Required'))
+      console.log(chalk.dim(`   Amount:     ${amountBch} BCH (${requirements.amount} sats)`))
+      console.log(chalk.dim(`   To:         ${address}`))
+      console.log(chalk.dim(`   Change:     ${changeAddress}`))
+      console.log(chalk.dim(`   Payer:      ${payerAddress}`))
+    }
 
     const userConfirmed = confirmed || await promptConfirmation('Confirm payment?')
     if (!userConfirmed) {
