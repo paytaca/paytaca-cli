@@ -122,20 +122,32 @@ paytaca pay https://api.nanogpt.com/v1/complete --method POST --body '{"prompt":
 
 ### AI Agent Integration
 
-Install the Paytaca x402 skill for your AI agent:
+Paytaca CLI provides AI agent skills for wallet operations. Install from GitHub (supports 45+ AI frameworks):
 
 ```bash
-# Install from GitHub (supports 45+ AI frameworks)
-npx skills add paytaca/paytaca-cli --skill paytaca-x402 -a opencode -g    # OpenCode
-npx skills add paytaca/paytaca-cli --skill paytaca-x402 -a openclaw -g     # OpenClaw
-npx skills add paytaca/paytaca-cli --skill paytaca-x402 -a claude-code -g  # Claude Code
-npx skills add paytaca/paytaca-cli --skill paytaca-x402 -a cursor -g       # Cursor
-npx skills add paytaca/paytaca-cli --skill paytaca-x402 -a '*' -g        # All frameworks
+# Install specific skill
+npx skills add paytaca/paytaca-cli --skill <skill-name> -a <agent> -g
+
+# Install all skills
+npx skills add paytaca/paytaca-cli --all
+
+# Examples
+npx skills add paytaca/paytaca-cli --skill paytaca-x402 -a opencode -g
+npx skills add paytaca/paytaca-cli --skill paytaca-wallet -a claude-code -g
+npx skills add paytaca/paytaca-cli --skill paytaca-send -a openclaw -g
 ```
+
+**Available Skills:**
+
+| Skill | Purpose | Approval Needed |
+|-------|---------|------------------|
+| `paytaca-x402` | HTTP 402 payment handling | Yes (before payment) |
+| `paytaca-wallet` | Balance, addresses, history, token info | No (read-only) |
+| `paytaca-send` | Send BCH and CashTokens | Yes (before sending) |
 
 **Supported frameworks:** OpenCode, Claude Code, OpenClaw, Cursor, Cline, Windsurf, Roo, Gemini CLI, Codex, GitHub Copilot, Goose, Trae, Kiro CLI, and 30+ more.
 
-This enables AI agents to autonomously handle HTTP 402 payment responses when calling x402-enabled APIs.
+See [skills/README.md](skills/README.md) for detailed skill documentation.
 
 ## Network
 
