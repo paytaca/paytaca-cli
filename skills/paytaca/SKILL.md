@@ -45,11 +45,14 @@ paytaca pay <url> --dry-run --json
 ### Make a paid request
 
 ```bash
-# Basic
+# Basic (will prompt for confirmation)
 paytaca pay <url>
 
 # With JSON output (preferred for AI agents)
 paytaca pay <url> --json
+
+# Skip confirmation prompt (only use after user has already approved via paytaca check)
+paytaca pay <url> --confirmed
 
 # POST request
 paytaca pay <url> --method POST --body '{"prompt":"hello"}'
@@ -86,9 +89,12 @@ When preparing to call an unfamiliar API that might require payment:
 
 **CRITICAL**: The agent MUST NOT execute `paytaca pay` without explicit user approval. Since `paytaca pay` spends real BCH from the user's wallet, always:
 
-1. Inform the user of the cost (e.g., "This API costs ~1000 sats")
-2. Wait for explicit user confirmation (e.g., "yes", "go ahead", "pay")
-3. Only then execute the payment
+1. Run `paytaca check <url> --json` first to determine the cost
+2. Inform the user of the cost (e.g., "This API costs ~1000 sats")
+3. Wait for explicit user confirmation (e.g., "yes", "go ahead", "pay")
+4. Only then execute the payment using `paytaca pay <url> --confirmed --json`
+
+The `--confirmed` flag skips the interactive confirmation prompt since the user has already approved the transaction. Do NOT use `--confirmed` without first obtaining explicit user approval.
 
 Do NOT assume the user wants to pay - even if the cost seems small.
 
@@ -102,7 +108,7 @@ Agent: paytaca check https://api.nanogpt.com/v1/complete --json
 Agent: Informs user "This API costs 100 sats (0.00000100 BCH). Approve to proceed?"
 User: "yes"
 
-Agent: paytaca pay https://api.nanogpt.com/v1/complete --method POST --body '{"prompt":"hello"}' --json
+Agent: paytaca pay https://api.nanogpt.com/v1/complete --method POST --body '{"prompt":"hello"}' --confirmed --json
   → Handles 402 → pays 100 sats → returns response with txid
 ```
 
@@ -112,6 +118,7 @@ Agent: paytaca pay https://api.nanogpt.com/v1/complete --method POST --body '{"p
 |--------|-------------|
 | `--json` | Machine-readable output (recommended for AI) |
 | `--dry-run` | Preview payment without executing |
+| `--confirmed` | Skip confirmation prompt (prior approval obtained) |
 | `--chipnet` | Use chipnet (testnet) instead of mainnet |
 | `--max-amount` | Override max payment amount in sats |
 

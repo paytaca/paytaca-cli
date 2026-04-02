@@ -34,6 +34,7 @@ interface PayOptions {
   payer?: string
   dryRun: boolean
   json: boolean
+  confirmed: boolean
 }
 
 interface DryRunInfo {
@@ -86,6 +87,7 @@ export function registerPayCommand(program: Command): void {
     .option('--payer <value>', 'Payer identifier (defaults to wallet address index 0, or pass custom value like user ID for server-side lookups)')
     .option('--dry-run', 'Show what would happen without making payment')
     .option('--json', 'Output results as JSON')
+    .option('--confirmed', 'Skip confirmation prompt (prior approval already obtained via paytaca check)')
     .action(async (url: string, opts: PayOptions) => {
       const isChipnet = Boolean(opts.chipnet)
       const network = isChipnet ? 'chipnet' : 'mainnet'
@@ -140,7 +142,7 @@ export function registerPayCommand(program: Command): void {
       } else if (isDryRun) {
         await runPayDryRun(url, method, headers, body, opts, x402Payer, bchWallet, isChipnet)
       } else {
-        await runPayHuman(url, method, headers, body, opts, x402Payer, bchWallet, isChipnet)
+        await runPayHuman(url, method, headers, body, opts, x402Payer, bchWallet, isChipnet, opts.confirmed)
       }
     })
 }
@@ -153,7 +155,8 @@ async function runPayHuman(
   opts: PayOptions,
   x402Payer: X402Payer,
   bchWallet: BchWallet,
-  isChipnet: boolean
+  isChipnet: boolean,
+  confirmed: boolean = false
 ): Promise<void> {
   const network = isChipnet ? 'chipnet' : 'mainnet'
 
@@ -166,7 +169,7 @@ async function runPayHuman(
   console.log()
 
   try {
-    const result = await executePay(url, method, headers, body, opts, x402Payer, bchWallet, false)
+    const result = await executePay(url, method, headers, body, opts, x402Payer, bchWallet, false, confirmed)
 
     if (result.payment?.required && result.payment.txid) {
       const explorer = isChipnet
@@ -322,7 +325,8 @@ async function executePay(
   opts: PayOptions,
   x402Payer: X402Payer,
   bchWallet: BchWallet,
-  skipPayment: boolean
+  skipPayment: boolean,
+  confirmed: boolean = false
 ): Promise<JsonResult> {
   const response = await fetch(url, {
     method,
@@ -382,8 +386,8 @@ async function executePay(
     console.log(chalk.dim(`   Change:     ${changeAddress}`))
     console.log(chalk.dim(`   Payer:      ${payerAddress}`))
 
-    const confirmed = await promptConfirmation('Confirm payment?')
-    if (!confirmed) {
+    const userConfirmed = confirmed || await promptConfirmation('Confirm payment?')
+    if (!userConfirmed) {
       return {
         success: false,
         status: 402,
