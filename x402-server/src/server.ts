@@ -8,8 +8,8 @@
  * 
  * Endpoints:
  *   GET /api/quote     - Returns a random quote (costs 1000 sats)
- *   GET /api/weather   - Returns fake weather data (costs 50 sats)
- *   GET /api/status    - Returns server status (costs 1 sat)
+ *   GET /api/weather   - Returns fake weather data (costs 600 sats)
+ *   GET /api/status    - Returns server status (costs 600 sats)
  */
 
 import http from 'http'
@@ -112,7 +112,7 @@ const routes: Record<string, RouteConfig> = {
     }
   },
   '/api/weather': {
-    price: 50,
+    price: 600,
     description: 'Get current weather information',
     mimeType: 'application/json',
     handler: async () => {
@@ -127,7 +127,7 @@ const routes: Record<string, RouteConfig> = {
     }
   },
   '/api/status': {
-    price: 1,
+    price: 600,
     description: 'Server status check',
     mimeType: 'application/json',
     handler: async () => ({
