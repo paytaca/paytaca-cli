@@ -123,8 +123,8 @@ paytaca pay https://api.nanogpt.com/v1/complete --method POST --body '{"prompt":
 ### AI Agent Integration
 
 ```bash
-paytaca opencode                    # Install Paytaca x402 skill for OpenCode AI agents
-paytaca claude                      # Install Paytaca x402 skill for Claude Code agents
+paytaca opencode install            # Install Paytaca x402 skill for OpenCode AI agents
+paytaca claude install              # Install Paytaca x402 skill for Claude Code agents
 ```
 
 This enables AI agents to autonomously handle HTTP 402 payment responses when calling x402-enabled APIs.
