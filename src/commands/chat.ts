@@ -603,7 +603,7 @@ export function registerChatCommands(program: Command): void {
         if (isJson) {
           console.log(JSON.stringify({
             type: 'message',
-            room: { id: room.id, name: room.name },
+            room: { id: room.id, name: room.name, members: room.members },
             message: {
               id: message.id,
               content: message.content,
