@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import type { ChatStore as ChatStoreType } from './store.js'
 
 const memFs = new Map<string, string>()
 
@@ -7,6 +8,10 @@ vi.mock('fs', () => ({
   mkdirSync: vi.fn(),
   readFileSync: vi.fn((p: string) => memFs.get(p)),
   writeFileSync: vi.fn((p: string, data: string) => { memFs.set(p, data) }),
+}))
+
+vi.mock('os', () => ({
+  homedir: vi.fn(() => '/Users/joemartaganna'),
 }))
 
 import * as fs from 'fs'
@@ -18,6 +23,7 @@ const mockKeys = {
   privKeyHex: mockPrivKey,
   pubKeyHex: mockPubKey,
   npub: 'npub1test',
+  nsec: 'nsec1test',
 }
 
 vi.mock('./keys.js', () => ({
@@ -51,7 +57,7 @@ vi.mock('./relay.js', () => ({
 }))
 
 vi.mock('./chat.js', async (importOriginal) => {
-  const actual = await importOriginal()
+  const actual = await importOriginal() as any
   return {
     ...actual,
     createNip17GiftWraps: vi.fn(),
@@ -66,7 +72,7 @@ const bobPub = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 const alicePub = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 
 describe('ChatStore', () => {
-  let store: ChatStore
+  let store: ChatStoreType
 
   beforeEach(() => {
     memFs.clear()
