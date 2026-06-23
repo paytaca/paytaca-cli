@@ -234,27 +234,26 @@ export class RelayService {
     const pool = this.getPool()
     const accepted: string[] = []
     const errors: { relay: string; reason: string }[] = []
-    const resolvedRelays = new Set<string>()
 
     for (const event of events) {
+      const seen = new Set<string>()
       try {
         const promises = pool.publish(relays, event as any, { maxWait: 30000 })
         const settled = await Promise.allSettled(promises as Promise<any>[])
         settled.forEach((r, i) => {
           const relay = relays[i]
-          if (!relay || resolvedRelays.has(relay)) return
+          if (!relay || seen.has(relay)) return
+          seen.add(relay)
           if (r.status === 'fulfilled') {
-            resolvedRelays.add(relay)
             accepted.push(relay)
           } else {
-            resolvedRelays.add(relay)
             errors.push({ relay, reason: r.reason?.message || String(r.reason) })
           }
         })
       } catch (err) {
         for (const relay of relays) {
-          if (resolvedRelays.has(relay)) continue
-          resolvedRelays.add(relay)
+          if (seen.has(relay)) continue
+          seen.add(relay)
           errors.push({ relay, reason: String(err) })
         }
       }

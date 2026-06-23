@@ -589,9 +589,11 @@ export function registerChatCommands(program: Command): void {
       const isJson = Boolean(opts.json)
 
       if (!isJson) {
-        const target = filterPubKey === store.keys?.pubKeyHex
-          ? 'your conversations'
-          : `conversations with ${store.getContactName(filterPubKey!)}`
+        const target = !filterPubKey
+          ? 'all conversations'
+          : filterPubKey === store.keys?.pubKeyHex
+            ? 'your conversations'
+            : `conversations with ${store.getContactName(filterPubKey)}`
         console.log(chalk.dim(`\n   Listening for new messages in ${target}... (Ctrl+C to stop)\n`))
       }
 
