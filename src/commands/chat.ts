@@ -1,6 +1,8 @@
 import { Command } from 'commander'
 import chalk from 'chalk'
 import { finalizeEvent } from 'nostr-tools'
+import { hexToBytes } from 'nostr-tools/utils'
+import { decode as nip19Decode } from 'nostr-tools/nip19'
 import { loadMnemonic } from '../wallet/index.js'
 import { ChatStore } from '../nostr/store.js'
 import * as relayService from '../nostr/relay.js'
@@ -14,14 +16,6 @@ function formatTimestamp(unix: number): string {
   }
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
     ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
-
-function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2)
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16)
-  }
-  return bytes
 }
 
 function shortPubkey(pubkey: string): string {
@@ -194,6 +188,12 @@ export function registerChatCommands(program: Command): void {
       if (msgs.length < allMsgs.length) {
         console.log(chalk.dim(`   Showing last ${msgs.length} of ${allMsgs.length} messages.\n`))
       }
+
+      store.readMessageIds[room.id] = store.readMessageIds[room.id] || {}
+      for (const msg of allMsgs) {
+        store.readMessageIds[room.id][msg.id] = true
+      }
+      store.saveState()
       store.cleanup()
       process.exit(0)
     })
@@ -570,7 +570,12 @@ export function registerChatCommands(program: Command): void {
         if (contact) {
           filterPubKey = contact.pubKeyHex
         } else if (opts.contact.startsWith('npub1')) {
-          filterPubKey = opts.contact
+          try {
+            const decoded = nip19Decode(opts.contact as `npub1${string}`)
+            filterPubKey = decoded.data
+          } catch {
+          }
+          if (!filterPubKey) console.log(chalk.yellow(`\n   Invalid npub: ${opts.contact}\n`))
         } else {
           console.log(chalk.yellow(`\n   Contact not found: ${opts.contact}. Watching all conversations.\n`))
         }

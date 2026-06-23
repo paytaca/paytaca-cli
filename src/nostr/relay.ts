@@ -1,5 +1,6 @@
 import { SimplePool } from 'nostr-tools/pool'
 import { finalizeEvent } from 'nostr-tools'
+import { hexToBytes } from 'nostr-tools/utils'
 import type { NostrEvent } from './chat.js'
 
 let _pool: SimplePool | null = null
@@ -16,6 +17,7 @@ let _lastSubscribeTime = 0
 let _subscribedRelays: string[] = []
 let _subscribedPubKey: string | null = null
 let _subscribing = false
+let _activeSubRelays = new Set<string>()
 
 const KEEPALIVE_INTERVAL_MS = 30000
 
@@ -26,14 +28,6 @@ function arraysEqual(a: string[], b: string[]): boolean {
     if (a[i] !== b[i]) return false
   }
   return true
-}
-
-function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2)
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16)
-  }
-  return bytes
 }
 
 function getPool(): SimplePool {
@@ -82,6 +76,7 @@ export function disconnect(): void {
   _subscribedPubKey = null
   _subscribing = false
   _subscriptionCallbacks = null
+  _activeSubRelays.clear()
 }
 
 export function isSubscribed(): boolean {
@@ -90,7 +85,6 @@ export function isSubscribed(): boolean {
 
 function scheduleResubscribe(): void {
   if (_resubscribeTimer) return
-  const RESUBSCRIBE_BASE_MS = 1000
   const RESUBSCRIBE_MAX_MS = 60000
   _resubscribeTimer = setTimeout(() => {
     _resubscribeTimer = null
@@ -164,14 +158,19 @@ export function subscribeGiftWraps(
             },
             onclose(reasons: string[]) {
               if (!reasons.includes('closed by caller')) {
-                _isSubscribed = false
-                scheduleResubscribe()
+                _activeSubRelays.delete(relayUrl)
+                if (_activeSubRelays.size === 0) {
+                  _isSubscribed = false
+                  scheduleResubscribe()
+                }
               }
             },
           }
         )
         _subs.push(sub)
-      } catch (_) {
+        _activeSubRelays.add(relayUrl)
+      } catch (err) {
+        console.error('[relay] subscribeMany failed:', err)
       }
     }
   } finally {
@@ -197,7 +196,8 @@ export function subscribeGiftWraps(
           }
           if (callbacks.onEvent) callbacks.onEvent(event as NostrEvent)
         }
-      } catch (_) {
+      } catch (err) {
+        console.error('[relay] poll querySync failed:', err)
       }
     }, 30000)
   }
@@ -235,6 +235,7 @@ export function subscribeGiftWraps(
       }
       _isSubscribed = false
       _subscriptionCallbacks = null
+      _activeSubRelays.clear()
     },
   }
 }
@@ -296,7 +297,8 @@ export async function fetchKind10050(relays: string[], pubKey: string): Promise<
   try {
     const events = await pool.querySync(relays, { kinds: [10050], authors: [pubKey] })
     return (events?.[0] as NostrEvent) || null
-  } catch {
+  } catch (err) {
+    console.error('[relay] fetchKind10050 failed:', err)
     return null
   }
 }
@@ -329,6 +331,7 @@ export function cleanup(): void {
   _subscribing = false
   _subscriptionCallbacks = null
   _authSigner = null
+  _activeSubRelays.clear()
 }
 
 export async function fetchDisplayName(relays: string[], pubKey: string): Promise<string | null> {
@@ -342,7 +345,8 @@ export async function fetchDisplayName(relays: string[], pubKey: string): Promis
     if (!match) return null
     const parsed = JSON.parse(match.content || '{}')
     return parsed?.data?.displayName?.trim() || null
-  } catch {
+  } catch (err) {
+    console.error('[relay] fetchDisplayName failed:', err)
     return null
   }
 }
@@ -358,7 +362,8 @@ export async function fetchBchAddress(relays: string[], pubKey: string): Promise
     if (!match) return null
     const parsed = JSON.parse(match.content || '{}')
     return parsed?.data?.address?.trim() || null
-  } catch {
+  } catch (err) {
+    console.error('[relay] fetchBchAddress failed:', err)
     return null
   }
 }
@@ -375,6 +380,7 @@ export async function fetchHistoricalGiftWraps(
     for (const event of events as NostrEvent[]) {
       if (callbacks.onEvent) callbacks.onEvent(event)
     }
-  } catch {
+  } catch (err) {
+    console.error('[relay] fetchHistoricalGiftWraps failed:', err)
   }
 }

@@ -107,7 +107,8 @@ export class ChatStore {
           }
         }
       }
-    } catch {
+    } catch (err) {
+      console.error('[store] loadPersistedData failed:', err)
     }
   }
 
@@ -124,7 +125,8 @@ export class ChatStore {
         fs.mkdirSync(DATA_DIR, { recursive: true })
       }
       fs.writeFileSync(this.stateFilePath(), JSON.stringify(data, null, 2), 'utf-8')
-    } catch {
+    } catch (err) {
+      console.error('[store] saveState failed:', err)
     }
   }
 
@@ -136,7 +138,8 @@ export class ChatStore {
 
     try {
       await relayService.publishEvent(this.relays, createKind10050(this.relays, keys.privKeyHex))
-    } catch {
+    } catch (err) {
+      console.error('[store] publish kind10050 failed:', err)
     }
 
     try {
@@ -145,11 +148,13 @@ export class ChatStore {
           try {
             const { rumor } = unwrapGiftWrap(event, keys.privKeyHex)
             this.receiveMessage(rumor)
-          } catch {
+          } catch (err) {
+            console.error('[store] unwrap historical event failed:', err)
           }
         },
       })
-    } catch {
+    } catch (err) {
+      console.error('[store] fetchHistoricalGiftWraps failed:', err)
     }
 
     this.initialized = true
@@ -166,7 +171,8 @@ export class ChatStore {
           try {
             const { rumor } = unwrapGiftWrap(event, this.keys!.privKeyHex)
             this.receiveMessage(rumor)
-          } catch {
+          } catch (err) {
+            console.error('[store] subscribe unwrap failed:', err)
           }
         }),
       }

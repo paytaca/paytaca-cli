@@ -2,6 +2,7 @@ import {
   getEventHash,
   finalizeEvent,
 } from 'nostr-tools'
+import { hexToBytes } from 'nostr-tools/utils'
 import { nip44 } from 'nostr-tools'
 import { nip59 } from 'nostr-tools'
 import { sha256 } from 'js-sha256'
@@ -32,14 +33,6 @@ export interface NostrEvent {
   tags: string[][]
   content: string
   sig: string
-}
-
-function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2)
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16)
-  }
-  return bytes
 }
 
 export function createUnsignedKind14(opts: {
