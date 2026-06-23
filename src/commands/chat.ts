@@ -131,7 +131,7 @@ export function registerChatCommands(program: Command): void {
         process.exit(1)
       }
 
-      const allMsgs = store.getMessages(roomId)
+      const allMsgs = store.getMessages(room.id)
       const tail = Number.isNaN(parseInt(opts.tail, 10)) ? 20 : parseInt(opts.tail, 10)
       const msgs = allMsgs.slice(-tail)
 
@@ -204,7 +204,7 @@ export function registerChatCommands(program: Command): void {
   chat
     .command('send')
     .description('Send a message to a conversation')
-    .argument('<room-id>', 'Room ID')
+    .argument('<room-id>', 'Room ID (full or prefix)')
     .argument('<text>', 'Message text')
     .action(async (roomId: string, text: string) => {
       const data = loadMnemonic()
@@ -222,7 +222,7 @@ export function registerChatCommands(program: Command): void {
         process.exit(1)
       }
 
-      const { giftWraps, message } = await store.sendMessage(roomId, text)
+      const { giftWraps, message } = await store.sendMessage(room.id, text)
       const publishResults = await store.publishGiftWraps(giftWraps)
       const failures = publishResults.filter(r => !r.ok)
 
@@ -608,6 +608,8 @@ export function registerChatCommands(program: Command): void {
               content: message.content,
               sender: message.sender,
               created_at: message.created_at,
+              replyTo: message.replyTo || null,
+              editOf: message.editOf || null,
             },
             senderName: store.getContactName(message.sender),
           }))
@@ -623,6 +625,9 @@ export function registerChatCommands(program: Command): void {
 
         console.log(`  [${roomLabel}] ${sender} ${time}`)
         console.log(`  ${message.content}`)
+        if (message.editOf) {
+          console.log(chalk.dim('   (edited)'))
+        }
         console.log()
       })
 
