@@ -13,7 +13,6 @@ export class RelayService {
   private resubscribeTimer: ReturnType<typeof setTimeout> | null = null
   private subscriptionCallbacks: { onEvent?: (event: NostrEvent) => void } | null = null
   private _isSubscribed = false
-  private lastSubscribeTime = 0
   private subscribedRelays: string[] = []
   private subscribedPubKey: string | null = null
   private subscribing = false
@@ -62,7 +61,6 @@ export class RelayService {
       this.keepaliveInterval = null
     }
     this._isSubscribed = false
-    this.lastSubscribeTime = 0
     this.subscribedRelays = []
     this.subscribedPubKey = null
     this.subscribing = false
@@ -202,7 +200,6 @@ export class RelayService {
     }
 
     this._isSubscribed = this.subs.length > 0
-    this.lastSubscribeTime = now
     this.subscribedRelays = [...relays]
     this.subscribedPubKey = myPubKey
 
@@ -294,7 +291,6 @@ export class RelayService {
       this.pool = null
     }
     this._isSubscribed = false
-    this.lastSubscribeTime = 0
     this.subscribedRelays = []
     this.subscribedPubKey = null
     this.subscribing = false

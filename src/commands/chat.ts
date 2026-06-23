@@ -133,7 +133,7 @@ export function registerChatCommands(program: Command): void {
 
       const allMsgs = store.getMessages(room.id)
       const tail = Number.isNaN(parseInt(opts.tail, 10)) ? 20 : parseInt(opts.tail, 10)
-      const msgs = allMsgs.slice(-tail)
+      const msgs = tail === 0 ? [] : allMsgs.slice(-tail)
 
       // Resolve display names for all unique message senders
       const senderPubKeys = [...new Set(msgs.map(m => m.sender).filter(Boolean))]
@@ -637,13 +637,15 @@ export function registerChatCommands(program: Command): void {
         console.log(chalk.dim('   Connected.\n'))
       }
 
-      process.on('SIGINT', () => {
+      const shutdown = () => {
         store.unsubscribe()
         if (!isJson) {
           console.log(chalk.dim('\n   Stopped.\n'))
         }
         process.exit(0)
-      })
+      }
+      process.on('SIGINT', shutdown)
+      process.on('SIGTERM', shutdown)
 
       await new Promise(() => {})
     })

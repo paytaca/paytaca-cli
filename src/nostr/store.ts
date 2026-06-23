@@ -104,7 +104,12 @@ export class ChatStore {
           if (!this.messages[roomId]) this.messages[roomId] = []
           for (const msg of msgs) {
             const exists = this.messages[roomId].find(m => m.id === msg.id)
-            if (!exists) this.messages[roomId].push(msg)
+            if (!exists) {
+              const arr = this.messages[roomId]
+              let i = arr.length
+              while (i > 0 && arr[i - 1].created_at > msg.created_at) i--
+              arr.splice(i, 0, msg)
+            }
           }
         }
       }
@@ -125,7 +130,7 @@ export class ChatStore {
       if (!fs.existsSync(DATA_DIR)) {
         fs.mkdirSync(DATA_DIR, { recursive: true })
       }
-      fs.writeFileSync(this.stateFilePath(), JSON.stringify(data, null, 2), 'utf-8')
+      fs.writeFileSync(this.stateFilePath(), JSON.stringify(data, null, 2), { encoding: 'utf-8', mode: 0o600 })
     } catch (err) {
       console.error('[store] saveState failed:', err)
     }
