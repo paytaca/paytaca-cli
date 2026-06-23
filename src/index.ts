@@ -16,6 +16,7 @@ import { registerHistoryCommand } from './commands/history.js'
 import { registerTokenCommands } from './commands/token.js'
 import { registerPayCommand } from './commands/pay.js'
 import { registerCheckCommand } from './commands/check.js'
+import { registerChatCommands } from './commands/chat.js'
 
 const program = new Command()
 
@@ -33,5 +34,6 @@ registerHistoryCommand(program)
 registerTokenCommands(program)
 registerPayCommand(program)
 registerCheckCommand(program)
+registerChatCommands(program)
 
 program.parse()

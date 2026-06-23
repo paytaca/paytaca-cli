@@ -45,6 +45,7 @@
     "bip39": "^3.1.0",
     "chalk": "^5.4.1",
     "commander": "^12.1.0",
+    "nostr-tools": "^2.23.3",
     "js-sha256": "^0.9.0",
     "qrcode-terminal": "^0.12.0",
     "watchtower-cash-js": "^0.2.4"
