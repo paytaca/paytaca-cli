@@ -244,6 +244,33 @@ export function registerChatCommands(program: Command): void {
     })
 
   chat
+    .command('start')
+    .description('Start a new 1:1 conversation with a contact')
+    .argument('<npub>', "Contact's npub (e.g., npub1...)")
+    .action(async (npub: string) => {
+      const data = loadMnemonic()
+      if (!data) {
+        console.log(chalk.red('\nNo wallet found.\n'))
+        process.exit(1)
+      }
+
+      const store = new ChatStore()
+      await store.initialize(data.mnemonic)
+
+      try {
+        const room = store.startConversation(npub)
+        await store.resolveDisplayName(store.getOtherMember(room)!)
+        console.log(chalk.green(`\n   Conversation started: ${room.name}\n`))
+        console.log(chalk.dim(`   Room ID: ${room.id}\n`))
+      } catch (err: any) {
+        console.log(chalk.red(`\n   Error: ${err.message || err}\n`))
+        process.exit(1)
+      } finally {
+        store.cleanup()
+      }
+    })
+
+  chat
     .command('add-contact')
     .description('Add a contact by npub')
     .argument('<npub>', "Contact's npub (e.g., npub1...)")
@@ -461,8 +488,8 @@ export function registerChatCommands(program: Command): void {
     .description('Publish your BCH address to relays (NIP-78)')
     .argument('<address>', 'BCH address (cashaddr format)')
     .action(async (address: string) => {
-      const trimmed = address.trim()
-      if (!/^(bitcoincash|bchtest|bchreg):[qpzry9x8gf2tvdw0s3jn54khce6mua7l]+$/i.test(trimmed)) {
+      const trimmed = address.trim().toLowerCase()
+      if (!/^(bitcoincash|bchtest|bchreg):[qpzry9x8gf2tvdw0s3jn54khce6mua7l]+$/.test(trimmed)) {
         console.log(chalk.red('\nInvalid BCH address. Must be cashaddr format (e.g. bitcoincash:...).\n'))
         process.exit(1)
       }
@@ -578,8 +605,9 @@ export function registerChatCommands(program: Command): void {
             const decoded = nip19Decode(opts.contact as `npub1${string}`)
             filterPubKey = decoded.data
           } catch {
+            console.log(chalk.red(`\n   Invalid npub: ${opts.contact}\n`))
+            process.exit(1)
           }
-          if (!filterPubKey) console.log(chalk.yellow(`\n   Invalid npub: ${opts.contact}\n`))
         } else {
           console.log(chalk.yellow(`\n   Contact not found: ${opts.contact}. Watching all conversations.\n`))
           filterPubKey = null

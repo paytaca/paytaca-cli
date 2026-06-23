@@ -232,30 +232,40 @@ export class RelayService {
   async publish(relays: string[], eventOrEvents: NostrEvent | NostrEvent[]): Promise<{ accepted: string[]; errors: { relay: string; reason: string }[] }> {
     const events = Array.isArray(eventOrEvents) ? eventOrEvents : [eventOrEvents]
     const pool = this.getPool()
-    const accepted: string[] = []
-    const errors: { relay: string; reason: string }[] = []
+    const relayStatus = new Map<string, 'accepted' | 'rejected'>()
+    const relayError = new Map<string, string>()
 
     for (const event of events) {
-      const seen = new Set<string>()
       try {
         const promises = pool.publish(relays, event as any, { maxWait: 30000 })
         const settled = await Promise.allSettled(promises as Promise<any>[])
         settled.forEach((r, i) => {
           const relay = relays[i]
-          if (!relay || seen.has(relay)) return
-          seen.add(relay)
+          if (!relay) return
           if (r.status === 'fulfilled') {
-            accepted.push(relay)
-          } else {
-            errors.push({ relay, reason: r.reason?.message || String(r.reason) })
+            relayStatus.set(relay, 'accepted')
+          } else if (!relayStatus.has(relay)) {
+            relayStatus.set(relay, 'rejected')
+            relayError.set(relay, r.reason?.message || String(r.reason))
           }
         })
       } catch (err) {
         for (const relay of relays) {
-          if (seen.has(relay)) continue
-          seen.add(relay)
-          errors.push({ relay, reason: String(err) })
+          if (!relayStatus.has(relay)) {
+            relayStatus.set(relay, 'rejected')
+            relayError.set(relay, String(err))
+          }
         }
+      }
+    }
+
+    const accepted: string[] = []
+    const errors: { relay: string; reason: string }[] = []
+    for (const [relay, status] of relayStatus) {
+      if (status === 'accepted') {
+        accepted.push(relay)
+      } else {
+        errors.push({ relay, reason: relayError.get(relay) || 'unknown error' })
       }
     }
     return { accepted, errors }

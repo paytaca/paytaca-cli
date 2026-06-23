@@ -282,12 +282,13 @@ export class ChatStore {
       const contact = this.contacts.find(c => c.pubKeyHex === rumor.pubkey)
       const cachedName = this.displayNameCache[rumor.pubkey]
       const roomName = contact?.name || cachedName || rumor.pubkey.slice(0, 12) + '...'
+      const subject = rumor.tags.find(t => t[0] === 'subject')?.[1] || null
       room = {
         id: roomId,
         type: isGroup ? 'group' : 'private',
         name: roomName,
         members: roomMembers,
-        subject: null,
+        subject,
         createdAt: rumor.created_at,
         updatedAt: rumor.created_at,
       }
@@ -419,6 +420,29 @@ export class ChatStore {
     this.saveState()
   }
 
+  startConversation(npub: string): Room {
+    if (!this.keys) throw new Error('Not initialized')
+    const contact = this.contacts.find(c => c.npub === npub)
+    if (!contact) throw new Error('Contact not found. Use add-contact first.')
+    const roomMembers = [this.keys.pubKeyHex, contact.pubKeyHex]
+    const roomId = computeRoomId(roomMembers)
+    let room = this.rooms.find(r => r.id === roomId)
+    if (!room) {
+      room = {
+        id: roomId,
+        type: 'private',
+        name: contact.name,
+        members: roomMembers,
+        subject: null,
+        createdAt: Math.floor(Date.now() / 1000),
+        updatedAt: Math.floor(Date.now() / 1000),
+      }
+      this.rooms.push(room)
+      this.saveState()
+    }
+    return room
+  }
+
   getContactName(pubKeyHex: string): string {
     const contact = this.contacts.find(c => c.pubKeyHex === pubKeyHex)
     if (contact) return contact.name
@@ -427,12 +451,15 @@ export class ChatStore {
   }
 
   async resolveDisplayName(pubKeyHex: string): Promise<string | null> {
-    if (this.displayNameCache[pubKeyHex]) return this.displayNameCache[pubKeyHex]
     const contact = this.contacts.find(c => c.pubKeyHex === pubKeyHex)
     if (contact?.name && !contact.name.includes('...')) {
-      this.displayNameCache[pubKeyHex] = contact.name
+      if (this.displayNameCache[pubKeyHex] !== contact.name) {
+        this.displayNameCache[pubKeyHex] = contact.name
+        this.saveState()
+      }
       return contact.name
     }
+    if (this.displayNameCache[pubKeyHex]) return this.displayNameCache[pubKeyHex]
     const name = await relayService.fetchDisplayName(this.relays, pubKeyHex)
     if (name) {
       this.displayNameCache[pubKeyHex] = name
