@@ -146,7 +146,7 @@ export class RelayService {
               oneose() {
               },
               onclose: (reasons: string[]) => {
-                if (!reasons.includes('closed by caller')) {
+                if (!reasons || !reasons.includes('closed by caller')) {
                   this.activeSubRelays.delete(relayUrl)
                   if (this.activeSubRelays.size === 0) {
                     this._isSubscribed = false

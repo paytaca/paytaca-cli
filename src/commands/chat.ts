@@ -141,6 +141,13 @@ export function registerChatCommands(program: Command): void {
         senderPubKeys.map(pk => store.resolveDisplayName(pk))
       )
 
+      // Mark viewed messages as read (do this before JSON exit too)
+      store.readMessageIds[room.id] = store.readMessageIds[room.id] || {}
+      for (const msg of msgs) {
+        store.readMessageIds[room.id][msg.id] = true
+      }
+      store.saveState()
+
       if (opts.json) {
         console.log(JSON.stringify({
           room: {
@@ -192,11 +199,6 @@ export function registerChatCommands(program: Command): void {
         console.log(chalk.dim(`   Showing last ${msgs.length} of ${allMsgs.length} messages.\n`))
       }
 
-      store.readMessageIds[room.id] = store.readMessageIds[room.id] || {}
-      for (const msg of msgs) {
-        store.readMessageIds[room.id][msg.id] = true
-      }
-      store.saveState()
       store.cleanup()
       process.exit(0)
     })
@@ -585,6 +587,7 @@ export function registerChatCommands(program: Command): void {
           if (!filterPubKey) console.log(chalk.yellow(`\n   Invalid npub: ${opts.contact}\n`))
         } else {
           console.log(chalk.yellow(`\n   Contact not found: ${opts.contact}. Watching all conversations.\n`))
+          filterPubKey = null
         }
       }
 

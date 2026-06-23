@@ -98,15 +98,11 @@ export function unwrapGiftWrap(
   const receiverPrivKeyBytes = hexToBytes(receiverPrivKey)
   const rumor = nip59.unwrapEvent(giftWrap as any, receiverPrivKeyBytes) as unknown as Rumor
 
-  try {
-    const conversationKey = nip44.getConversationKey(receiverPrivKeyBytes, giftWrap.pubkey)
-    const sealJson = nip44.decrypt(giftWrap.content, conversationKey)
-    const seal = JSON.parse(sealJson)
-    if (seal.pubkey !== rumor.pubkey) {
-      throw new Error('Seal pubkey does not match rumor pubkey')
-    }
-  } catch (err) {
-    if (err instanceof Error && err.message === 'Seal pubkey does not match rumor pubkey') throw err
+  const conversationKey = nip44.getConversationKey(receiverPrivKeyBytes, giftWrap.pubkey)
+  const sealJson = nip44.decrypt(giftWrap.content, conversationKey)
+  const seal = JSON.parse(sealJson)
+  if (seal.pubkey !== rumor.pubkey) {
+    throw new Error('Seal pubkey does not match rumor pubkey')
   }
 
   return { rumor, sealPubkey: rumor.pubkey }
