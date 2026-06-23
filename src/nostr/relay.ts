@@ -19,6 +19,13 @@ export class RelayService {
   private activeSubRelays = new Set<string>()
 
   private static readonly KEEPALIVE_INTERVAL_MS = 30000
+  private static readonly MAX_SEEN_EVENT_IDS = 5000
+
+  private trimSeenEventIds(): void {
+    if (this.seenEventIds.size <= RelayService.MAX_SEEN_EVENT_IDS) return
+    const toDelete = Array.from(this.seenEventIds).slice(0, this.seenEventIds.size - RelayService.MAX_SEEN_EVENT_IDS)
+    for (const id of toDelete) this.seenEventIds.delete(id)
+  }
 
   private getPool(): SimplePool {
     if (!this.pool) {
@@ -137,10 +144,7 @@ export class RelayService {
               onevent: (event: any) => {
                 if (this.seenEventIds.has(event.id as string)) return
                 this.seenEventIds.add(event.id as string)
-                if (this.seenEventIds.size > 5000) {
-                  const toDelete = Array.from(this.seenEventIds).slice(0, this.seenEventIds.size - 5000)
-                  toDelete.forEach(id => this.seenEventIds.delete(id))
-                }
+                this.trimSeenEventIds()
                 if (callbacks.onEvent) callbacks.onEvent(event as NostrEvent)
               },
               oneose() {
@@ -179,10 +183,7 @@ export class RelayService {
           if (!newEvents.length) return
           for (const event of newEvents) {
             this.seenEventIds.add(event.id)
-            if (this.seenEventIds.size > 5000) {
-              const toDelete = Array.from(this.seenEventIds).slice(0, this.seenEventIds.size - 5000)
-              toDelete.forEach(id => this.seenEventIds.delete(id))
-            }
+            this.trimSeenEventIds()
             if (callbacks.onEvent) callbacks.onEvent(event as NostrEvent)
           }
         } catch (err) {
@@ -233,7 +234,7 @@ export class RelayService {
     const pool = this.getPool()
     const accepted: string[] = []
     const errors: { relay: string; reason: string }[] = []
-    const seenRelays = new Set<string>()
+    const resolvedRelays = new Set<string>()
 
     for (const event of events) {
       try {
@@ -241,16 +242,19 @@ export class RelayService {
         const settled = await Promise.allSettled(promises as Promise<any>[])
         settled.forEach((r, i) => {
           const relay = relays[i]
-          if (!relay) return
-          if (r.status === 'fulfilled' && !seenRelays.has(relay)) {
-            seenRelays.add(relay)
+          if (!relay || resolvedRelays.has(relay)) return
+          if (r.status === 'fulfilled') {
+            resolvedRelays.add(relay)
             accepted.push(relay)
-          } else if (r.status === 'rejected') {
+          } else {
+            resolvedRelays.add(relay)
             errors.push({ relay, reason: r.reason?.message || String(r.reason) })
           }
         })
       } catch (err) {
         for (const relay of relays) {
+          if (resolvedRelays.has(relay)) continue
+          resolvedRelays.add(relay)
           errors.push({ relay, reason: String(err) })
         }
       }

@@ -153,10 +153,12 @@ export class ChatStore {
     try {
       await relayService.fetchHistoricalGiftWraps(DISCOVERY_RELAYS, keys.pubKeyHex, {
         onEvent: (event) => {
+          if (event.tags?.some((t: string[]) => t[0] === 'self')) return
           try {
             const { rumor } = unwrapGiftWrap(event, keys.privKeyHex)
             this.receiveMessage(rumor)
-          } catch {
+          } catch (err) {
+            console.error('[store] unwrapGiftWrap failed:', err)
           }
         },
       })
@@ -175,10 +177,12 @@ export class ChatStore {
       this.keys.pubKeyHex,
       {
         onEvent: onEvent || ((event: NostrEvent) => {
+          if (event.tags?.some((t: string[]) => t[0] === 'self')) return
           try {
             const { rumor } = unwrapGiftWrap(event, this.keys!.privKeyHex)
             this.receiveMessage(rumor)
-          } catch {
+          } catch (err) {
+            console.error('[store] unwrapGiftWrap failed:', err)
           }
         }),
       }

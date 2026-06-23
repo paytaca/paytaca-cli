@@ -255,11 +255,6 @@ export function registerChatCommands(program: Command): void {
         process.exit(1)
       }
 
-      if (!npub.startsWith('npub1')) {
-        console.log(chalk.red('\nInvalid npub. Must start with npub1.\n'))
-        process.exit(1)
-      }
-
       const store = new ChatStore()
       await store.initialize(data.mnemonic)
 
@@ -636,9 +631,6 @@ export function registerChatCommands(program: Command): void {
       })
 
       store.subscribe()
-      if (!isJson) {
-        console.log(chalk.dim('   Connected.\n'))
-      }
 
       const shutdown = () => {
         store.unsubscribe()
