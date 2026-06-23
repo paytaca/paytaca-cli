@@ -64,7 +64,7 @@ export function createUnsignedKind14(opts: {
   return event as UnsignedKind14
 }
 
-function tagSelfGiftWraps(
+export function tagSelfGiftWraps(
   giftWraps: NostrEvent[],
   recipientPubKeys: string[],
   senderPubKey: string
