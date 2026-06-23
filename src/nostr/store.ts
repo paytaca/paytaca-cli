@@ -21,6 +21,8 @@ const DISCOVERY_RELAYS = ['wss://relay.paytaca.com']
 const DATA_DIR = path.join(os.homedir(), '.paytaca')
 const STATE_FILE = path.join(DATA_DIR, 'chat-state.json')
 
+const MAX_MESSAGES_PER_ROOM = 1000
+
 export interface Contact {
   name: string
   npub: string
@@ -305,7 +307,12 @@ export class ChatStore {
       }
       const existing = this.pendingEdits.get(editOf) || []
       existing.push(rumor)
+      if (existing.length > 10) existing.shift()
       this.pendingEdits.set(editOf, existing)
+      if (this.pendingEdits.size > 100) {
+        const first = this.pendingEdits.keys().next().value
+        if (first) this.pendingEdits.delete(first)
+      }
       return
     }
 
@@ -329,9 +336,21 @@ export class ChatStore {
       let i = arr.length
       while (i > 0 && arr[i - 1].created_at > message.created_at) i--
       arr.splice(i, 0, message)
+      if (arr.length > MAX_MESSAGES_PER_ROOM) {
+        arr.splice(0, arr.length - MAX_MESSAGES_PER_ROOM)
+      }
     }
 
     room.updatedAt = Math.max(room.updatedAt, message.created_at)
+
+    const readIds = this.readMessageIds[roomId]
+    if (readIds) {
+      const keys = Object.keys(readIds)
+      if (keys.length > MAX_MESSAGES_PER_ROOM) {
+        const toRemove = keys.slice(0, keys.length - MAX_MESSAGES_PER_ROOM)
+        for (const k of toRemove) delete readIds[k]
+      }
+    }
 
     const pending = this.pendingEdits.get(message.id)
     if (pending) {
