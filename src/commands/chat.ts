@@ -5,7 +5,7 @@ import { hexToBytes } from 'nostr-tools/utils'
 import { decode as nip19Decode } from 'nostr-tools/nip19'
 import { loadMnemonic } from '../wallet/index.js'
 import { ChatStore } from '../nostr/store.js'
-import * as relayService from '../nostr/relay.js'
+import { relayService } from '../nostr/relay.js'
 
 function formatTimestamp(unix: number): string {
   const d = new Date(unix * 1000)
@@ -223,23 +223,21 @@ export function registerChatCommands(program: Command): void {
       }
 
       const { giftWraps, message } = await store.sendMessage(room.id, text)
-      const publishResults = await store.publishGiftWraps(giftWraps)
-      const failures = publishResults.filter(r => !r.ok)
+      const { accepted, errors } = await store.publishGiftWraps(giftWraps)
 
       store.saveState()
       store.cleanup()
 
-      const acceptedCount = publishResults.filter(r => r.ok).length
-      if (failures.length > 0 && acceptedCount === 0) {
+      if (accepted.length === 0 && errors.length > 0) {
         console.log(chalk.red('\n   Publish failed: no relay accepted the event.\n'))
-        for (const f of failures) {
-          console.log(chalk.dim(`   ${f.relay}: ${f.reason || 'unknown error'}`))
+        for (const e of errors) {
+          console.log(chalk.dim(`   ${e.relay}: ${e.reason || 'unknown error'}`))
         }
         console.log()
         process.exit(1)
       }
 
-      console.log(chalk.green(`\n   Message sent! (accepted by ${acceptedCount}/${publishResults.length} relays)\n`))
+      console.log(chalk.green(`\n   Message sent! (accepted by ${accepted.length}/${accepted.length + errors.length} relays)\n`))
       process.exit(0)
     })
 
@@ -401,7 +399,7 @@ export function registerChatCommands(program: Command): void {
         content: JSON.stringify({ name: 'Paytaca Display Name', data: { displayName: name.trim() } }),
       }, privKeyBytes)
 
-      const { accepted, errors } = await relayService.publishEvent(store.relays, event as any)
+      const { accepted, errors } = await relayService.publish(store.relays, event as any)
       if (accepted.length === 0) {
         const errorDetails = errors.map(e => `${e.relay}: ${e.reason}`).join('; ')
         store.cleanup()
@@ -445,7 +443,7 @@ export function registerChatCommands(program: Command): void {
         content: JSON.stringify({ name: 'Paytaca Display Name', data: {} }),
       }, privKeyBytes)
 
-      const { accepted, errors } = await relayService.publishEvent(store.relays, event as any)
+      const { accepted, errors } = await relayService.publish(store.relays, event as any)
       if (accepted.length === 0) {
         const errorDetails = errors.map(e => `${e.relay}: ${e.reason}`).join('; ')
         store.cleanup()
@@ -496,7 +494,7 @@ export function registerChatCommands(program: Command): void {
         content: JSON.stringify({ name: 'Paytaca BCH Address', data: { address: trimmed } }),
       }, privKeyBytes)
 
-      const { accepted, errors } = await relayService.publishEvent(store.relays, event as any)
+      const { accepted, errors } = await relayService.publish(store.relays, event as any)
       if (accepted.length === 0) {
         const errorDetails = errors.map(e => `${e.relay}: ${e.reason}`).join('; ')
         store.cleanup()
@@ -540,7 +538,7 @@ export function registerChatCommands(program: Command): void {
         content: JSON.stringify({ name: 'Paytaca BCH Address', data: {} }),
       }, privKeyBytes)
 
-      const { accepted, errors } = await relayService.publishEvent(store.relays, event as any)
+      const { accepted, errors } = await relayService.publish(store.relays, event as any)
       if (accepted.length === 0) {
         const errorDetails = errors.map(e => `${e.relay}: ${e.reason}`).join('; ')
         store.cleanup()

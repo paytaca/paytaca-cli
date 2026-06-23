@@ -14,7 +14,7 @@ import {
   type Rumor,
   type UnsignedKind14,
 } from './chat.js'
-import * as relayService from './relay.js'
+import { relayService } from './relay.js'
 
 const DEFAULT_RELAYS = ['wss://relay.paytaca.com']
 const DISCOVERY_RELAYS = ['wss://relay.paytaca.com']
@@ -72,6 +72,7 @@ export class ChatStore {
   bchAddressCache: Record<string, string> = {}
 
   private onNewMessageCallback: ((room: Room, message: Message) => void) | null = null
+  private pendingEdits = new Map<string, Rumor[]>()
 
   constructor() {
     this.loadPersistedData()
@@ -137,7 +138,7 @@ export class ChatStore {
     relayService.setAuthKey(keys.privKeyHex)
 
     try {
-      await relayService.publishEvent(this.relays, createKind10050(this.relays, keys.privKeyHex))
+      await relayService.publish(this.relays, createKind10050(this.relays, keys.privKeyHex))
     } catch (err) {
       console.error('[store] publish kind10050 failed:', err)
     }
@@ -230,7 +231,7 @@ export class ChatStore {
     return { giftWraps, message }
   }
 
-  async publishGiftWraps(giftWraps: NostrEvent[]): Promise<{ relay: string; ok: boolean; reason?: string }[]> {
+  async publishGiftWraps(giftWraps: NostrEvent[]): Promise<{ accepted: string[]; errors: { relay: string; reason: string }[] }> {
     let targetRelays = new Set(this.relays)
 
     const recipients = giftWraps
@@ -299,6 +300,10 @@ export class ChatStore {
         }
         return
       }
+      const existing = this.pendingEdits.get(editOf) || []
+      existing.push(rumor)
+      this.pendingEdits.set(editOf, existing)
+      return
     }
 
     const message: Message = {
@@ -324,6 +329,18 @@ export class ChatStore {
     }
 
     room.updatedAt = Math.max(room.updatedAt, message.created_at)
+
+    const pending = this.pendingEdits.get(message.id)
+    if (pending) {
+      this.pendingEdits.delete(message.id)
+      for (const editRumor of pending) {
+        const editOf = editRumor.tags.find(t => t[0] === 'edit')?.[1]
+        if (editOf === message.id) {
+          message.content = editRumor.content
+          message.editOf = editRumor.id
+        }
+      }
+    }
 
     if (this.onNewMessageCallback) {
       this.onNewMessageCallback(room, message)
