@@ -154,8 +154,7 @@ export class ChatStore {
           try {
             const { rumor } = unwrapGiftWrap(event, keys.privKeyHex)
             this.receiveMessage(rumor)
-          } catch (err) {
-            console.error('[store] unwrap historical event failed:', err)
+          } catch {
           }
         },
       })
@@ -177,8 +176,7 @@ export class ChatStore {
           try {
             const { rumor } = unwrapGiftWrap(event, this.keys!.privKeyHex)
             this.receiveMessage(rumor)
-          } catch (err) {
-            console.error('[store] subscribe unwrap failed:', err)
+          } catch {
           }
         }),
       }
