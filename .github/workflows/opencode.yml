@@ -37,9 +37,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Get latest opencode version
+        id: version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "version=$(gh release view --repo anomalyco/opencode --json tagName --jq .tagName | sed 's/^v//')" >> "$GITHUB_OUTPUT"
+
       - name: Run opencode
         uses: anomalyco/opencode/github@latest
         env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
           model: opencode/kimi-k2.5
