@@ -264,7 +264,7 @@ export class RelayService {
   async fetchKind10050(relays: string[], pubKey: string): Promise<NostrEvent | null> {
     const pool = this.getPool()
     try {
-      const events = await pool.querySync(relays, { kinds: [10050], authors: [pubKey] })
+      const events = await pool.querySync(relays, { kinds: [10050], authors: [pubKey] }, { maxWait: 10000 })
       return (events?.[0] as NostrEvent) || null
     } catch (err) {
       console.error('[relay] fetchKind10050 failed:', err)
