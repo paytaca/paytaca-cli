@@ -557,7 +557,7 @@ export function registerChatCommands(program: Command): void {
   chat
     .command('listen')
     .description('Subscribe to new messages (long-running)')
-    .option('--contact <npub|name>', 'Filter messages by contact npub or name')
+    .option('--contact <npub|name>', 'Filter to conversations involving this contact')
     .option('--json', 'Output new messages as JSON lines')
     .action(async (opts) => {
       const data = loadMnemonic()
@@ -569,7 +569,7 @@ export function registerChatCommands(program: Command): void {
       const store = new ChatStore()
       await store.initialize(data.mnemonic)
 
-      let filterPubKey: string | null = null
+      let filterPubKey = store.keys?.pubKeyHex || null
       if (opts.contact) {
         const contact = store.contacts.find(c =>
           c.npub === opts.contact || c.name === opts.contact || c.pubKeyHex === opts.contact
@@ -591,11 +591,14 @@ export function registerChatCommands(program: Command): void {
       const isJson = Boolean(opts.json)
 
       if (!isJson) {
-        console.log(chalk.dim('\n   Listening for new messages... (Ctrl+C to stop)\n'))
+        const target = filterPubKey === store.keys?.pubKeyHex
+          ? 'your conversations'
+          : `conversations with ${store.getContactName(filterPubKey!)}`
+        console.log(chalk.dim(`\n   Listening for new messages in ${target}... (Ctrl+C to stop)\n`))
       }
 
       store.setOnNewMessage((room, message) => {
-        if (filterPubKey && message.sender !== filterPubKey) return
+        if (filterPubKey && !room.members.includes(filterPubKey)) return
 
         if (isJson) {
           console.log(JSON.stringify({
