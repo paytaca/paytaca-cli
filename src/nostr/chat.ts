@@ -130,30 +130,4 @@ export function createKind10050(relays: string[], privKey: string): NostrEvent {
   return finalizeEvent(event, privKeyBytes) as unknown as NostrEvent
 }
 
-export async function createReactionGiftWraps(opts: {
-  messageId: string
-  senderPubKey: string
-  recipientPubKeys: string[]
-  emoji: string
-  reactorPubKey: string
-  reactorPrivKey: string
-  relayHint?: string
-}): Promise<NostrEvent[]> {
-  const relayHint = opts.relayHint || ''
-  const kind7 = {
-    kind: 7,
-    pubkey: opts.reactorPubKey,
-    created_at: Math.floor(Date.now() / 1000),
-    content: opts.emoji,
-    tags: [
-      ['e', opts.messageId, relayHint, opts.senderPubKey],
-      ['p', opts.senderPubKey, relayHint],
-      ['k', '14'],
-    ],
-  }
-  ;(kind7 as any).id = getEventHash(kind7)
 
-  const reactorPrivKeyBytes = hexToBytes(opts.reactorPrivKey)
-  const giftWraps = nip59.wrapManyEvents(kind7 as any, reactorPrivKeyBytes, opts.recipientPubKeys) as unknown as NostrEvent[]
-  return tagSelfGiftWraps(giftWraps, opts.recipientPubKeys, opts.reactorPubKey)
-}

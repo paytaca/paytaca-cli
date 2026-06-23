@@ -292,6 +292,11 @@ export class ChatStore {
       const target = msgs.find(m => m.id === editOf)
       if (target) {
         target.content = rumor.content
+        target.editOf = rumor.id
+        room.updatedAt = Math.max(room.updatedAt, rumor.created_at)
+        if (this.onNewMessageCallback) {
+          this.onNewMessageCallback(room, target)
+        }
         return
       }
     }
@@ -337,7 +342,7 @@ export class ChatStore {
   }
 
   getRoom(roomId: string): Room | undefined {
-    return this.rooms.find(r => r.id === roomId)
+    return this.rooms.find(r => r.id === roomId || r.id.startsWith(roomId))
   }
 
   addContact(npub: string, name?: string): Contact {
@@ -381,7 +386,7 @@ export class ChatStore {
   async resolveDisplayName(pubKeyHex: string): Promise<string | null> {
     if (this.displayNameCache[pubKeyHex]) return this.displayNameCache[pubKeyHex]
     const contact = this.contacts.find(c => c.pubKeyHex === pubKeyHex)
-    if (contact?.name && contact.name.length > 12) {
+    if (contact?.name && !contact.name.includes('...')) {
       this.displayNameCache[pubKeyHex] = contact.name
       return contact.name
     }
@@ -411,27 +416,4 @@ export class ChatStore {
     return other || null
   }
 
-  findOrCreatePrivateRoom(contactPubKeyHex: string): Room {
-    if (!this.keys) throw new Error('Not initialized')
-
-    const roomId = computeRoomId([this.keys.pubKeyHex, contactPubKeyHex])
-    let room = this.rooms.find(r => r.id === roomId)
-    if (!room) {
-      const contact = this.contacts.find(c => c.pubKeyHex === contactPubKeyHex)
-      const cachedName = this.displayNameCache[contactPubKeyHex]
-      const roomName = contact?.name || cachedName || contactPubKeyHex.slice(0, 12) + '...'
-      room = {
-        id: roomId,
-        type: 'private',
-        name: roomName,
-        members: [this.keys.pubKeyHex, contactPubKeyHex],
-        subject: null,
-        createdAt: Math.floor(Date.now() / 1000),
-        updatedAt: Math.floor(Date.now() / 1000),
-      }
-      this.rooms.push(room)
-      this.saveState()
-    }
-    return room
-  }
 }

@@ -18,10 +18,6 @@ function formatTimestamp(unix: number): string {
     ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-function shortPubkey(pubkey: string): string {
-  return pubkey.slice(0, 8) + '...'
-}
-
 export function registerChatCommands(program: Command): void {
   const chat = program
     .command('chat')
@@ -63,6 +59,11 @@ export function registerChatCommands(program: Command): void {
       if (opts.json) {
         console.log(JSON.stringify(rooms.map(r => {
           const otherPk = store.getOtherMember(r)
+          const msgs = store.getMessages(r.id)
+          const readIds = store.readMessageIds[r.id] || {}
+          const unreadCount = msgs.filter(m => {
+            return m.sender !== store.keys?.pubKeyHex && !readIds[m.id]
+          }).length
           return {
             id: r.id,
             name: otherPk ? store.getContactName(otherPk) : r.name,
@@ -73,7 +74,8 @@ export function registerChatCommands(program: Command): void {
             subject: r.subject,
             createdAt: r.createdAt,
             updatedAt: r.updatedAt,
-            messageCount: store.getMessages(r.id).length,
+            messageCount: msgs.length,
+            unreadCount,
           }
         })))
         store.cleanup()
@@ -130,7 +132,7 @@ export function registerChatCommands(program: Command): void {
       }
 
       const allMsgs = store.getMessages(roomId)
-      const tail = parseInt(opts.tail, 10) || 20
+      const tail = Number.isNaN(parseInt(opts.tail, 10)) ? 20 : parseInt(opts.tail, 10)
       const msgs = allMsgs.slice(-tail)
 
       // Resolve display names for all unique message senders
@@ -154,6 +156,7 @@ export function registerChatCommands(program: Command): void {
             senderName: store.getContactName(m.sender),
             created_at: m.created_at,
             replyTo: m.replyTo,
+            editOf: m.editOf,
           })),
         }))
         store.cleanup()
@@ -190,7 +193,7 @@ export function registerChatCommands(program: Command): void {
       }
 
       store.readMessageIds[room.id] = store.readMessageIds[room.id] || {}
-      for (const msg of allMsgs) {
+      for (const msg of msgs) {
         store.readMessageIds[room.id][msg.id] = true
       }
       store.saveState()
@@ -463,6 +466,12 @@ export function registerChatCommands(program: Command): void {
     .description('Publish your BCH address to relays (NIP-78)')
     .argument('<address>', 'BCH address (cashaddr format)')
     .action(async (address: string) => {
+      const trimmed = address.trim()
+      if (!/^(bitcoincash|bchtest|bchreg):[qpzry9x8gf2tvdw0s3jn54khce6mua7l]+$/i.test(trimmed)) {
+        console.log(chalk.red('\nInvalid BCH address. Must be cashaddr format (e.g. bitcoincash:...).\n'))
+        process.exit(1)
+      }
+
       const data = loadMnemonic()
       if (!data) {
         console.log(chalk.red('\nNo wallet found.\n'))
@@ -484,7 +493,7 @@ export function registerChatCommands(program: Command): void {
           ['d', 'paytaca:bch-address'],
           ['p', store.keys.pubKeyHex],
         ],
-        content: JSON.stringify({ name: 'Paytaca BCH Address', data: { address: address.trim() } }),
+        content: JSON.stringify({ name: 'Paytaca BCH Address', data: { address: trimmed } }),
       }, privKeyBytes)
 
       const { accepted, errors } = await relayService.publishEvent(store.relays, event as any)
@@ -495,11 +504,11 @@ export function registerChatCommands(program: Command): void {
         process.exit(1)
       }
 
-      store.bchAddressCache[store.keys.pubKeyHex] = address.trim()
+      store.bchAddressCache[store.keys.pubKeyHex] = trimmed
       store.saveState()
       store.cleanup()
 
-      console.log(chalk.green(`\n   BCH address published: ${address.trim()}\n`))
+      console.log(chalk.green(`\n   BCH address published: ${trimmed}\n`))
       process.exit(0)
     })
 
