@@ -6,6 +6,7 @@
  * and CashTokens support with the same core logic as the Paytaca mobile app.
  */
 
+import { readFileSync } from 'node:fs'
 import { Command } from 'commander'
 import { registerWalletCommands } from './commands/wallet.js'
 import { registerAddressCommands } from './commands/address.js'
@@ -18,12 +19,16 @@ import { registerPayCommand } from './commands/pay.js'
 import { registerCheckCommand } from './commands/check.js'
 import { registerChatCommands } from './commands/chat.js'
 
+const packageJson = JSON.parse(
+  readFileSync(new URL('../package.json', import.meta.url), 'utf-8')
+)
+
 const program = new Command()
 
 program
   .name('paytaca')
   .description('Paytaca — Bitcoin Cash wallet CLI')
-  .version('0.2.0')
+  .version(packageJson.version)
 
 registerWalletCommands(program)
 registerAddressCommands(program)
