@@ -395,6 +395,52 @@ export function registerChatCommands(program: Command): void {
     })
 
   chat
+    .command('profile')
+    .description("Show your profile (display name, BCH address)")
+    .option('--json', 'Output as JSON')
+    .action(async (opts) => {
+      const data = loadMnemonic()
+      if (!data) {
+        console.log(chalk.red('\nNo wallet found.\n'))
+        process.exit(1)
+      }
+
+      const store = new ChatStore()
+      await store.initialize(data.mnemonic)
+
+      if (!store.keys) {
+        console.log(chalk.red('\nFailed to derive Nostr keys.\n'))
+        process.exit(1)
+      }
+
+      const [displayName, bchAddress] = await Promise.all([
+        store.resolveDisplayName(store.keys.pubKeyHex),
+        store.resolveBchAddress(store.keys.pubKeyHex),
+      ])
+      store.saveState()
+
+      if (opts.json) {
+        console.log(JSON.stringify({
+          npub: store.keys.npub,
+          pubKeyHex: store.keys.pubKeyHex,
+          displayName: displayName || null,
+          bchAddress: bchAddress || null,
+        }))
+        store.cleanup()
+        process.exit(0)
+      }
+
+      console.log()
+      console.log(`  ${chalk.bold('displayName:')}  ${displayName || chalk.dim('(not set)')}`)
+      console.log(`  ${chalk.bold('bchAddress:')}   ${bchAddress || chalk.dim('(not set)')}`)
+      console.log(`  ${chalk.bold('npub:')}         ${store.keys.npub}`)
+      console.log(`  ${chalk.bold('hex:')}          ${store.keys.pubKeyHex}`)
+      console.log()
+      store.cleanup()
+      process.exit(0)
+    })
+
+  chat
     .command('set-display-name')
     .description('Publish your display name to relays (NIP-78)')
     .argument('<name>', 'Display name to publish')
