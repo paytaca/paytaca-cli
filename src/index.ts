@@ -18,6 +18,7 @@ import { registerTokenCommands } from './commands/token.js'
 import { registerPayCommand } from './commands/pay.js'
 import { registerCheckCommand } from './commands/check.js'
 import { registerChatCommands } from './commands/chat.js'
+import { registerSwapCommand } from './commands/swap.js'
 
 const packageJson = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf-8')
@@ -40,5 +41,6 @@ registerTokenCommands(program)
 registerPayCommand(program)
 registerCheckCommand(program)
 registerChatCommands(program)
+registerSwapCommand(program)
 
 program.parse()

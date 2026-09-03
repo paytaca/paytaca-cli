@@ -16,6 +16,12 @@ import { Command } from 'commander'
 import chalk from 'chalk'
 import { Address } from 'watchtower-cash-js'
 import { loadWallet, loadMnemonic } from '../wallet/index.js'
+import {
+  fetchAssetPrices,
+  getUsdPerToken,
+  tokenAmountToUsd,
+  formatUsd,
+} from '../utils/prices.js'
 
 /** Truncate a hex string for display */
 function shortHex(hex: string, len: number = 8): string {
@@ -69,20 +75,58 @@ export function registerTokenCommands(program: Command): void {
           return
         }
 
+        // Fetch USD prices for all held tokens (batched by the util)
+        let prices = new Map<string, number>()
+        try {
+          const priceData = await fetchAssetPrices(
+            tokens.map((t) => `ct/${t.category}`),
+            ['USD'],
+            isChipnet
+          )
+          prices = new Map()
+          for (const p of priceData) {
+            if (String(p.currency || '').toLowerCase() !== 'usd') continue
+            const catMatch = String(p.asset || '').match(/^ct\/([a-fA-F0-9]+)$/)
+            if (!catMatch) continue
+            const raw = parseFloat(p.price_value)
+            if (!isFinite(raw) || raw === 0) continue
+            prices.set(catMatch[1], 1 / raw)
+          }
+        } catch {
+          // Pricing unavailable — proceed without USD values
+        }
+
+        let totalUsd = 0
+        let pricedCount = 0
+
         for (const t of tokens) {
           const amount = formatTokenAmount(t.balance, t.decimals)
           const symbol = t.symbol ? ` ${t.symbol}` : ''
           const name = t.name !== 'Unknown Token' ? t.name : ''
+          const usdPerToken = prices.get(t.category)
 
           console.log(`   ${chalk.bold(amount + symbol)}`)
           if (name) {
             console.log(chalk.dim(`   ${name}`))
           }
           console.log(chalk.dim(`   ${t.category}`))
+          if (usdPerToken !== undefined) {
+            const usdValue = tokenAmountToUsd(t.balance, t.decimals, usdPerToken)
+            totalUsd += usdValue
+            pricedCount += 1
+            console.log(chalk.green(`   ≈ ${formatUsd(usdValue)}`))
+          }
           console.log()
         }
 
-        console.log(chalk.dim(`   ${tokens.length} token${tokens.length !== 1 ? 's' : ''} total`))
+        if (pricedCount > 0) {
+          console.log(chalk.dim(`   ${tokens.length} token${tokens.length !== 1 ? 's' : ''} total`))
+          console.log(chalk.dim(`   ${pricedCount} priced`))
+          console.log(chalk.bold(`   Total: ${formatUsd(totalUsd)}`))
+          console.log()
+        } else {
+          console.log(chalk.dim(`   ${tokens.length} token${tokens.length !== 1 ? 's' : ''} total`))
+        }
       } catch (err: any) {
         const status = err?.response?.status
         if (status === 404) {
@@ -146,15 +190,36 @@ export function registerTokenCommands(program: Command): void {
         console.log(`   Decimals:  ${tokenInfo.decimals}`)
         console.log(`   Category:  ${tokenInfo.category}`)
 
+        // Fetch token USD price (watchtower.cash asset-prices)
+        let usdPerToken: number | undefined
+        try {
+          const p = await getUsdPerToken(category, isChipnet)
+          if (p !== null) usdPerToken = p
+        } catch {
+          // Pricing unavailable — omit USD lines
+        }
+
         // Fetch wallet-specific balance
         try {
           const balResult = await bchWallet.getTokenBalance(category)
           const amount = formatTokenAmount(balResult.balance, tokenInfo.decimals)
           const symbol = tokenInfo.symbol ? ` ${tokenInfo.symbol}` : ''
           console.log(`   Balance:   ${amount}${symbol}`)
+          if (usdPerToken !== undefined) {
+            const usdValue = tokenAmountToUsd(balResult.balance, tokenInfo.decimals, usdPerToken)
+            console.log(chalk.green(`   Value:     ≈ ${formatUsd(usdValue)}`))
+          }
         } catch {
           // Balance may not be available if wallet doesn't hold this token
           console.log(chalk.dim('   Balance:   0'))
+        }
+
+        if (usdPerToken !== undefined) {
+          console.log(
+            chalk.dim(
+              `   Price:     ${formatUsd(usdPerToken)} per ${tokenInfo.symbol || 'token'}`
+            )
+          )
         }
 
         // Show NFTs for this category
@@ -177,6 +242,109 @@ export function registerTokenCommands(program: Command): void {
         console.log(chalk.red(`   Error: ${err.message || err}`))
         process.exit(1)
       }
+
+      console.log()
+    })
+
+  // ── token price ────────────────────────────────────────────────────
+
+  token
+    .command('price')
+    .description('Show USD price of a CashToken and value of a given amount')
+    .argument('<category>', 'Token category ID (64-character hex)')
+    .argument('[amount]', 'Token amount in display units (defaults to wallet balance)')
+    .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
+    .action(async (category: string, amountStr: string | undefined, opts) => {
+      const isChipnet = Boolean(opts.chipnet)
+      const network = isChipnet ? 'chipnet' : 'mainnet'
+
+      // Validate category format
+      if (!/^[a-fA-F0-9]{64}$/.test(category)) {
+        console.log(chalk.red('\nError: Category must be a 64-character hex string.\n'))
+        process.exit(1)
+      }
+
+      // Validate amount if provided
+      let requestedAmount: number | null = null
+      if (amountStr !== undefined) {
+        requestedAmount = Number(amountStr)
+        if (!isFinite(requestedAmount) || requestedAmount < 0) {
+          console.log(chalk.red('\nError: Amount must be a non-negative number.\n'))
+          process.exit(1)
+        }
+      }
+
+      const data = loadMnemonic()
+      if (!data) {
+        console.log(
+          chalk.red('\nNo wallet found. Run `paytaca wallet create` or `paytaca wallet import` first.\n')
+        )
+        process.exit(1)
+      }
+
+      const w = loadWallet()!
+      const bchWallet = w.forNetwork(isChipnet)
+
+      console.log(chalk.bold(`\n   Token Price (${network})\n`))
+
+      // Resolve token metadata (symbol/decimals) — optional, non-fatal
+      let symbol = ''
+      let decimals = 0
+      let name = ''
+      try {
+        const info = await bchWallet.getTokenInfo(category)
+        if (info) {
+          symbol = info.symbol || ''
+          name = info.name !== 'Unknown Token' ? info.name : ''
+          decimals = info.decimals || 0
+        }
+      } catch {
+        // Token metadata unavailable — proceed without it
+      }
+
+      // Resolve the display amount to price
+      let displayAmount: number
+      if (requestedAmount !== null) {
+        displayAmount = requestedAmount
+      } else {
+        try {
+          const balResult = await bchWallet.getTokenBalance(category)
+          displayAmount = balResult.balance / Math.pow(10, decimals)
+        } catch {
+          console.log(chalk.yellow('   Wallet balance unavailable; specify an <amount> to price.\n'))
+          process.exit(1)
+        }
+      }
+
+      // Fetch USD price
+      let usdPerToken: number | null = null
+      try {
+        usdPerToken = await getUsdPerToken(category, isChipnet)
+      } catch {
+        // leave null
+      }
+
+      const label = symbol || name || shortHex(category)
+      console.log(`   Token:    ${label}`)
+      if (name) console.log(chalk.dim(`   Name:     ${name}`))
+      console.log(chalk.dim(`   Category: ${category}`))
+
+      if (usdPerToken === null) {
+        console.log(chalk.yellow('\n   No market price available for this token.\n'))
+        return
+      }
+
+      const usdValue = displayAmount * usdPerToken
+      console.log(
+        chalk.green(
+          `   Price:    ${formatUsd(usdPerToken)} per ${symbol || 'token'}`
+        )
+      )
+      console.log(
+        chalk.bold(
+          `   Value:    ${formatUsd(usdValue)} for ${displayAmount} ${symbol || 'token(s)'}`
+        )
+      )
 
       console.log()
     })
