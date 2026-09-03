@@ -62,6 +62,8 @@ export function attemptTrade(opts: AttemptTradeOpts): TradeResult {
   const { pools, isBuyingToken, supply, demand } = opts
   const txFeePerByte = opts.txFeePerByte || 1n
 
+  if (pools.length === 0) throw new Error('No pools provided')
+
   let supplyTokenId = pools[0]!.output.token.token_id
   let demandTokenId = NATIVE_BCH_TOKEN_ID
   if (isBuyingToken) {
@@ -104,6 +106,10 @@ export function createInputAndOutput(opts: {
 }): { inputCoins: SpendableCoin[]; payouts: PayoutRule[] } {
   const { tradeResult, spendableCoins, platformFee } = opts
   const tokenOutputSats = opts.tokenOutputSats ?? 1000n
+
+  if (spendableCoins.length === 0) {
+    throw new Error('No UTXOs available to fund the trade')
+  }
 
   const privateKey = (spendableCoins[0] as SpendableCoinP2PKH<Output>).key
   const lockingBytecode = privateKeyToP2pkhLockingBytecode({

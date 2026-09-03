@@ -61,8 +61,14 @@ export function registerSwapCommand(program: Command): void {
     .option('--yes', 'Skip the confirmation prompt')
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .action(async (tokenId: string, amountStr: string, opts) => {
-      const isChipnet = Boolean(opts.chipnet)
-      const network = isChipnet ? 'chipnet' : 'mainnet'
+      if (opts.chipnet) {
+        console.log(
+          chalk.red('\nError: Cauldron swaps are not yet supported on chipnet.\n')
+        )
+        process.exit(1)
+      }
+      const isChipnet = false
+      const network = 'mainnet'
       const direction: SwapDirection =
         opts.direction === 'buy' ? 'buy' : 'sell'
 

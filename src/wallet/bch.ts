@@ -291,7 +291,7 @@ export class BchWallet {
     const params: Record<string, any> = {}
     let url = `utxo/wallet/${this.walletHash}/`
     if (opts?.category) {
-      url += opts.category + '/'
+      url += encodeURIComponent(opts.category) + '/'
       params.is_cashtoken = true
       params.is_cashtoken_nft = Boolean(opts.nft)
     }
