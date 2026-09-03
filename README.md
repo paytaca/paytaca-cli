@@ -92,8 +92,9 @@ paytaca address list --token       # List token-aware z-prefix addresses
 ### CashTokens
 
 ```bash
-paytaca token list                                   # List fungible tokens with balances
-paytaca token info <category>                        # Token metadata, balance, and NFTs
+paytaca token list                                   # List fungible tokens with balances and USD values
+paytaca token info <category>                        # Token metadata, balance, USD value, and NFTs
+paytaca token price <category> [amount]              # USD price of a token and value of an amount (default: balance)
 paytaca token send <address> <amount> --token <cat>  # Send fungible tokens
 paytaca token send-nft <address> --token <cat> --commitment <hex>  # Send an NFT
 ```
@@ -180,7 +181,7 @@ src/
     send.ts          BCH sending
     history.ts       transaction history (BCH and CashTokens)
     address.ts       HD address derivation (standard and z-prefix)
-    token.ts         CashToken commands (list, info, send, send-nft)
+    token.ts         CashToken commands (list, info, price, send, send-nft)
     pay.ts           x402 BCH payment handler for HTTP requests
     check.ts         Check if URL requires x402 payment
   wallet/
@@ -193,6 +194,7 @@ src/
   utils/
     crypto.ts        pubkey -> CashAddress pipeline
     network.ts       Watchtower URLs, derivation paths
+    prices.ts        Watchtower asset-prices client (USD per token/BCH)
     x402.ts          x402 header parsing, payment requirement selection
   types/
     x402.ts          x402 payment types (PaymentRequired, PaymentPayload, etc.)
