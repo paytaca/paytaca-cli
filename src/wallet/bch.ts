@@ -275,6 +275,36 @@ export class BchWallet {
   }
 
   /**
+   * Get raw UTXOs from Watchtower.
+   * Adapted from paytaca-app BchWallet.getUtxos().
+   *
+   * With no category: returns all UTXOs (BCH + CashTokens).
+   * With a category: returns only that token's UTXOs (is_cashtoken=true).
+   *
+   * @param opts.category - Token category ID (64-char hex) to filter by
+   * @param opts.nft - Only return NFT UTXOs for the category
+   */
+  async getUtxos(opts?: {
+    category?: string
+    nft?: boolean
+  }): Promise<any[]> {
+    const params: Record<string, any> = {}
+    let url = `utxo/wallet/${this.walletHash}/`
+    if (opts?.category) {
+      url += opts.category + '/'
+      params.is_cashtoken = true
+      params.is_cashtoken_nft = Boolean(opts.nft)
+    }
+
+    const response = await (this.watchtower as any).BCH._api.get(url, { params })
+    if (!Array.isArray(response.data?.utxos)) {
+      return Promise.reject({ response })
+    }
+
+    return response.data.utxos
+  }
+
+  /**
    * Trigger a UTXO scan on the Watchtower backend.
    */
   async scanUtxos(opts?: { background?: boolean }) {
