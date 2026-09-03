@@ -148,6 +148,10 @@ export function createInputAndOutput(opts: {
       satoshisToSupply -= spendableCoin.output.amount
     }
 
+    if (remainingTokens > 0n) {
+      throw new Error('Insufficient tokens to fund the trade')
+    }
+
     // Excess tokens supplied → a token change output (counted in size calc)
     if (remainingTokens < 0n) {
       const changeTokenOutput = {

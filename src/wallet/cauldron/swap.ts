@@ -213,7 +213,11 @@ export async function buildSignedTradeTx(opts: {
 }) {
   const { bchWallet, mnemonic, derivationPath, quote } = opts
 
-  const hdWallet = new LibauthHDWallet(mnemonic, derivationPath)
+  const hdWallet = new LibauthHDWallet(
+    mnemonic,
+    derivationPath,
+    bchWallet.isChipnet ? 'chipnet' : 'mainnet'
+  )
   const spendableCoins = await collectSpendableCoins({
     bchWallet,
     hdWallet,
