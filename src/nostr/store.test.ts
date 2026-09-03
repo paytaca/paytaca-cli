@@ -162,12 +162,19 @@ describe('ChatStore', () => {
     })
 
     it('should handle errors gracefully', async () => {
-      mockPublish.mockRejectedValue(new Error('publish fail'))
-      mockFetchHistoricalGiftWraps.mockRejectedValue(new Error('fetch fail'))
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        mockPublish.mockRejectedValue(new Error('publish fail'))
+        mockFetchHistoricalGiftWraps.mockRejectedValue(new Error('fetch fail'))
 
-      await store.initialize('test mnemonic')
+        await store.initialize('test mnemonic')
 
-      expect(store.initialized).toBe(true)
+        expect(store.initialized).toBe(true)
+      } finally {
+        errorSpy.mockRestore()
+        mockPublish.mockReset()
+        mockFetchHistoricalGiftWraps.mockReset()
+      }
     })
   })
 
