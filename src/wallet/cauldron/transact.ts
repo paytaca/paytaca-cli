@@ -216,6 +216,10 @@ export function createInputAndOutput(opts: {
     remainingSats += P2PKH_INPUT_SIZE
   }
 
+  if (remainingSats > 0n) {
+    throw new Error('Insufficient BCH to fund the trade and transaction fees')
+  }
+
   payouts.push({
     type: PayoutAmountRuleType.CHANGE,
     locking_bytecode: lockingBytecode,

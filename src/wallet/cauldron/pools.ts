@@ -124,14 +124,14 @@ export function parseRate(
   tokenDecimals: number,
   isBuyingToken: boolean
 ): string {
-  let multiplerDecimals = 8
+  let multiplierDecimals = 8
   let divisorDecimals = tokenDecimals
   if (isBuyingToken) {
-    multiplerDecimals = tokenDecimals
+    multiplierDecimals = tokenDecimals
     divisorDecimals = 8
   }
 
-  const multiplier = 10n ** BigInt(multiplerDecimals)
+  const multiplier = 10n ** BigInt(multiplierDecimals)
   const _price = (rate.numerator * multiplier) / rate.denominator
 
   const divisor = 10 ** divisorDecimals
