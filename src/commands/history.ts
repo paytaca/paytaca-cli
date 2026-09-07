@@ -11,6 +11,7 @@
 import { Command } from 'commander'
 import chalk from 'chalk'
 import { loadWallet, loadMnemonic } from '../wallet/index.js'
+import { formatUsd } from '../utils/prices.js'
 
 /** Convert BCH to satoshis (1 BCH = 100,000,000 sats) */
 function bchToSats(bch: number): number {
@@ -139,9 +140,17 @@ export function registerHistoryCommand(program: Command): void {
               ? `${bchToSats(tx.amount).toLocaleString('en-US')} sats`
               : `${tx.amount} BCH`
 
-          const amountColored = isIncoming
+          let usdSuffix = ''
+          if (!tokenId && typeof tx.usd_price === 'number' && tx.usd_price > 0 && tx.amount != null) {
+            const usdValue = tx.amount * tx.usd_price
+            if (usdValue > 0) {
+              usdSuffix = chalk.dim(` | ≈ ${formatUsd(usdValue)}`)
+            }
+          }
+
+          const amountColored = (isIncoming
             ? chalk.green(`+${amount}`)
-            : chalk.red(`-${amount}`)
+            : chalk.red(`-${amount}`)) + usdSuffix
 
           const date = formatDate(tx.tx_timestamp || tx.date_created)
 
