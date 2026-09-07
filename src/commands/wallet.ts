@@ -164,7 +164,7 @@ export function registerWalletCommands(program: Command): void {
         console.log(`   Balance:      ${balance.balance} BCH`)
         if (usdPerBch !== null) {
           console.log(
-            chalk.green(`                 ≈ ${formatUsd(balance.balance * usdPerBch)}`)
+            chalk.dim(`                 ≈ ${formatUsd(balance.balance * usdPerBch)}`)
           )
         }
       } catch {

@@ -69,8 +69,8 @@ export function registerSwapCommand(program: Command): void {
       }
       const isChipnet = false
       const network = 'mainnet'
-const direction: SwapDirection =
-       opts.action === 'buy' ? 'buy' : 'sell'
+      const direction: SwapDirection =
+        opts.action === 'buy' ? 'buy' : 'sell'
 
       const data = loadMnemonic()
       if (!data) {
