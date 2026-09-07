@@ -34,8 +34,8 @@ describe('tokenAmountToUsd', () => {
 })
 
 describe('formatUsd', () => {
-  it('formats as USD currency', () => {
-    expect(formatUsd(2.007)).toBe('$2.01')
+  it('formats as USD', () => {
+    expect(formatUsd(2.007)).toBe('2.01 USD')
   })
 
   it('returns an em dash for non-finite input', () => {

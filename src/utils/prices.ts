@@ -116,10 +116,9 @@ function priceInUsd(prices: AssetPrice[]): number | null {
 /** Format a USD amount for display. */
 export function formatUsd(usd: number): string {
   if (!isFinite(usd)) return '—'
-  return usd.toLocaleString('en-US', {
-    style: 'currency',
-    currency: 'USD',
+  const formatted = usd.toLocaleString('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })
+  return `${formatted} USD`
 }
