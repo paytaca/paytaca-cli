@@ -83,7 +83,8 @@ export function registerSendCommand(program: Command): void {
       const changeAddressSet = bchWallet.getAddressSetAt(0)
       const changeAddress = changeAddressSet.change
 
-      console.log(`\n   Sending ${chalk.bold(amountBch + ' BCH')} on ${chalk.cyan(network)}`)
+      const bchFormatted = amountBch.toFixed(8).replace(/\.?0+$/, '')
+      console.log(`\n   Sending ${chalk.bold(bchFormatted + ' BCH')} on ${chalk.cyan(network)}`)
       if (usdPrice !== null) {
         console.log(chalk.dim(`   Rate:    1 BCH = ${formatUsd(usdPrice)}`))
         console.log(chalk.dim(`   ≈ ${formatUsd(amountBch * usdPrice)}`))
