@@ -42,11 +42,13 @@ paytaca wallet export              # Display the stored seed phrase
 ### Balance
 
 ```bash
-paytaca balance                    # Show BCH balance (BCH + sats)
+paytaca balance                    # Show BCH balance with USD conversion
 paytaca balance --sats             # Show in satoshis only
 paytaca balance --token <category> # Show balance for a specific CashToken
 paytaca balance --chipnet          # Query chipnet balance
 ```
+
+The default balance view shows the BCH (or token) amount plus its fiat value (e.g. `0.01218811 BCH` / `≈ 3.17 USD`). Fiat conversion is skipped when no price is available.
 
 ### Receive
 
@@ -63,10 +65,14 @@ paytaca receive --token <category> --amount 100  # PayPro URI with token amount
 ### Send
 
 ```bash
-paytaca send <address> <amount>              # Send BCH
-paytaca send <address> 50000 --unit sats     # Send in satoshis
-paytaca send <address> 0.001 --chipnet       # Send on chipnet
+paytaca send <address> <amount>               # Send BCH (default currency: bch)
+paytaca send <address> 50000 sats             # Send in satoshis
+paytaca send <address> 50000 satoshis         # Send in satoshis (alias)
+paytaca send <address> 10 usd                 # Send a USD amount (converted at live rate)
+paytaca send <address> 0.001 --chipnet        # Send on chipnet
 ```
+
+The `[currency]` argument is positional: `bch` (default), `sats`/`satoshis`, or `usd`. When sending with `usd`, the current BCH-USD rate is fetched and applied, and the fiat value is shown inline with the amount.
 
 ### Transaction History
 
@@ -98,6 +104,17 @@ paytaca token price <category> [amount]              # USD price of a token and 
 paytaca token send <address> <amount> --token <cat>  # Send fungible tokens
 paytaca token send-nft <address> --token <cat> --commitment <hex>  # Send an NFT
 ```
+
+### Swap (Cauldron DEX)
+
+```bash
+paytaca swap <tokenId> <amount>                # Sell tokens for BCH (default: sell)
+paytaca swap <tokenId> <amount> --action buy   # Buy tokens with BCH
+paytaca swap <tokenId> <amount> --raw          # Amount is in raw base units
+paytaca swap <tokenId> <amount> --yes          # Skip the confirmation prompt
+```
+
+The `--action` option is `sell` (token→BCH) or `buy` (BCH→token). Swaps run on mainnet only.
 
 ### x402 Payments
 
@@ -176,12 +193,13 @@ Powered by [@napi-rs/keyring](https://github.com/Brooooooklyn/keyring-node) (pre
 src/
   commands/        CLI command definitions (Commander.js)
     wallet.ts        wallet create | import | info | export
-    balance.ts       balance display (BCH and CashTokens)
+    balance.ts       balance display (BCH and CashTokens, USD conversion)
     receive.ts       receiving address + QR code + payment URIs
-    send.ts          BCH sending
+    send.ts          BCH sending (bch/sats/usd amounts)
     history.ts       transaction history (BCH and CashTokens)
     address.ts       HD address derivation (standard and z-prefix)
     token.ts         CashToken commands (list, info, price, send, send-nft)
+    swap.ts          Cauldron DEX swaps (sell/buy with --action)
     pay.ts           x402 BCH payment handler for HTTP requests
     check.ts         Check if URL requires x402 payment
   wallet/
