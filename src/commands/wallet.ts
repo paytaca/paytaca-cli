@@ -16,6 +16,7 @@ import {
   loadWallet,
   loadMnemonic,
 } from '../wallet/index.js'
+import { getBchUsdPrice, formatUsd } from '../utils/prices.js'
 
 export function registerWalletCommands(program: Command): void {
   const wallet = program
@@ -148,12 +149,23 @@ export function registerWalletCommands(program: Command): void {
       const addressSet = bchWallet.getAddressSetAt(0)
       console.log(`   Address:      ${addressSet.receiving}`)
 
-      // Fetch balance
+      // Fetch balance with USD conversion
       try {
         const balance = await bchWallet.getBalance()
+
+        // Fetch USD price per BCH (non-critical — omit on failure)
+        let usdPerBch: number | null = null
+        try {
+          usdPerBch = await getBchUsdPrice(isChipnet)
+        } catch {
+          // Pricing unavailable — proceed without USD values
+        }
+
         console.log(`   Balance:      ${balance.balance} BCH`)
-        if (balance.spendable !== balance.balance) {
-          console.log(chalk.dim(`   Spendable:    ${balance.spendable} BCH`))
+        if (usdPerBch !== null) {
+          console.log(
+            chalk.green(`                 ≈ ${formatUsd(balance.balance * usdPerBch)}`)
+          )
         }
       } catch {
         console.log(chalk.yellow('   Balance:      (unable to fetch)'))
