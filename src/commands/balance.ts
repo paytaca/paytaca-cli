@@ -11,6 +11,7 @@
 import { Command } from 'commander'
 import chalk from 'chalk'
 import { loadWallet, loadMnemonic } from '../wallet/index.js'
+import { getBchUsdPrice, formatUsd, getUsdPerToken, tokenAmountToUsd } from '../utils/prices.js'
 
 /** Convert BCH to satoshis (1 BCH = 100,000,000 sats) */
 function bchToSats(bch: number): number {
@@ -83,14 +84,22 @@ export function registerBalanceCommand(program: Command): void {
           const displayBalance = decimals > 0
             ? (result.balance / 10 ** decimals)
             : result.balance
-          const displaySpendable = decimals > 0
-            ? (result.spendable / 10 ** decimals)
-            : result.spendable
           const unit = tokenSymbol || 'tokens'
 
+          let usdPerToken: number | undefined
+          try {
+            const p = await getUsdPerToken(tokenId, isChipnet)
+            if (p !== null) usdPerToken = p
+          } catch {
+            // Pricing unavailable — show token only
+          }
+
           console.log(`   Balance:    ${displayBalance} ${unit}`)
-          if (result.spendable !== result.balance) {
-            console.log(chalk.dim(`   Spendable:  ${displaySpendable} ${unit}`))
+          if (usdPerToken !== undefined) {
+            const usdValue = tokenAmountToUsd(result.balance, decimals, usdPerToken)
+            console.log(
+              chalk.dim(`               ≈ ${formatUsd(usdValue)}`)
+            )
           }
         } else {
           // ── BCH balance ──────────────────────────────────────────────
@@ -109,14 +118,16 @@ export function registerBalanceCommand(program: Command): void {
               )
             }
           } else {
+            let usdPerBch: number | null = null
+            try {
+              usdPerBch = await getBchUsdPrice(isChipnet)
+            } catch {
+              // USD price unavailable — show BCH only
+            }
             console.log(`   Balance:    ${result.balance} BCH`)
-            console.log(
-              chalk.dim(`               ${formatSats(balanceSats)} sats`)
-            )
-            if (result.spendable !== result.balance) {
-              console.log(`   Spendable:  ${result.spendable} BCH`)
+            if (usdPerBch !== null) {
               console.log(
-                chalk.dim(`               ${formatSats(spendableSats)} sats`)
+                chalk.dim(`               ≈ ${formatUsd(result.balance * usdPerBch)}`)
               )
             }
           }
