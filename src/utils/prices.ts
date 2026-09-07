@@ -105,7 +105,7 @@ function priceInUsd(prices: AssetPrice[]): number | null {
   for (const p of prices) {
     if (String(p.currency || '').toLowerCase() !== 'usd') continue
     const raw = parseFloat(p.price_value)
-    if (!isFinite(raw) || raw === 0) continue
+    if (!isFinite(raw) || raw <= 0) continue
     const asset = String(p.asset || '').toLowerCase()
     // Tokens are quoted as tokens-per-USD; take the reciprocal for USD-per-token.
     return asset.startsWith('ct/') ? 1 / raw : raw
@@ -116,10 +116,10 @@ function priceInUsd(prices: AssetPrice[]): number | null {
 /** Format a USD amount for display. */
 export function formatUsd(usd: number): string {
   if (!isFinite(usd)) return '—'
-  return usd.toLocaleString('en-US', {
-    style: 'currency',
-    currency: 'USD',
+  const formatted = usd.toLocaleString('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })
+  return `${formatted} USD`
 }
+

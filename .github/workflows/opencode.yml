@@ -26,32 +26,28 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Configure git
+      - name: Configure git identity and auth
         run: |
-          git config user.name "opencode-agent[bot]"
-          git config user.email "opencode-agent[bot]@users.noreply.github.com"
-
-      - name: Get latest opencode version
-        id: version
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          echo "version=$(gh release view --repo anomalyco/opencode --json tagName --jq .tagName | sed 's/^v//')" >> "$GITHUB_OUTPUT"
+          git config user.name "opencode[bot]"
+          git config user.email "opencode[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
 
       - name: Run opencode
         uses: anomalyco/opencode/github@latest
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          # The action reads TOKEN (not GITHUB_TOKEN) for API calls and to
+          # skip the collaborator-permission assertion — without it the check
+          # fails for github-actions[bot], which is never a collaborator.
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           model: opencode/kimi-k2.6
           use_github_token: true

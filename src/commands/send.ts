@@ -1,7 +1,8 @@
 /**
- * CLI command: send <address> <amount>
+ * CLI command: send <address> <amount> [currency]
  *
  * Sends BCH from the wallet to an external address.
+ * currency defaults to "bch"; also accepts "sats" / "satoshis" or "usd".
  *
  * The transaction flow is identical to paytaca-app:
  *   1. Load mnemonic + walletHash from keychain
@@ -18,6 +19,7 @@ import { Command } from 'commander'
 import chalk from 'chalk'
 import { Address } from 'watchtower-cash-js'
 import { loadWallet, loadMnemonic } from '../wallet/index.js'
+import { getBchUsdPrice, formatUsd } from '../utils/prices.js'
 
 export function registerSendCommand(program: Command): void {
   program
@@ -25,11 +27,11 @@ export function registerSendCommand(program: Command): void {
     .description('Send BCH to an address')
     .argument('<address>', 'Recipient BCH address (CashAddr format)')
     .argument('<amount>', 'Amount to send')
-    .option('--unit <unit>', 'Amount unit: bch or sats (default: bch)', 'bch')
+    .argument('[currency]', 'Currency: bch (default), sats / satoshis, or usd', 'bch')
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
-    .action(async (address: string, amountStr: string, opts) => {
+    .action(async (address: string, amountStr: string, currency: string, opts) => {
       const isChipnet = Boolean(opts.chipnet)
-      const unit: string = opts.unit
+      const unit = currency.toLowerCase()
       const network = isChipnet ? 'chipnet' : 'mainnet'
 
       // ── Validate wallet ──────────────────────────────────────────────
@@ -48,10 +50,18 @@ export function registerSendCommand(program: Command): void {
         process.exit(1)
       }
 
-      if (unit === 'sats') {
+      let usdPrice: number | null = null
+      if (unit === 'sats' || unit === 'satoshis') {
         amountBch = amountBch / 1e8
+      } else if (unit === 'usd') {
+        usdPrice = await getBchUsdPrice(isChipnet)
+        if (usdPrice === null) {
+          console.log(chalk.red('\nError: Unable to fetch current BCH-USD price.\n'))
+          process.exit(1)
+        }
+        amountBch = amountBch / usdPrice
       } else if (unit !== 'bch') {
-        console.log(chalk.red('\nError: Unit must be "bch" or "sats".\n'))
+        console.log(chalk.red("\nError: Currency must be 'bch', 'sats'/'satoshis', or 'usd'.\n"))
         process.exit(1)
       }
 
@@ -74,7 +84,11 @@ export function registerSendCommand(program: Command): void {
       const changeAddressSet = bchWallet.getAddressSetAt(0)
       const changeAddress = changeAddressSet.change
 
-      console.log(`\n   Sending ${chalk.bold(amountBch + ' BCH')} on ${chalk.cyan(network)}`)
+      const bchFormatted = amountBch.toFixed(8).replace(/\.?0+$/, '')
+      console.log(`\n   Sending ${chalk.bold(bchFormatted + ' BCH')}${usdPrice !== null ? chalk.dim(` (≈ ${formatUsd(amountBch * usdPrice)})`) : ''} on ${chalk.cyan(network)}`)
+      if (usdPrice !== null) {
+        console.log(chalk.dim(`   Rate:    1 BCH = ${formatUsd(usdPrice)}`))
+      }
       console.log(chalk.dim(`   To:     ${address}`))
       console.log(chalk.dim(`   Change: ${changeAddress}`))
       console.log()
