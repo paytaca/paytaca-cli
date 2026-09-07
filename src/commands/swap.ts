@@ -50,8 +50,8 @@ export function registerSwapCommand(program: Command): void {
     .argument('<tokenId>', '64-char hex token category to swap')
     .argument('<amount>', 'Token amount (in the token\'s units)')
     .option(
-      '--direction <direction>',
-      'Swap direction: sell (token→BCH) or buy (BCH→token) (default: sell)',
+      '--action <action>',
+      'Swap action: sell (token→BCH) or buy (BCH→token) (default: sell)',
       'sell'
     )
     .option(
@@ -69,8 +69,8 @@ export function registerSwapCommand(program: Command): void {
       }
       const isChipnet = false
       const network = 'mainnet'
-      const direction: SwapDirection =
-        opts.direction === 'buy' ? 'buy' : 'sell'
+const direction: SwapDirection =
+       opts.action === 'buy' ? 'buy' : 'sell'
 
       const data = loadMnemonic()
       if (!data) {
