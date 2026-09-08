@@ -49,8 +49,6 @@ export interface SwapQuote {
   tradeFee: bigint
   /** Paytaca platform fee charged on top of the trade (absent = no fee). */
   platformFee?: PlatformFee
-  /** Platform fee rate in basis points, for display (30 = 0.3%). */
-  platformFeeRateBps?: number
 }
 
 export interface EstimateSwapOpts {
@@ -179,9 +177,7 @@ export async function estimateSwap(
     tokenAmount,
     bchAmount,
     tradeFee: tradeResult.summary.trade_fee,
-    ...(platformFee
-      ? { platformFee, platformFeeRateBps: feeConfig!.feeRateBps }
-      : {}),
+    ...(platformFee ? { platformFee } : {}),
   }
 }
 
@@ -200,18 +196,7 @@ export function formatQuote(quote: SwapQuote): string {
   let platformFeeLine: string | null = null
   if (quote.platformFee) {
     const feeFormattedPlatform = (Number(quote.platformFee.amount) / 10 ** 8).toFixed(8)
-    const rateBps = quote.platformFeeRateBps ?? 30
-    const summary = quote.tradeResult.summary
-    const tradeSizeSats =
-      (quote.isBuyingToken ? summary.supply : summary.demand) - summary.trade_fee
-    const rawSats = tradeSizeSats * BigInt(Math.max(0, Math.round(rateBps))) / 10000n
-    const capped = rawSats > quote.platformFee.amount
-    const percentValue = rateBps / 100
-    const percentLabel = Number.isInteger(percentValue * 10)
-      ? String(percentValue)
-      : percentValue.toFixed(2)
-    const rateLabel = capped ? `${percentLabel}%, capped` : `${percentLabel}%`
-    platformFeeLine = `Platform fee (${rateLabel}): ~${feeFormattedPlatform} BCH`
+    platformFeeLine = `Platform fee: ~${feeFormattedPlatform} BCH`
   }
 
   if (direction === 'sell') {

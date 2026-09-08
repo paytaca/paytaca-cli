@@ -168,19 +168,12 @@ describe('formatQuote', () => {
   it('lists the platform fee line when a fee is applied', () => {
     const text = formatQuote(quote({
       platformFee: { to: FEE_ADDRESS, amount: 2_997n },
-      platformFeeRateBps: 30,
     }))
-    expect(text).toContain('Platform fee (0.3%): ~0.00002997 BCH')
+    expect(text).toContain('Platform fee: ~0.00002997 BCH')
     expect(text).toContain('Trade fee: ~0.00001000 BCH')
   })
 
-  it('marks capped fees and omits the line entirely when no fee', () => {
-    const capped = formatQuote(quote({
-      platformFee: { to: FEE_ADDRESS, amount: 2_000n },
-      platformFeeRateBps: 30,
-    }))
-    expect(capped).toContain('Platform fee (0.3%, capped)')
-
+  it('omits the line entirely when no fee', () => {
     const noFee = formatQuote(quote())
     expect(noFee).not.toContain('Platform fee')
   })
