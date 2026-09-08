@@ -10,9 +10,12 @@ import { ExchangeLab, type PoolV0, type TradeResult } from '@cashlab/cauldron'
 import { binToHex } from '@cashlab/common/libauth.js'
 import type { BchWallet } from '../bch.js'
 import { LibauthHDWallet } from '../keys.js'
+import { getBchUsdPrice } from '../../utils/prices.js'
 import {
+  fetchCauldronFee,
   fetchPoolsForToken,
   fetchTokenData,
+  type PlatformFeeConfig,
   type CauldronTokenData,
 } from './api.js'
 import { apiPoolToMicroPool, microPoolToPoolV0, parseRate } from './pools.js'
@@ -20,10 +23,14 @@ import {
   attemptTrade,
   createInputAndOutput,
   watchtowerUtxosToSpendableCoins,
+  type PlatformFee,
   type WatchtowerUtxo,
 } from './transact.js'
 
 export type SwapDirection = 'buy' | 'sell'
+
+/** Platform fees below this are not charged at all (P2PKH dust threshold). */
+export const PLATFORM_FEE_DUST_LIMIT = 546n
 
 export interface SwapQuote {
   tokenId: string
@@ -40,6 +47,10 @@ export interface SwapQuote {
   bchAmount: bigint
   /** Trade fee in satoshis. */
   tradeFee: bigint
+  /** Paytaca platform fee charged on top of the trade (absent = no fee). */
+  platformFee?: PlatformFee
+  /** Platform fee rate in basis points, for display (30 = 0.3%). */
+  platformFeeRateBps?: number
 }
 
 export interface EstimateSwapOpts {
@@ -66,6 +77,45 @@ export interface SwapResult {
 }
 
 /**
+ * Compute the Paytaca platform fee for a trade (mirrors paytaca-app
+ * trade.vue: 0.3% of the trade size, capped at max_usd worth of BCH).
+ *
+ * The fee is charged only when ALL of these hold:
+ *   - the fee address is configured (feature enabled)
+ *   - the live BCH price is fetchable (price failure -> no fee)
+ *   - the computed fee is >= PLATFORM_FEE_DUST_LIMIT (below -> no fee)
+ */
+export function computePlatformFee(opts: {
+  tradeResult: TradeResult
+  isBuyingToken: boolean
+  feeConfig: PlatformFeeConfig
+  bchUsdPrice: number | null
+}): PlatformFee | null {
+  const { tradeResult, isBuyingToken, feeConfig, bchUsdPrice } = opts
+
+  if (!feeConfig.address) return null
+  if (bchUsdPrice == null || !isFinite(bchUsdPrice) || bchUsdPrice <= 0) {
+    return null
+  }
+
+  const summary = tradeResult.summary
+  // BCH side of the trade, excluding the DEX's own trade fee.
+  const tradeSizeSats = (isBuyingToken ? summary.supply : summary.demand) - summary.trade_fee
+  if (tradeSizeSats <= 0n) return null
+
+  const rateBps = BigInt(Math.max(0, Math.round(feeConfig.feeRateBps)))
+  let feeSats = tradeSizeSats * rateBps / 10000n
+
+  // Cap the fee at max_usd worth of BCH at the current price.
+  const capSats = BigInt(Math.floor((feeConfig.maxUsd / bchUsdPrice) * 1e8))
+  if (capSats <= 0n) return null
+  if (feeSats > capSats) feeSats = capSats
+
+  if (feeSats < PLATFORM_FEE_DUST_LIMIT) return null
+  return { to: feeConfig.address, amount: feeSats }
+}
+
+/**
  * Estimate a swap: fetch pools + token data and compute the best-rate trade.
  */
 export async function estimateSwap(
@@ -73,9 +123,11 @@ export async function estimateSwap(
 ): Promise<SwapQuote> {
   const { tokenId, direction, amount } = opts
 
-  const [tokenData, apiPools] = await Promise.all([
+  const [tokenData, apiPools, feeConfig] = await Promise.all([
     fetchTokenData(tokenId),
     fetchPoolsForToken(tokenId),
+    // Fee config failure -> feature off for this swap (degrade silently)
+    fetchCauldronFee().catch(() => null),
   ])
   if (!tokenData) {
     throw new Error(`No cauldron token data found for ${tokenId}`)
@@ -104,6 +156,18 @@ export async function estimateSwap(
     : tradeResult.summary.demand
   const decimals = tokenData.bcmr.token.decimals
 
+  // Platform fee: only when enabled + live price available (no fee otherwise)
+  let platformFee: PlatformFee | null = null
+  if (feeConfig) {
+    const bchUsdPrice = await getBchUsdPrice().catch(() => null)
+    platformFee = computePlatformFee({
+      tradeResult,
+      isBuyingToken,
+      feeConfig,
+      bchUsdPrice,
+    })
+  }
+
   return {
     tokenId,
     tokenData,
@@ -115,6 +179,9 @@ export async function estimateSwap(
     tokenAmount,
     bchAmount,
     tradeFee: tradeResult.summary.trade_fee,
+    ...(platformFee
+      ? { platformFee, platformFeeRateBps: feeConfig!.feeRateBps }
+      : {}),
   }
 }
 
@@ -130,21 +197,42 @@ export function formatQuote(quote: SwapQuote): string {
   const bchFormatted = (Number(bchAmount) / 10 ** 8).toFixed(8)
   const feeFormatted = (Number(tradeFee) / 10 ** 8).toFixed(8)
 
+  let platformFeeLine: string | null = null
+  if (quote.platformFee) {
+    const feeFormattedPlatform = (Number(quote.platformFee.amount) / 10 ** 8).toFixed(8)
+    const rateBps = quote.platformFeeRateBps ?? 30
+    const summary = quote.tradeResult.summary
+    const tradeSizeSats =
+      (quote.isBuyingToken ? summary.supply : summary.demand) - summary.trade_fee
+    const rawSats = tradeSizeSats * BigInt(Math.max(0, Math.round(rateBps))) / 10000n
+    const capped = rawSats > quote.platformFee.amount
+    const percentValue = rateBps / 100
+    const percentLabel = Number.isInteger(percentValue * 10)
+      ? String(percentValue)
+      : percentValue.toFixed(2)
+    const rateLabel = capped ? `${percentLabel}%, capped` : `${percentLabel}%`
+    platformFeeLine = `Platform fee (${rateLabel}): ~${feeFormattedPlatform} BCH`
+  }
+
   if (direction === 'sell') {
     // Rate semantics (matches paytaca-app): '1 {demandSymbol} ≈ {rate} {supplySymbol}'.
     // Selling tokens → demand is BCH, rate is tokens-per-BCH.
-    return [
+    const lines = [
       `Sell ${tokenFormatted} ${tokenSymbol} for ${bchFormatted} BCH`,
       `Rate: 1 BCH ≈ ${rate} ${tokenSymbol}`,
       `Trade fee: ~${feeFormatted} BCH`,
-    ].join('\n')
+    ]
+    if (platformFeeLine) lines.push(platformFeeLine)
+    return lines.join('\n')
   }
   // Buying tokens → demand is the token, rate is BCH-per-token.
-  return [
+  const lines = [
     `Buy ${tokenFormatted} ${tokenSymbol} for ${bchFormatted} BCH`,
     `Rate: 1 ${tokenSymbol} ≈ ${rate} BCH`,
     `Trade fee: ~${feeFormatted} BCH`,
-  ].join('\n')
+  ]
+  if (platformFeeLine) lines.push(platformFeeLine)
+  return lines.join('\n')
 }
 
 /**
@@ -228,6 +316,7 @@ export async function buildSignedTradeTx(opts: {
   const { inputCoins, payouts } = createInputAndOutput({
     tradeResult: quote.tradeResult,
     spendableCoins,
+    platformFee: quote.platformFee,
   })
 
   const exlab = new ExchangeLab()

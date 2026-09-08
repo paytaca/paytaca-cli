@@ -5,6 +5,8 @@
  * and pool-tracker.ts. Uses the global fetch API (Node 20+) instead of axios.
  */
 
+import { getWatchtowerApiUrl } from '../../utils/network.js'
+
 const CAULDRON_INDEXER_BASE_URL = 'https://indexer.riften.net'
 
 /**
@@ -111,4 +113,47 @@ export async function fetchTokenData(
     }
   )
   return Array.isArray(data) ? data[0] : undefined
+}
+
+/**
+ * Platform fee config served by watchtower.cash
+ * (GET /api/cauldron-fee/). A null address means the fee feature is
+ * disabled — clients degrade silently (no fee charged).
+ */
+export interface PlatformFeeConfig {
+  address: string | null
+  /** Fee rate in basis points (30 = 0.3%). */
+  feeRateBps: number
+  /** Fee cap in USD, applied against the live BCH price. */
+  maxUsd: number
+}
+
+/**
+ * Fetch the cauldron fee config from watchtower.cash.
+ */
+export async function fetchCauldronFee(
+  isChipnet: boolean = false
+): Promise<PlatformFeeConfig> {
+  const baseUrl = getWatchtowerApiUrl(isChipnet)
+  let response: Response
+  try {
+    response = await fetch(`${baseUrl}/cauldron-fee/`)
+  } catch (err: any) {
+    throw new CauldronApiError(`watchtower unreachable: ${err?.message || err}`)
+  }
+  if (!response.ok) {
+    throw new CauldronApiError(
+      `cauldron-fee request failed (${response.status} ${response.statusText})`,
+      response.status
+    )
+  }
+  const data = await response.json()
+  return {
+    address:
+      typeof data?.address === 'string' && data.address !== ''
+        ? data.address
+        : null,
+    feeRateBps: Number(data?.fee_rate_bps ?? 30),
+    maxUsd: Number(data?.max_usd ?? 1),
+  }
 }
