@@ -198,7 +198,6 @@ export function createInputAndOutput(opts: {
       locking_bytecode: decoded.bytecode,
       amount: platformFee.amount,
     })
-    satoshisToSupply += platformFee.amount + BigInt(getOutputSize(platformFee))
   }
 
   // Base tx overhead (version + locktime) and varint prefixes for inputs/outputs

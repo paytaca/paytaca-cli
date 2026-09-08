@@ -148,12 +148,14 @@ export async function fetchCauldronFee(
     )
   }
   const data = await response.json()
+  const feeRateBps = Number(data?.fee_rate_bps ?? 30)
+  const maxUsd = Number(data?.max_usd ?? 1)
   return {
     address:
       typeof data?.address === 'string' && data.address !== ''
         ? data.address
         : null,
-    feeRateBps: Number(data?.fee_rate_bps ?? 30),
-    maxUsd: Number(data?.max_usd ?? 1),
+    feeRateBps: Number.isFinite(feeRateBps) && feeRateBps >= 0 ? feeRateBps : 30,
+    maxUsd: Number.isFinite(maxUsd) && maxUsd >= 0 ? maxUsd : 1,
   }
 }
