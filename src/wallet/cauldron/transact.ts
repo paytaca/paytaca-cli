@@ -121,6 +121,16 @@ export function createInputAndOutput(opts: {
 
   const isBuyingToken = tradeResult.entries[0]!.supply_token_id === NATIVE_BCH_TOKEN_ID
 
+  // Decode the fee address once; reused for both sizing and the payout rule.
+  let platformFeeBytecode: Uint8Array | undefined
+  if (platformFee) {
+    const decoded = cashAddressToLockingBytecode(platformFee.to)
+    if (!decoded || typeof decoded === 'string' || !decoded.bytecode) {
+      throw new Error(`Invalid platform fee address: ${platformFee.to}`)
+    }
+    platformFeeBytecode = decoded.bytecode
+  }
+
   const entriesSizes = getEntriesSize(tradeResult)
   const totalPoolTxFee = BigInt(entriesSizes.inputFees + entriesSizes.outputFees)
 
@@ -128,9 +138,11 @@ export function createInputAndOutput(opts: {
   let satoshisToSupply = isBuyingToken ? tradeResult.summary.supply : 0n
 
   satoshisToSupply += totalPoolTxFee
-  if (platformFee) {
+  if (platformFee && platformFeeBytecode) {
     satoshisToSupply += platformFee.amount
-    satoshisToSupply += BigInt(getOutputSize(platformFee))
+    satoshisToSupply += BigInt(
+      getOutputSize({ to: platformFeeBytecode, amount: platformFee.amount })
+    )
   }
 
   const inputCoins: SpendableCoin[] = []
@@ -188,14 +200,10 @@ export function createInputAndOutput(opts: {
     satoshisToSupply += tokenOutputSats + BigInt(outputSize)
   }
 
-  if (platformFee) {
-    const decoded = cashAddressToLockingBytecode(platformFee.to)
-    if (!decoded || typeof decoded === 'string' || !decoded.bytecode) {
-      throw new Error(`Invalid platform fee address: ${platformFee.to}`)
-    }
+  if (platformFee && platformFeeBytecode) {
     payouts.push({
       type: PayoutAmountRuleType.FIXED,
-      locking_bytecode: decoded.bytecode,
+      locking_bytecode: platformFeeBytecode,
       amount: platformFee.amount,
     })
   }

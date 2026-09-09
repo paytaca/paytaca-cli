@@ -113,7 +113,7 @@ export function registerSwapCommand(program: Command): void {
           : BigInt(Math.round(parsedAmount * 10 ** decimals))
 
         // Show quote first
-        const quote = await estimateSwap({ tokenId, direction, amount })
+        const quote = await estimateSwap({ tokenId, direction, amount, isChipnet })
         console.log(chalk.cyan('   Quote:'))
         for (const line of formatQuote(quote).split('\n')) {
           console.log(`   ${line}`)

@@ -58,6 +58,8 @@ export interface EstimateSwapOpts {
   direction: SwapDirection
   /** Token amount in base units (sell: amount supplied; buy: amount received). */
   amount: bigint
+  /** Use chipnet watchtower endpoints for fee config and BCH price. */
+  isChipnet?: boolean
 }
 
 export interface ExecuteSwapOpts extends EstimateSwapOpts {
@@ -104,8 +106,12 @@ export function computePlatformFee(opts: {
   const rateBps = BigInt(Math.max(0, Math.round(feeConfig.feeRateBps)))
   let feeSats = tradeSizeSats * rateBps / 10000n
 
-  // Cap the fee at max_usd worth of BCH at the current price.
-  const capSats = BigInt(Math.floor((feeConfig.maxUsd / bchUsdPrice) * 1e8))
+  // Cap the fee at max_usd worth of BCH at the current price. Computed in
+  // bigint space so large caps / tiny prices cannot lose integer precision.
+  const maxUsdScaled = BigInt(Math.round(feeConfig.maxUsd * 1e8))
+  const priceScaled = BigInt(Math.round(bchUsdPrice * 1e8))
+  if (maxUsdScaled <= 0n || priceScaled <= 0n) return null
+  const capSats = maxUsdScaled * 100_000_000n / priceScaled
   if (capSats <= 0n) return null
   if (feeSats > capSats) feeSats = capSats
 
@@ -120,12 +126,13 @@ export async function estimateSwap(
   opts: EstimateSwapOpts
 ): Promise<SwapQuote> {
   const { tokenId, direction, amount } = opts
+  const isChipnet = opts.isChipnet ?? false
 
   const [tokenData, apiPools, feeConfig] = await Promise.all([
     fetchTokenData(tokenId),
     fetchPoolsForToken(tokenId),
     // Fee config failure -> feature off for this swap (degrade silently)
-    fetchCauldronFee().catch(() => null),
+    fetchCauldronFee(isChipnet).catch(() => null),
   ])
   if (!tokenData) {
     throw new Error(`No cauldron token data found for ${tokenId}`)
@@ -157,7 +164,7 @@ export async function estimateSwap(
   // Platform fee: only when enabled + live price available (no fee otherwise)
   let platformFee: PlatformFee | null = null
   if (feeConfig) {
-    const bchUsdPrice = await getBchUsdPrice().catch(() => null)
+    const bchUsdPrice = await getBchUsdPrice(isChipnet).catch(() => null)
     platformFee = computePlatformFee({
       tradeResult,
       isBuyingToken,
