@@ -11,11 +11,13 @@ on:
 jobs:
   opencode:
     if: |
-      github.event_name == 'pull_request' ||
-      contains(github.event.comment.body, ' /oc') ||
-      startsWith(github.event.comment.body, '/oc') ||
-      contains(github.event.comment.body, ' /opencode') ||
-      startsWith(github.event.comment.body, '/opencode')
+      !endsWith(github.actor, '[bot]') && (
+        github.event_name == 'pull_request' ||
+        contains(github.event.comment.body, ' /oc') ||
+        startsWith(github.event.comment.body, '/oc') ||
+        contains(github.event.comment.body, ' /opencode') ||
+        startsWith(github.event.comment.body, '/opencode')
+      )
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -43,10 +45,6 @@ jobs:
         uses: anomalyco/opencode/github@latest
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          # The action reads TOKEN (not GITHUB_TOKEN) for API calls and to
-          # skip the collaborator-permission assertion — without it the check
-          # fails for github-actions[bot], which is never a collaborator.
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           model: opencode/kimi-k2.6
