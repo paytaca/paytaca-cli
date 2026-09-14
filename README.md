@@ -49,10 +49,12 @@ paytaca wallet export              # Display the stored seed phrase (interactive
 paytaca balance                    # Show BCH balance with USD conversion
 paytaca balance --sats             # Show in satoshis only
 paytaca balance --token <category> # Show balance for a specific CashToken
+paytaca balance --tokens           # Show CashToken balances only (balance > 0)
+paytaca balance --all              # Show BCH and CashToken balances
 paytaca balance --chipnet          # Query chipnet balance
 ```
 
-The default balance view shows the BCH (or token) amount plus its fiat value (e.g. `0.01218811 BCH` / `≈ 3.17 USD`). Fiat conversion is skipped when no price is available.
+The default balance view shows the BCH (or token) amount plus its fiat value (e.g. `0.01218811 BCH` / `≈ 3.17 USD`). Fiat conversion is skipped when no price is available. `--tokens` and `--all` list only tokens with a positive balance.
 
 ### Receive
 

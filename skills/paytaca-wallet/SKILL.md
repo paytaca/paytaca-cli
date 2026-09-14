@@ -18,7 +18,13 @@ paytaca balance
 # Balance in satoshis
 paytaca balance --sats
 
-# Token balance
+# CashToken balances only (positive balances)
+paytaca balance --tokens
+
+# BCH and CashToken balances
+paytaca balance --all
+
+# Balance for a specific token
 paytaca balance --token <category>
 
 # Testnet (chipnet)
@@ -144,6 +150,7 @@ paytaca receive
 
 ### Check token holdings
 ```bash
+paytaca balance --tokens
 paytaca token list
 paytaca token info <category>
 ```
