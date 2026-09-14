@@ -182,7 +182,12 @@ export function registerWalletCommands(program: Command): void {
     .command('export')
     .description('Display the stored seed phrase (interactive terminal only)')
     .action(async () => {
-      requireInteractiveTerminal()
+      try {
+        assertInteractiveTerminal(process.stdin.isTTY, process.stdout.isTTY)
+      } catch (err) {
+        console.log(chalk.red(`\n${(err as Error).message}\n`))
+        process.exit(1)
+      }
 
       const data = loadMnemonic()
       if (!data) {
@@ -222,20 +227,23 @@ export function registerWalletCommands(program: Command): void {
     })
 }
 
+export class NonInteractiveTerminalError extends Error {}
+
 /**
  * Refuse to reveal the seed phrase unless the command is attached to a real
  * interactive terminal. This blocks piping, redirection, `echo ... | paytaca`,
- * command substitution, and non-interactive agent execution.
+ * command substitution, and non-interactive agent execution. Throws (rather
+ * than exiting) so callers and tests can handle the refusal.
  */
-function requireInteractiveTerminal(): void {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    console.log(
-      chalk.red(
-        '\nRefusing to export seed phrase: this command must be run directly in an interactive terminal.\n' +
-          'It cannot be piped, redirected, or executed by a non-interactive process.\n'
-      )
+export function assertInteractiveTerminal(
+  stdinIsTTY: boolean | undefined,
+  stdoutIsTTY: boolean | undefined
+): void {
+  if (!stdinIsTTY || !stdoutIsTTY) {
+    throw new NonInteractiveTerminalError(
+      'Refusing to export seed phrase: this command must be run directly in an interactive terminal.\n' +
+        'It cannot be piped, redirected, or executed by a non-interactive process.'
     )
-    process.exit(1)
   }
 }
 
@@ -311,10 +319,10 @@ async function promptChallenge(): Promise<boolean> {
     })
   })
 
-  return answer !== null && answer.trim().toUpperCase() === challenge
+  return isChallengeAnswerCorrect(challenge, answer)
 }
 
-function generateChallenge(): string {
+export function generateChallenge(): string {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
   const group = () =>
     Array.from({ length: 4 }, () => alphabet[randomInt(alphabet.length)]).join('')
@@ -327,10 +335,17 @@ const BIO_OK = 'PAYTACA_BIO_OK'
 const BIO_FAIL = 'PAYTACA_BIO_FAIL'
 const BIO_UNAVAILABLE = 'PAYTACA_BIO_UNAVAILABLE'
 
-function classifyBiometricOutput(output: string): BiometricResult {
+export function isChallengeAnswerCorrect(
+  challenge: string,
+  answer: string | null
+): boolean {
+  return answer !== null && answer.trim().toUpperCase() === challenge
+}
+
+export function classifyBiometricOutput(output: string): BiometricResult {
   if (output.includes(BIO_UNAVAILABLE)) return 'unavailable'
-  if (output.includes(BIO_OK)) return 'ok'
   if (output.includes(BIO_FAIL)) return 'denied'
+  if (output.includes(BIO_OK)) return 'ok'
   return 'error'
 }
 
@@ -400,7 +415,12 @@ function verifyFprintd(): BiometricResult {
   if (!commandExists('fprintd-verify')) return 'unavailable'
   if (!commandExists('fprintd-list')) return 'unavailable'
 
-  const user = os.userInfo().username
+  let user: string
+  try {
+    user = os.userInfo().username
+  } catch {
+    return 'unavailable'
+  }
 
   const enrolled = spawnSync('fprintd-list', [user], {
     stdio: ['ignore', 'pipe', 'pipe'],

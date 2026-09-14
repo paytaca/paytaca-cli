@@ -36,8 +36,12 @@ paytaca wallet create              # Generate a new 12-word seed phrase
 paytaca wallet create --chipnet    # Create on chipnet (testnet)
 paytaca wallet import              # Import an existing seed phrase
 paytaca wallet info                # Show wallet hash, address, and balance
-paytaca wallet export              # Display the stored seed phrase
+paytaca wallet export              # Display the stored seed phrase (interactive terminal + biometrics)
 ```
+
+> `wallet export` requires an interactive terminal and prompts for biometric
+> authentication (Touch ID, fingerprint, or Windows Hello) when available. It
+> cannot be used from scripts, pipes, or other non-interactive processes.
 
 ### Balance
 
