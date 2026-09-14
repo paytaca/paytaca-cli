@@ -122,6 +122,16 @@ export function registerReceiveCommand(program: Command): void {
         ? bchWallet.getTokenAddressSetAt(index).receiving
         : bchWallet.getAddressSetAt(index).receiving
 
+      // ── Subscribe the address with Watchtower ───────────────────────
+      // The backend derives the token-aware variant automatically, so this
+      // covers both BCH and CashToken payments to the displayed address.
+      let subscribed = false
+      try {
+        subscribed = Boolean(await bchWallet.getNewAddressSet(index))
+      } catch {
+        // Non-critical: displaying the address should still succeed
+      }
+
       // ── Resolve token metadata (if category specified) ─────────────
       let tokenInfo: FungibleToken | null = null
       let tokenName = ''
@@ -164,6 +174,11 @@ export function registerReceiveCommand(program: Command): void {
       console.log(chalk.bold(`\n   ${label} (${network})\n`))
       console.log(`   Address:  ${address}`)
       console.log(chalk.dim(`   Index:    ${index}`))
+      console.log(
+        subscribed
+          ? chalk.dim('   Watching: subscribed with Watchtower')
+          : chalk.yellow('   Watching: not subscribed (address may not be monitored)')
+      )
       if (isToken) {
         console.log(chalk.dim('   Type:     token-aware (z-prefix)'))
       }

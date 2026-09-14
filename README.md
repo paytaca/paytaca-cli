@@ -68,6 +68,8 @@ paytaca receive --token <category>           # PayPro URI for a specific token
 paytaca receive --token <category> --amount 100  # PayPro URI with token amount
 ```
 
+The displayed address (and its token-aware variant) is automatically subscribed with Watchtower so incoming BCH and CashTokens are monitored, even for indices not covered by the initial wallet scan.
+
 ### Send
 
 ```bash

@@ -73,6 +73,8 @@ paytaca receive --amount 0.5
 paytaca receive --token <category> --amount 100
 ```
 
+The displayed address (and its token-aware variant) is auto-subscribed with Watchtower, so incoming BCH and CashTokens are monitored even at indices beyond the initial wallet scan.
+
 ### Derive Addresses
 
 ```bash
