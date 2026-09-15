@@ -9,7 +9,7 @@ This skill teaches the agent how to handle x402-based HTTP payments using the Pa
 
 ## Overview
 
-Some APIs (like nanogpt, etc.) use the x402 protocol for HTTP payments. When you call these APIs:
+Some APIs use the x402 protocol for HTTP payments. When you call these APIs:
 - Server returns **HTTP 402 PAYMENT REQUIRED**
 - You must pay with BCH to access the resource
 - After payment, the server returns the actual response
@@ -26,7 +26,7 @@ paytaca check <url> --json
 Example output:
 ```json
 {
-  "url": "https://api.nanogpt.com/v1/complete",
+  "url": "https://api.example.com/v1/complete",
   "acceptsX402": true,
   "acceptsBch": true,
   "paymentRequired": true,
@@ -101,14 +101,14 @@ Do NOT assume the user wants to pay - even if the cost seems small.
 ## AI Agent Workflow
 
 ```
-Task: Call nanogpt API
-Agent: paytaca check https://api.nanogpt.com/v1/complete --json
+Task: Call a paid API
+Agent: paytaca check https://api.example.com/v1/complete --json
   → {"acceptsBch": true, "estimatedCostSats": "100"}
 
 Agent: Informs user "This API costs 100 sats (0.00000100 BCH). Approve to proceed?"
 User: "yes"
 
-Agent: paytaca pay https://api.nanogpt.com/v1/complete --method POST --body '{"prompt":"hello"}' --confirmed --json
+Agent: paytaca pay https://api.example.com/v1/complete --method POST --body '{"prompt":"hello"}' --confirmed --json
   → Handles 402 → pays 100 sats → returns response with txid
 ```
 

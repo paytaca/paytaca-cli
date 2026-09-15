@@ -126,7 +126,7 @@ The `--action` option is `sell` (token→BCH) or `buy` (BCH→token). Swaps run 
 
 ### x402 Payments
 
-The x402 protocol enables HTTP payments via BCH. Some APIs (like nanogpt) require payment to access.
+The x402 protocol enables HTTP payments via BCH. Some APIs require payment to access.
 
 ```bash
 paytaca check <url>                 # Check if URL requires payment, shows estimated cost
@@ -139,10 +139,10 @@ paytaca pay <url> --body '{"prompt":"hello"}'
 
 **Example workflow:**
 ```bash
-paytaca check https://api.nanogpt.com/v1/complete --json
+paytaca check https://api.example.com/v1/complete --json
 # → {"paymentRequired": true, "estimatedCostSats": "100"}
 
-paytaca pay https://api.nanogpt.com/v1/complete --method POST --body '{"prompt":"hello"}'
+paytaca pay https://api.example.com/v1/complete --method POST --body '{"prompt":"hello"}'
 # → Handles 402 → pays → returns response
 ```
 
