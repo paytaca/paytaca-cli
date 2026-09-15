@@ -146,34 +146,23 @@ paytaca pay https://api.example.com/v1/complete --method POST --body '{"prompt":
 # → Handles 402 → pays → returns response
 ```
 
-### AI Agent Integration
+### AI Agent Integration (MCP)
 
-Paytaca CLI provides AI agent skills for wallet operations. Install from GitHub (supports 45+ AI frameworks):
+Paytaca CLI exposes its capabilities to AI agents over the Model Context Protocol (MCP). Add it to your MCP client:
 
 ```bash
-# Install specific skill
-npx skills add paytaca/paytaca-cli --skill <skill-name> -a <agent> -g
-
-# Install all skills
-npx skills add paytaca/paytaca-cli --all
-
-# Examples
-npx skills add paytaca/paytaca-cli --skill paytaca-x402 -a opencode -g
-npx skills add paytaca/paytaca-cli --skill paytaca-wallet -a claude-code -g
-npx skills add paytaca/paytaca-cli --skill paytaca-send -a openclaw -g
+paytaca mcp config --client opencode   # claude | opencode | cursor | codex | pi
 ```
 
-**Available Skills:**
+Then run the server over stdio:
 
-| Skill | Purpose | Approval Needed |
-|-------|---------|------------------|
-| `paytaca-x402` | HTTP 402 payment handling | Yes (before payment) |
-| `paytaca-wallet` | Balance, addresses, history, token info | No (read-only) |
-| `paytaca-send` | Send BCH and CashTokens | Yes (before sending) |
+```bash
+paytaca mcp
+```
 
-**Supported frameworks:** OpenCode, Claude Code, OpenClaw, Cursor, Cline, Windsurf, Roo, Gemini CLI, Codex, GitHub Copilot, Goose, Trae, Kiro CLI, and 30+ more.
+**MCP tools:** wallet reads (`get_balance`, `get_transactions`, `get_receiving_address`, `get_tokens`, `send`) plus Paytaca AI (`get_models`, `get_plans`, `get_credits`, `buy_plan`, `auto_refill`, `ai_chat`, `get_help`).
 
-See [skills/README.md](skills/README.md) for detailed skill documentation.
+Spending tools (`send`, `buy_plan`, `auto_refill`) require host-level approval. By default MCP operates on your **main wallet** and can spend real funds.
 
 ## Network
 

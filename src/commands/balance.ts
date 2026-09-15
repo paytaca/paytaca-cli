@@ -13,100 +13,36 @@
 
 import { Command } from 'commander'
 import chalk from 'chalk'
-import { loadWallet, loadMnemonic } from '../wallet/index.js'
-import type { BchWallet } from '../wallet/bch.js'
+import { WalletNotConfiguredError } from '../core/context.js'
 import {
-  getBchUsdPrice,
-  formatUsd,
-  fetchAssetPrices,
-  getUsdPerToken,
-  tokenAmountToUsd,
-} from '../utils/prices.js'
+  getBalanceView,
+  getTokenBalances,
+  getTokenDetail,
+  type BalanceView,
+  type TokenBalanceView,
+} from '../core/wallet.js'
+import { formatSats } from '../utils/format.js'
+import { formatUsd } from '../utils/prices.js'
 
-/** Convert BCH to satoshis (1 BCH = 100,000,000 sats) */
-function bchToSats(bch: number): number {
-  return Math.round(bch * 1e8)
-}
-
-/** Format a number with thousands separators */
-function formatSats(sats: number): string {
-  return sats.toLocaleString('en-US')
-}
-
-/** Format a token amount with decimals */
-function formatTokenAmount(rawAmount: number, decimals: number): string {
-  if (decimals === 0) return rawAmount.toLocaleString('en-US')
-  const scaled = rawAmount / Math.pow(10, decimals)
-  return scaled.toLocaleString('en-US', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: decimals,
-  })
-}
-
-/** Print the BCH balance (BCH + USD, or sats with --sats). */
-async function showBchBalance(
-  bchWallet: BchWallet,
-  isChipnet: boolean,
-  showSatsOnly: boolean
-): Promise<void> {
-  const result = await bchWallet.getBalance()
-
-  const balanceSats = bchToSats(result.balance)
-  const spendableSats = bchToSats(result.spendable)
-
+function printBchBalance(balance: BalanceView, showSatsOnly: boolean): void {
   if (showSatsOnly) {
-    console.log(`   Balance:    ${formatSats(balanceSats)} sats`)
-    if (result.spendable !== result.balance) {
-      console.log(chalk.dim(`   Spendable:  ${formatSats(spendableSats)} sats`))
+    console.log(`   Balance:    ${formatSats(balance.balanceSats)} sats`)
+    if (balance.spendableBch !== balance.balanceBch) {
+      console.log(chalk.dim(`   Spendable:  ${formatSats(balance.spendableSats)} sats`))
     }
     return
   }
 
-  let usdPerBch: number | null = null
-  try {
-    usdPerBch = await getBchUsdPrice(isChipnet)
-  } catch {
-    // USD price unavailable — show BCH only
-  }
-
-  console.log(`   Balance:    ${result.balance} BCH`)
-  if (usdPerBch !== null) {
-    console.log(
-      chalk.dim(`               ≈ ${formatUsd(result.balance * usdPerBch)}`)
-    )
+  console.log(`   Balance:    ${balance.balanceBch} BCH`)
+  if (balance.usd !== null) {
+    console.log(chalk.dim(`               ≈ ${formatUsd(balance.usd)}`))
   }
 }
 
-/** Print CashToken balances, excluding tokens with a zero balance. */
-async function showTokenBalances(
-  bchWallet: BchWallet,
-  isChipnet: boolean
-): Promise<void> {
-  const tokens = (await bchWallet.getFungibleTokens()).filter((t) => t.balance > 0)
-
+function printTokenBalances(tokens: TokenBalanceView[]): void {
   if (tokens.length === 0) {
     console.log(chalk.dim('   No CashTokens with a positive balance.\n'))
     return
-  }
-
-  // Fetch USD prices for all held tokens (batched by the util)
-  const prices = new Map<string, number>()
-  try {
-    const priceData = await fetchAssetPrices(
-      tokens.map((t) => `ct/${t.category}`),
-      ['USD'],
-      isChipnet
-    )
-    for (const p of priceData) {
-      if (String(p.currency || '').toLowerCase() !== 'usd') continue
-      const catMatch = String(p.asset || '').match(/^ct\/([a-fA-F0-9]+)$/)
-      if (!catMatch) continue
-      const raw = parseFloat(p.price_value)
-      if (!isFinite(raw) || raw === 0) continue
-      prices.set(catMatch[1], 1 / raw)
-    }
-  } catch {
-    // Pricing unavailable — proceed without USD values
   }
 
   let totalUsd = 0
@@ -115,21 +51,16 @@ async function showTokenBalances(
   console.log(chalk.dim('   Tokens:'))
 
   for (const t of tokens) {
-    const amount = formatTokenAmount(t.balance, t.decimals)
     const symbol = t.symbol ? ` ${t.symbol}` : ''
     const name = t.name !== 'Unknown Token' ? t.name : ''
-    const usdPerToken = prices.get(t.category)
 
-    console.log(`   ${chalk.bold(amount + symbol)}`)
-    if (name) {
-      console.log(chalk.dim(`   ${name}`))
-    }
+    console.log(`   ${chalk.bold(t.displayBalance + symbol)}`)
+    if (name) console.log(chalk.dim(`   ${name}`))
     console.log(chalk.dim(`   ${t.category}`))
-    if (usdPerToken !== undefined) {
-      const usdValue = tokenAmountToUsd(t.balance, t.decimals, usdPerToken)
-      totalUsd += usdValue
+    if (t.usd !== null) {
+      totalUsd += t.usd
       pricedCount += 1
-      console.log(chalk.green(`   ≈ ${formatUsd(usdValue)}`))
+      console.log(chalk.green(`   ≈ ${formatUsd(t.usd)}`))
     }
     console.log()
   }
@@ -142,6 +73,25 @@ async function showTokenBalances(
   }
 }
 
+function handleError(err: any): void {
+  if (err instanceof WalletNotConfiguredError) {
+    console.log(chalk.red(`\n${err.message}\n`))
+    process.exit(1)
+  }
+  const status = err?.response?.status
+  if (status === 404) {
+    console.log(
+      chalk.yellow('   Wallet not yet registered with Watchtower on this network.')
+    )
+    console.log(
+      chalk.dim('   Run `paytaca wallet create` or `paytaca wallet import` to register.')
+    )
+    return
+  }
+  console.log(chalk.red(`   Error fetching balance: ${err.message || err}`))
+  process.exit(1)
+}
+
 export function registerBalanceCommand(program: Command): void {
   program
     .command('balance')
@@ -151,11 +101,13 @@ export function registerBalanceCommand(program: Command): void {
     .option('--tokens', 'Show CashToken balances only (excludes BCH)')
     .option('--all', 'Show BCH and CashToken balances')
     .option('--sats', 'Display BCH balance in satoshis only')
+    .option('--json', 'Output as JSON')
     .action(async (opts) => {
       const isChipnet = Boolean(opts.chipnet)
       const showSatsOnly = Boolean(opts.sats)
       const showTokens = Boolean(opts.tokens)
       const showAll = Boolean(opts.all)
+      const asJson = Boolean(opts.json)
       const network = isChipnet ? 'chipnet' : 'mainnet'
       const tokenId: string = opts.token || ''
 
@@ -176,102 +128,69 @@ export function registerBalanceCommand(program: Command): void {
         process.exit(1)
       }
 
-      // ── Validate wallet ──────────────────────────────────────────────
-      const data = loadMnemonic()
-      if (!data) {
-        console.log(
-          chalk.red(
-            '\nNo wallet found. Run `paytaca wallet create` or `paytaca wallet import` first.\n'
-          )
-        )
-        process.exit(1)
-      }
-
-      const w = loadWallet()!
-      const bchWallet = w.forNetwork(isChipnet)
-
       try {
         if (tokenId) {
-          // ── Specific token balance ──────────────────────────────────
-          let tokenName = ''
-          let tokenSymbol = ''
-          let decimals = 0
-
-          try {
-            const info = await bchWallet.getTokenInfo(tokenId)
-            if (info) {
-              tokenName = info.name !== 'Unknown Token' ? info.name : ''
-              tokenSymbol = info.symbol || ''
-              decimals = info.decimals || 0
-            }
-          } catch {
-            // Token info unavailable — proceed without metadata
+          const detail = await getTokenDetail(tokenId, isChipnet)
+          if (asJson) {
+            console.log(JSON.stringify(detail, null, 2))
+            return
           }
-
-          const label = tokenSymbol || tokenName || 'Token'
+          const label = detail.symbol || (detail.name !== 'Unknown Token' ? detail.name : '') || 'Token'
           console.log(chalk.bold(`\n   ${label} Balance (${network})\n`))
           console.log(chalk.dim(`   Category: ${tokenId}`))
-          if (tokenName) {
-            console.log(chalk.dim(`   Name:     ${tokenName}`))
+          if (detail.name !== 'Unknown Token') {
+            console.log(chalk.dim(`   Name:     ${detail.name}`))
           }
-
-          const result = await bchWallet.getTokenBalance(tokenId)
-          const displayBalance = decimals > 0
-            ? (result.balance / 10 ** decimals)
-            : result.balance
-          const unit = tokenSymbol || 'tokens'
-
-          let usdPerToken: number | undefined
-          try {
-            const p = await getUsdPerToken(tokenId, isChipnet)
-            if (p !== null) usdPerToken = p
-          } catch {
-            // Pricing unavailable — show token only
+          const unit = detail.symbol || 'tokens'
+          console.log(`   Balance:    ${detail.displayBalance} ${unit}`)
+          if (detail.usd !== null) {
+            console.log(chalk.dim(`               ≈ ${formatUsd(detail.usd)}`))
           }
+          console.log()
+          return
+        }
 
-          console.log(`   Balance:    ${displayBalance} ${unit}`)
-          if (usdPerToken !== undefined) {
-            const usdValue = tokenAmountToUsd(result.balance, decimals, usdPerToken)
+        if (showTokens || showAll) {
+          const tokenResult = await getTokenBalances(isChipnet)
+          const balance = showAll ? await getBalanceView(isChipnet) : null
+
+          if (asJson) {
             console.log(
-              chalk.dim(`               ≈ ${formatUsd(usdValue)}`)
+              JSON.stringify(
+                showAll ? { balance, tokens: tokenResult.tokens } : tokenResult.tokens,
+                null,
+                2
+              )
             )
+            return
           }
-        } else if (showTokens || showAll) {
-          // ── Token balances, optionally with BCH ─────────────────────
+
           const title = showAll ? 'Balances' : 'Token Balances'
           console.log(chalk.bold(`\n   ${title} (${network})\n`))
-
-          if (showAll) {
-            await showBchBalance(bchWallet, isChipnet, showSatsOnly)
+          if (balance) {
+            printBchBalance(balance, showSatsOnly)
             console.log()
           }
-          await showTokenBalances(bchWallet, isChipnet)
-        } else {
-          // ── BCH balance ─────────────────────────────────────────────
-          console.log(chalk.bold(`\n   Balance (${network})\n`))
-          await showBchBalance(bchWallet, isChipnet, showSatsOnly)
+          printTokenBalances(tokenResult.tokens)
+          console.log()
+          return
         }
+
+        const balance = await getBalanceView(isChipnet)
+        if (asJson) {
+          console.log(JSON.stringify(balance, null, 2))
+          return
+        }
+
+        console.log(chalk.bold(`\n   Balance (${network})\n`))
+        printBchBalance(balance, showSatsOnly)
+        console.log()
       } catch (err: any) {
-        const status = err?.response?.status
-        if (status === 404) {
-          console.log(
-            chalk.yellow(
-              '   Wallet not yet registered with Watchtower on this network.'
-            )
-          )
-          console.log(
-            chalk.dim(
-              '   Run `paytaca wallet create` or `paytaca wallet import` to register.'
-            )
-          )
-        } else {
-          console.log(
-            chalk.red(`   Error fetching balance: ${err.message || err}`)
-          )
+        if (asJson) {
+          console.log(JSON.stringify({ error: err.message || String(err) }, null, 2))
           process.exit(1)
         }
+        handleError(err)
       }
-
-      console.log()
     })
 }

@@ -1,42 +1,33 @@
 /**
- * CLI commands: token list | info | send | send-nft
+ * CLI commands: token list | info | price | send | send-nft
  *
  * CashTokens support for the Paytaca CLI.
- *
- * CashTokens are the native token protocol on Bitcoin Cash, supporting
- * both fungible tokens (FTs) and non-fungible tokens (NFTs) at the
- * consensus layer. Tokens are received at token-aware addresses
- * (z-prefix CashAddr format).
- *
- * Token sends are delegated to watchtower-cash-js BCH.send() with
- * the `token` parameter — identical to how paytaca-app handles it.
  */
 
 import { Command } from 'commander'
 import chalk from 'chalk'
-import { Address } from 'watchtower-cash-js'
-import { loadWallet, loadMnemonic } from '../wallet/index.js'
+import { WalletNotConfiguredError, requireWallet } from '../core/context.js'
 import {
-  fetchAssetPrices,
-  getUsdPerToken,
-  tokenAmountToUsd,
-  formatUsd,
-} from '../utils/prices.js'
+  getTokenBalances,
+  getTokenDetail,
+  isValidBchAddress,
+  isTokenAddress,
+  sendToken,
+} from '../core/wallet.js'
+import { explorerTxUrl, formatTokenAmount, shortHex } from '../utils/format.js'
+import { formatUsd } from '../utils/prices.js'
 
-/** Truncate a hex string for display */
-function shortHex(hex: string, len: number = 8): string {
-  if (hex.length <= len * 2 + 3) return hex
-  return hex.slice(0, len) + '...' + hex.slice(-len)
-}
-
-/** Format a token amount with decimals */
-function formatTokenAmount(rawAmount: number, decimals: number): string {
-  if (decimals === 0) return rawAmount.toLocaleString('en-US')
-  const scaled = rawAmount / Math.pow(10, decimals)
-  return scaled.toLocaleString('en-US', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: decimals,
-  })
+function reportError(err: any, asJson: boolean, contextLabel: string): never {
+  if (asJson) {
+    console.log(JSON.stringify({ error: err.message || String(err) }, null, 2))
+    process.exit(1)
+  }
+  if (err instanceof WalletNotConfiguredError) {
+    console.log(chalk.red(`\n${err.message}\n`))
+    process.exit(1)
+  }
+  console.log(chalk.red(`   Error ${contextLabel}: ${err.message || err}`))
+  process.exit(1)
 }
 
 export function registerTokenCommands(program: Command): void {
@@ -50,99 +41,69 @@ export function registerTokenCommands(program: Command): void {
     .command('list')
     .description('List fungible CashTokens in the wallet')
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
+    .option('--json', 'Output as JSON')
     .action(async (opts) => {
       const isChipnet = Boolean(opts.chipnet)
+      const asJson = Boolean(opts.json)
       const network = isChipnet ? 'chipnet' : 'mainnet'
 
-      const data = loadMnemonic()
-      if (!data) {
-        console.log(
-          chalk.red('\nNo wallet found. Run `paytaca wallet create` or `paytaca wallet import` first.\n')
-        )
-        process.exit(1)
-      }
-
-      const w = loadWallet()!
-      const bchWallet = w.forNetwork(isChipnet)
-
-      console.log(chalk.bold(`\n   CashTokens (${network})\n`))
-
       try {
-        const tokens = await bchWallet.getFungibleTokens()
+        const result = await getTokenBalances(isChipnet)
 
-        if (tokens.length === 0) {
-          console.log(chalk.dim('   No tokens found.\n'))
+        if (asJson) {
+          console.log(JSON.stringify(result.tokens, null, 2))
           return
         }
 
-        // Fetch USD prices for all held tokens (batched by the util)
-        let prices = new Map<string, number>()
-        try {
-          const priceData = await fetchAssetPrices(
-            tokens.map((t) => `ct/${t.category}`),
-            ['USD'],
-            isChipnet
-          )
-          prices = new Map()
-          for (const p of priceData) {
-            if (String(p.currency || '').toLowerCase() !== 'usd') continue
-            const catMatch = String(p.asset || '').match(/^ct\/([a-fA-F0-9]+)$/)
-            if (!catMatch) continue
-            const raw = parseFloat(p.price_value)
-            if (!isFinite(raw) || raw === 0) continue
-            prices.set(catMatch[1], 1 / raw)
-          }
-        } catch {
-          // Pricing unavailable — proceed without USD values
+        console.log(chalk.bold(`\n   CashTokens (${network})\n`))
+
+        if (result.tokens.length === 0) {
+          console.log(chalk.dim('   No tokens found.\n'))
+          return
         }
 
         let totalUsd = 0
         let pricedCount = 0
 
-        for (const t of tokens) {
-          const amount = formatTokenAmount(t.balance, t.decimals)
+        for (const t of result.tokens) {
           const symbol = t.symbol ? ` ${t.symbol}` : ''
           const name = t.name !== 'Unknown Token' ? t.name : ''
-          const usdPerToken = prices.get(t.category)
 
-          console.log(`   ${chalk.bold(amount + symbol)}`)
-          if (name) {
-            console.log(chalk.dim(`   ${name}`))
-          }
+          console.log(`   ${chalk.bold(t.displayBalance + symbol)}`)
+          if (name) console.log(chalk.dim(`   ${name}`))
           console.log(chalk.dim(`   ${t.category}`))
-          if (usdPerToken !== undefined) {
-            const usdValue = tokenAmountToUsd(t.balance, t.decimals, usdPerToken)
-            totalUsd += usdValue
+          if (t.usd !== null) {
+            totalUsd += t.usd
             pricedCount += 1
-            console.log(chalk.green(`   ≈ ${formatUsd(usdValue)}`))
+            console.log(chalk.green(`   ≈ ${formatUsd(t.usd)}`))
           }
           console.log()
         }
 
         if (pricedCount > 0) {
-          console.log(chalk.dim(`   ${tokens.length} token${tokens.length !== 1 ? 's' : ''} total`))
+          console.log(chalk.dim(`   ${result.tokens.length} token${result.tokens.length !== 1 ? 's' : ''} total`))
           console.log(chalk.dim(`   ${pricedCount} priced`))
           console.log(chalk.bold(`   Total: ${formatUsd(totalUsd)}`))
           console.log()
         } else {
-          console.log(chalk.dim(`   ${tokens.length} token${tokens.length !== 1 ? 's' : ''} total`))
+          console.log(chalk.dim(`   ${result.tokens.length} token${result.tokens.length !== 1 ? 's' : ''} total`))
         }
+        console.log()
       } catch (err: any) {
+        if (err instanceof WalletNotConfiguredError) reportError(err, asJson, '')
         const status = err?.response?.status
-        if (status === 404) {
+        if (status === 404 && !asJson) {
           console.log(
             chalk.yellow('   Wallet not yet registered with Watchtower on this network.')
           )
           console.log(
             chalk.dim('   Run `paytaca wallet create` or `paytaca wallet import` to register.')
           )
-        } else {
-          console.log(chalk.red(`   Error fetching tokens: ${err.message || err}`))
-          process.exit(1)
+          console.log()
+          return
         }
+        reportError(err, asJson, 'fetching tokens')
       }
-
-      console.log()
     })
 
   // ── token info ─────────────────────────────────────────────────────
@@ -152,98 +113,59 @@ export function registerTokenCommands(program: Command): void {
     .description('Show details for a specific CashToken')
     .argument('<category>', 'Token category ID (64-character hex)')
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
+    .option('--json', 'Output as JSON')
     .action(async (category: string, opts) => {
       const isChipnet = Boolean(opts.chipnet)
+      const asJson = Boolean(opts.json)
       const network = isChipnet ? 'chipnet' : 'mainnet'
 
-      // Validate category format
       if (!/^[a-fA-F0-9]{64}$/.test(category)) {
         console.log(chalk.red('\nError: Category must be a 64-character hex string.\n'))
         process.exit(1)
       }
 
-      const data = loadMnemonic()
-      if (!data) {
-        console.log(
-          chalk.red('\nNo wallet found. Run `paytaca wallet create` or `paytaca wallet import` first.\n')
-        )
-        process.exit(1)
-      }
-
-      const w = loadWallet()!
-      const bchWallet = w.forNetwork(isChipnet)
-
-      console.log(chalk.bold(`\n   Token Info (${network})\n`))
-
       try {
-        const tokenInfo = await bchWallet.getTokenInfo(category)
+        const detail = await getTokenDetail(category, isChipnet)
 
-        if (!tokenInfo) {
-          console.log(chalk.yellow('   Token not found.\n'))
+        if (asJson) {
+          console.log(JSON.stringify(detail, null, 2))
           return
         }
 
-        console.log(`   Name:      ${tokenInfo.name}`)
-        if (tokenInfo.symbol) {
-          console.log(`   Symbol:    ${tokenInfo.symbol}`)
-        }
-        console.log(`   Decimals:  ${tokenInfo.decimals}`)
-        console.log(`   Category:  ${tokenInfo.category}`)
+        console.log(chalk.bold(`\n   Token Info (${network})\n`))
+        console.log(`   Name:      ${detail.name}`)
+        if (detail.symbol) console.log(`   Symbol:    ${detail.symbol}`)
+        console.log(`   Decimals:  ${detail.decimals}`)
+        console.log(`   Category:  ${detail.category}`)
 
-        // Fetch token USD price (watchtower.cash asset-prices)
-        let usdPerToken: number | undefined
-        try {
-          const p = await getUsdPerToken(category, isChipnet)
-          if (p !== null) usdPerToken = p
-        } catch {
-          // Pricing unavailable — omit USD lines
+        const symbol = detail.symbol ? ` ${detail.symbol}` : ''
+        console.log(`   Balance:   ${detail.displayBalance}${symbol}`)
+        if (detail.usd !== null) {
+          console.log(chalk.green(`   Value:     ≈ ${formatUsd(detail.usd)}`))
         }
-
-        // Fetch wallet-specific balance
-        try {
-          const balResult = await bchWallet.getTokenBalance(category)
-          const amount = formatTokenAmount(balResult.balance, tokenInfo.decimals)
-          const symbol = tokenInfo.symbol ? ` ${tokenInfo.symbol}` : ''
-          console.log(`   Balance:   ${amount}${symbol}`)
-          if (usdPerToken !== undefined) {
-            const usdValue = tokenAmountToUsd(balResult.balance, tokenInfo.decimals, usdPerToken)
-            console.log(chalk.green(`   Value:     ≈ ${formatUsd(usdValue)}`))
-          }
-        } catch {
-          // Balance may not be available if wallet doesn't hold this token
-          console.log(chalk.dim('   Balance:   0'))
-        }
-
-        if (usdPerToken !== undefined) {
+        if (detail.usdPerToken !== null) {
           console.log(
             chalk.dim(
-              `   Price:     ${formatUsd(usdPerToken)} per ${tokenInfo.symbol || 'token'}`
+              `   Price:     ${formatUsd(detail.usdPerToken)} per ${detail.symbol || 'token'}`
             )
           )
         }
 
-        // Show NFTs for this category
-        try {
-          const nfts = await bchWallet.getNftUtxos(category)
-          if (nfts.length > 0) {
-            console.log(`\n   ${chalk.bold('NFTs')} (${nfts.length})\n`)
-            for (const nft of nfts) {
-              const cap = nft.capability === 'none' ? '' : ` [${nft.capability}]`
-              const commitment = nft.commitment ? shortHex(nft.commitment) : '(empty)'
-              console.log(`   ${chalk.cyan(commitment)}${cap}`)
-              console.log(chalk.dim(`   ${nft.txid}:${nft.vout}`))
-              console.log()
-            }
+        if (detail.nfts.length > 0) {
+          console.log(`\n   ${chalk.bold('NFTs')} (${detail.nfts.length})\n`)
+          for (const nft of detail.nfts) {
+            const cap = nft.capability === 'none' ? '' : ` [${nft.capability}]`
+            const commitment = nft.commitment ? shortHex(nft.commitment) : '(empty)'
+            console.log(`   ${chalk.cyan(commitment)}${cap}`)
+            console.log(chalk.dim(`   ${nft.txid}:${nft.vout}`))
+            console.log()
           }
-        } catch {
-          // NFT fetch may fail; non-critical
         }
-      } catch (err: any) {
-        console.log(chalk.red(`   Error: ${err.message || err}`))
-        process.exit(1)
-      }
 
-      console.log()
+        console.log()
+      } catch (err: any) {
+        reportError(err, asJson, '')
+      }
     })
 
   // ── token price ────────────────────────────────────────────────────
@@ -254,17 +176,17 @@ export function registerTokenCommands(program: Command): void {
     .argument('<category>', 'Token category ID (64-character hex)')
     .argument('[amount]', 'Token amount in display units (defaults to wallet balance)')
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
+    .option('--json', 'Output as JSON')
     .action(async (category: string, amountStr: string | undefined, opts) => {
       const isChipnet = Boolean(opts.chipnet)
+      const asJson = Boolean(opts.json)
       const network = isChipnet ? 'chipnet' : 'mainnet'
 
-      // Validate category format
       if (!/^[a-fA-F0-9]{64}$/.test(category)) {
         console.log(chalk.red('\nError: Category must be a 64-character hex string.\n'))
         process.exit(1)
       }
 
-      // Validate amount if provided
       let requestedAmount: number | null = null
       if (amountStr !== undefined) {
         requestedAmount = Number(amountStr)
@@ -274,79 +196,58 @@ export function registerTokenCommands(program: Command): void {
         }
       }
 
-      const data = loadMnemonic()
-      if (!data) {
+      try {
+        const detail = await getTokenDetail(category, isChipnet)
+        const displayAmount =
+          requestedAmount !== null
+            ? requestedAmount
+            : detail.rawBalance / Math.pow(10, detail.decimals)
+
+        if (asJson) {
+          console.log(
+            JSON.stringify(
+              {
+                network,
+                category,
+                symbol: detail.symbol,
+                name: detail.name,
+                decimals: detail.decimals,
+                amount: displayAmount,
+                usdPerToken: detail.usdPerToken,
+                usd:
+                  detail.usdPerToken !== null
+                    ? displayAmount * detail.usdPerToken
+                    : null,
+              },
+              null,
+              2
+            )
+          )
+          return
+        }
+
+        const label = detail.symbol || (detail.name !== 'Unknown Token' ? detail.name : '') || shortHex(category)
+        console.log(chalk.bold(`\n   Token Price (${network})\n`))
+        console.log(`   Token:    ${label}`)
+        if (detail.name !== 'Unknown Token') console.log(chalk.dim(`   Name:     ${detail.name}`))
+        console.log(chalk.dim(`   Category: ${category}`))
+
+        if (detail.usdPerToken === null) {
+          console.log(chalk.yellow('\n   No market price available for this token.\n'))
+          return
+        }
+
+        const usdValue = displayAmount * detail.usdPerToken
         console.log(
-          chalk.red('\nNo wallet found. Run `paytaca wallet create` or `paytaca wallet import` first.\n')
+          chalk.green(`   Price:    ${formatUsd(detail.usdPerToken)} per ${detail.symbol || 'token'}`)
         )
-        process.exit(1)
-      }
-
-      const w = loadWallet()!
-      const bchWallet = w.forNetwork(isChipnet)
-
-      console.log(chalk.bold(`\n   Token Price (${network})\n`))
-
-      // Resolve token metadata (symbol/decimals) — optional, non-fatal
-      let symbol = ''
-      let decimals = 0
-      let name = ''
-      try {
-        const info = await bchWallet.getTokenInfo(category)
-        if (info) {
-          symbol = info.symbol || ''
-          name = info.name !== 'Unknown Token' ? info.name : ''
-          decimals = info.decimals || 0
-        }
-      } catch {
-        // Token metadata unavailable — proceed without it
-      }
-
-      // Resolve the display amount to price
-      let displayAmount: number
-      if (requestedAmount !== null) {
-        displayAmount = requestedAmount
-      } else {
-        try {
-          const balResult = await bchWallet.getTokenBalance(category)
-          displayAmount = balResult.balance / Math.pow(10, decimals)
-        } catch {
-          console.log(chalk.yellow('   Wallet balance unavailable; specify an <amount> to price.\n'))
-          process.exit(1)
-        }
-      }
-
-      // Fetch USD price
-      let usdPerToken: number | null = null
-      try {
-        usdPerToken = await getUsdPerToken(category, isChipnet)
-      } catch {
-        // leave null
-      }
-
-      const label = symbol || name || shortHex(category)
-      console.log(`   Token:    ${label}`)
-      if (name) console.log(chalk.dim(`   Name:     ${name}`))
-      console.log(chalk.dim(`   Category: ${category}`))
-
-      if (usdPerToken === null) {
-        console.log(chalk.yellow('\n   No market price available for this token.\n'))
-        return
-      }
-
-      const usdValue = displayAmount * usdPerToken
-      console.log(
-        chalk.green(
-          `   Price:    ${formatUsd(usdPerToken)} per ${symbol || 'token'}`
+        console.log(
+          chalk.bold(`   Value:    ${formatUsd(usdValue)} for ${displayAmount} ${detail.symbol || 'token(s)'}`)
         )
-      )
-      console.log(
-        chalk.bold(
-          `   Value:    ${formatUsd(usdValue)} for ${displayAmount} ${symbol || 'token(s)'}`
-        )
-      )
-
-      console.log()
+        console.log()
+      } catch (err: any) {
+        reportError(err, asJson, '')
+      }
     })
 
   // ── token send ─────────────────────────────────────────────────────
@@ -358,34 +259,25 @@ export function registerTokenCommands(program: Command): void {
     .argument('<amount>', 'Token amount to send (in base units, before decimal scaling)')
     .requiredOption('--token <id>', 'Token category ID (64-character hex)')
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
+    .option('--json', 'Output as JSON')
     .action(async (address: string, amountStr: string, opts) => {
       const isChipnet = Boolean(opts.chipnet)
+      const asJson = Boolean(opts.json)
       const category: string = opts.token
       const network = isChipnet ? 'chipnet' : 'mainnet'
 
-      // Validate wallet
-      const data = loadMnemonic()
-      if (!data) {
-        console.log(
-          chalk.red('\nNo wallet found. Run `paytaca wallet create` or `paytaca wallet import` first.\n')
-        )
-        process.exit(1)
-      }
-
-      // Validate category
       if (!/^[a-fA-F0-9]{64}$/.test(category)) {
         console.log(chalk.red('\nError: Category must be a 64-character hex string.\n'))
         process.exit(1)
       }
 
-      // Parse amount as bigint
       let tokenAmount: bigint
       try {
         tokenAmount = BigInt(amountStr)
       } catch {
         console.log(chalk.red('\nError: Amount must be a valid integer.\n'))
         process.exit(1)
-        return // unreachable, but helps TS narrowing
+        return
       }
 
       if (tokenAmount <= 0n) {
@@ -393,19 +285,12 @@ export function registerTokenCommands(program: Command): void {
         process.exit(1)
       }
 
-      // Validate recipient address
-      const addressValidator = new Address(address)
-      if (
-        !addressValidator.isValidBCHAddress(isChipnet) &&
-        !(addressValidator as any).isP2SH?.() &&
-        !(addressValidator as any).isTokenAddress?.()
-      ) {
+      if (!isValidBchAddress(address, isChipnet)) {
         console.log(chalk.red('\nError: Invalid BCH address.\n'))
         process.exit(1)
       }
 
-      // Warn if not a token address
-      if (!(addressValidator as any).isTokenAddress?.()) {
+      if (!isTokenAddress(address) && !asJson) {
         console.log(
           chalk.yellow('\n   Warning: Address is not a token-aware (z-prefix) address.')
         )
@@ -414,59 +299,64 @@ export function registerTokenCommands(program: Command): void {
         )
       }
 
-      const w = loadWallet()!
-      const bchWallet = w.forNetwork(isChipnet)
-
-      // Token change goes to our token address
-      const tokenChangeAddress = bchWallet.getTokenAddressSetAt(0).change
-
-      // Fetch token info for display
-      let tokenLabel = shortHex(category)
       try {
-        const info = await bchWallet.getTokenInfo(category)
-        if (info?.symbol) tokenLabel = info.symbol
-        else if (info?.name && info.name !== 'Unknown Token') tokenLabel = info.name
-      } catch {
-        // Non-critical; use category hex
-      }
+        let tokenLabel = shortHex(category)
+        try {
+          const detail = await getTokenDetail(category, isChipnet)
+          if (detail.symbol) tokenLabel = detail.symbol
+          else if (detail.name !== 'Unknown Token') tokenLabel = detail.name
+        } catch {
+          // non-critical
+        }
 
-      console.log(`\n   Sending ${chalk.bold(amountStr + ' ' + tokenLabel)} on ${chalk.cyan(network)}`)
-      console.log(chalk.dim(`   Category: ${category}`))
-      console.log(chalk.dim(`   To:       ${address}`))
-      console.log(chalk.dim(`   Change:   ${tokenChangeAddress}`))
-      console.log()
+        if (!asJson) {
+          console.log(`\n   Sending ${chalk.bold(amountStr + ' ' + tokenLabel)} on ${chalk.cyan(network)}`)
+          console.log(chalk.dim(`   Category: ${category}`))
+          console.log(chalk.dim(`   To:       ${address}`))
+          console.log()
+        }
 
-      try {
-        const result = await bchWallet.sendToken(
-          category,
-          tokenAmount,
-          address,
-          tokenChangeAddress
+        const outcome = await sendToken(
+          { category, amount: tokenAmount, address },
+          isChipnet
         )
 
-        if (result.success) {
+        if (asJson) {
+          console.log(
+            JSON.stringify(
+              {
+                ...outcome,
+                address,
+                category,
+                amount: amountStr,
+              },
+              null,
+              2
+            )
+          )
+          if (!outcome.success) process.exit(1)
+          return
+        }
+
+        if (outcome.success) {
           console.log(chalk.green('   Transaction sent successfully!\n'))
-          if (result.txid) {
-            console.log(`   txid: ${result.txid}`)
-            const explorer = isChipnet
-              ? 'https://chipnet.chaingraph.cash/tx/'
-              : 'https://bchexplorer.info/tx/'
-            console.log(chalk.dim(`   ${explorer}${result.txid}`))
+          if (outcome.txid) {
+            console.log(`   txid: ${outcome.txid}`)
+            console.log(chalk.dim(`   ${outcome.explorerUrl}`))
           }
         } else {
-          console.log(chalk.red(`   Transaction failed: ${result.error || 'Unknown error'}`))
-          if (result.lackingSats) {
+          console.log(chalk.red(`   Transaction failed: ${outcome.error || 'Unknown error'}`))
+          if (outcome.lackingSats) {
             console.log(
-              chalk.yellow(`   Insufficient BCH for transaction fees. Short by ${result.lackingSats} satoshis.`)
+              chalk.yellow(`   Insufficient BCH for transaction fees. Short by ${outcome.lackingSats} satoshis.`)
             )
           }
+          process.exit(1)
         }
+        console.log()
       } catch (err: any) {
-        console.log(chalk.red(`\n   Error: ${err.message || err}\n`))
-        process.exit(1)
+        reportError(err, asJson, '')
       }
-
-      console.log()
     })
 
   // ── token send-nft ─────────────────────────────────────────────────
@@ -481,62 +371,54 @@ export function registerTokenCommands(program: Command): void {
     .option('--txid <txid>', 'UTXO txid containing the NFT (auto-detected if omitted)')
     .option('--vout <n>', 'UTXO output index (auto-detected if omitted)')
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
+    .option('--json', 'Output as JSON')
     .action(async (address: string, opts) => {
       const isChipnet = Boolean(opts.chipnet)
+      const asJson = Boolean(opts.json)
       const category: string = opts.token
       const commitment: string = opts.commitment
       const capability: string = opts.capability || 'none'
       const network = isChipnet ? 'chipnet' : 'mainnet'
 
-      // Validate wallet
-      const data = loadMnemonic()
-      if (!data) {
-        console.log(
-          chalk.red('\nNo wallet found. Run `paytaca wallet create` or `paytaca wallet import` first.\n')
-        )
-        process.exit(1)
-      }
-
-      // Validate category
       if (!/^[a-fA-F0-9]{64}$/.test(category)) {
         console.log(chalk.red('\nError: Category must be a 64-character hex string.\n'))
         process.exit(1)
       }
 
-      // Validate capability
       if (!['none', 'minting', 'mutable'].includes(capability)) {
         console.log(chalk.red('\nError: Capability must be "none", "minting", or "mutable".\n'))
         process.exit(1)
       }
 
-      // Validate address
-      const addressValidator = new Address(address)
-      if (
-        !addressValidator.isValidBCHAddress(isChipnet) &&
-        !(addressValidator as any).isP2SH?.() &&
-        !(addressValidator as any).isTokenAddress?.()
-      ) {
+      if (!isValidBchAddress(address, isChipnet)) {
         console.log(chalk.red('\nError: Invalid BCH address.\n'))
         process.exit(1)
       }
 
-      const w = loadWallet()!
-      const bchWallet = w.forNetwork(isChipnet)
+      try {
+        const ctx = requireWallet(isChipnet)
 
-      // Resolve UTXO — either from flags or auto-detect
-      let txid: string = opts.txid || ''
-      let vout: number = opts.vout !== undefined ? parseInt(opts.vout, 10) : -1
+        let txid: string = opts.txid || ''
+        let vout: number = opts.vout !== undefined ? parseInt(opts.vout, 10) : -1
 
-      if (!txid || vout < 0) {
-        // Auto-detect: find the NFT UTXO matching category + commitment + capability
-        console.log(chalk.dim('\n   Searching for NFT UTXO...'))
-        try {
-          const nfts = await bchWallet.getNftUtxos(category)
+        if (!txid || vout < 0) {
+          if (!asJson) console.log(chalk.dim('\n   Searching for NFT UTXO...'))
+          const nfts = await ctx.bch.getNftUtxos(category)
           const match = nfts.find(
             (n) => n.commitment === commitment && n.capability === capability
           )
 
           if (!match) {
+            if (asJson) {
+              console.log(
+                JSON.stringify(
+                  { error: `No NFT found matching category ${category}` },
+                  null,
+                  2
+                )
+              )
+              process.exit(1)
+            }
             console.log(
               chalk.red(`\n   Error: No NFT found matching category ${shortHex(category)} ` +
                 `with commitment "${commitment}" and capability "${capability}".\n`)
@@ -547,25 +429,21 @@ export function registerTokenCommands(program: Command): void {
 
           txid = match.txid
           vout = match.vout
-        } catch (err: any) {
-          console.log(chalk.red(`\n   Error searching for NFTs: ${err.message || err}\n`))
-          process.exit(1)
         }
-      }
 
-      // Change address for leftover BCH
-      const changeAddress = bchWallet.getTokenAddressSetAt(0).change
+        const changeAddress = ctx.bch.getTokenAddressSetAt(0).change
 
-      console.log(`\n   Sending NFT on ${chalk.cyan(network)}`)
-      console.log(chalk.dim(`   Category:   ${category}`))
-      console.log(chalk.dim(`   Commitment: ${commitment || '(empty)'}`))
-      console.log(chalk.dim(`   Capability: ${capability}`))
-      console.log(chalk.dim(`   UTXO:       ${shortHex(txid)}:${vout}`))
-      console.log(chalk.dim(`   To:         ${address}`))
-      console.log()
+        if (!asJson) {
+          console.log(`\n   Sending NFT on ${chalk.cyan(network)}`)
+          console.log(chalk.dim(`   Category:   ${category}`))
+          console.log(chalk.dim(`   Commitment: ${commitment || '(empty)'}`))
+          console.log(chalk.dim(`   Capability: ${capability}`))
+          console.log(chalk.dim(`   UTXO:       ${shortHex(txid)}:${vout}`))
+          console.log(chalk.dim(`   To:         ${address}`))
+          console.log()
+        }
 
-      try {
-        const result = await bchWallet.sendNft(
+        const result = await ctx.bch.sendNft(
           category,
           commitment,
           capability,
@@ -575,14 +453,29 @@ export function registerTokenCommands(program: Command): void {
           changeAddress
         )
 
+        const jsonResult = {
+          network,
+          success: result.success,
+          txid: result.txid,
+          explorerUrl: result.txid ? explorerTxUrl(result.txid, isChipnet) : undefined,
+          error: result.error,
+          category,
+          commitment,
+          capability,
+          address,
+        }
+
+        if (asJson) {
+          console.log(JSON.stringify(jsonResult, null, 2))
+          if (!result.success) process.exit(1)
+          return
+        }
+
         if (result.success) {
           console.log(chalk.green('   Transaction sent successfully!\n'))
           if (result.txid) {
             console.log(`   txid: ${result.txid}`)
-            const explorer = isChipnet
-              ? 'https://chipnet.chaingraph.cash/tx/'
-              : 'https://bchexplorer.info/tx/'
-            console.log(chalk.dim(`   ${explorer}${result.txid}`))
+            console.log(chalk.dim(`   ${explorerTxUrl(result.txid, isChipnet)}`))
           }
         } else {
           console.log(chalk.red(`   Transaction failed: ${result.error || 'Unknown error'}`))
@@ -591,12 +484,11 @@ export function registerTokenCommands(program: Command): void {
               chalk.yellow(`   Insufficient BCH for transaction fees. Short by ${result.lackingSats} satoshis.`)
             )
           }
+          process.exit(1)
         }
+        console.log()
       } catch (err: any) {
-        console.log(chalk.red(`\n   Error: ${err.message || err}\n`))
-        process.exit(1)
+        reportError(err, asJson, '')
       }
-
-      console.log()
     })
 }

@@ -145,7 +145,7 @@ export function registerSwapCommand(program: Command): void {
           if (result.txid) {
             console.log(`   txid: ${result.txid}`)
             const explorer = isChipnet
-              ? 'https://chipnet.chaingraph.cash/tx/'
+              ? 'https://chipnet.bchexplorer.info/tx/'
               : 'https://bchexplorer.info/tx/'
             console.log(chalk.dim(`   ${explorer}${result.txid}`))
           }
