@@ -17,7 +17,6 @@ import {
   getWalletStatus,
   summarizeCredits,
 } from '../ai/credits.js'
-import { aiChat } from '../ai/chat.js'
 import { buyPlan } from '../ai/purchase.js'
 import {
   armAutoRefill,
@@ -61,7 +60,6 @@ Paytaca AI:
   get_credits            Remaining AI time credits
   buy_plan               Buy an AI plan with BCH or LIFT (spends funds)
   auto_refill            Arm/disarm/inspect automatic plan refills
-  ai_chat                Non-streaming chat via Paytaca AI
 
 Notes:
   - All tools accept an optional "chipnet" flag (default mainnet).
@@ -411,39 +409,6 @@ export function registerTools(
           remainingMinutes: remainingBudget(state),
           state,
         })
-      } catch (err) {
-        return fail(err)
-      }
-    }
-  )
-
-  server.registerTool(
-    'ai_chat',
-    {
-      title: 'Chat with Paytaca AI',
-      description:
-        'Send a non-streaming chat request to a Paytaca AI model. Returns the assistant reply, or a payment_required note if a plan must be bought first.',
-      inputSchema: {
-        message: z.string(),
-        model: z.string().optional(),
-        system: z.string().optional(),
-        chipnet: z.boolean().optional(),
-        backend: z.string().optional(),
-      },
-      annotations: { readOnlyHint: true, openWorldHint: true },
-    },
-    async ({ message, model, system, chipnet, backend }) => {
-      try {
-        const ctx = requireWallet(cn(chipnet))
-        return json(
-          await aiChat({
-            messages: [{ role: 'user', content: message }],
-            model,
-            system,
-            walletHash: ctx.walletHash,
-            backendUrl: backend,
-          })
-        )
       } catch (err) {
         return fail(err)
       }

@@ -30,7 +30,6 @@ describe('paytaca MCP server', () => {
     const names = tools.map((t) => t.name).sort()
     expect(names).toEqual(
       [
-        'ai_chat',
         'auto_refill',
         'buy_plan',
         'get_balance',

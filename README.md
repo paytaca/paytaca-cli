@@ -160,7 +160,7 @@ Then run the server over stdio:
 paytaca mcp
 ```
 
-**MCP tools:** wallet reads (`get_balance`, `get_transactions`, `get_receiving_address`, `get_tokens`, `send`) plus Paytaca AI (`get_models`, `get_plans`, `get_credits`, `buy_plan`, `auto_refill`, `ai_chat`, `get_help`).
+**MCP tools:** wallet reads (`get_balance`, `get_transactions`, `get_receiving_address`, `get_tokens`, `send`) plus Paytaca AI (`get_models`, `get_plans`, `get_credits`, `buy_plan`, `auto_refill`, `get_help`).
 
 Spending tools (`send`, `buy_plan`, `auto_refill`) require host-level approval. By default MCP operates on your **main wallet** and can spend real funds.
 

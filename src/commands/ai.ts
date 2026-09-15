@@ -39,7 +39,6 @@ import {
   readAutoRefillState,
   remainingBudget,
 } from '../ai/autoRefill.js'
-import { aiChat } from '../ai/chat.js'
 
 function outputJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2))
@@ -93,7 +92,7 @@ function printPlanGroups(config: AiConfig, modelQuery?: string): void {
 }
 
 export function registerAiCommands(program: Command): void {
-  const ai = program.command('ai').description('Paytaca AI: models, plans, credits, purchase, chat')
+  const ai = program.command('ai').description('Paytaca AI: models, plans, credits, purchase')
 
   // ── ai models ───────────────────────────────────────────────────────
   ai.command('models')
@@ -410,50 +409,6 @@ export function registerAiCommands(program: Command): void {
         console.log(chalk.dim(`   Credits remaining: ${formatRemaining(result.timeRemainingSeconds)}`))
       }
       console.log()
-    })
-
-  // ── ai chat ─────────────────────────────────────────────────────────
-  ai.command('chat')
-    .description('Send a non-streaming chat request to a Paytaca AI model')
-    .argument('<message...>', 'Message text')
-    .option('--model <id>', 'Model id or display name')
-    .option('--system <prompt>', 'System prompt')
-    .option('--backend <url>', 'Override backend URL')
-    .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
-    .option('--json', 'Output as JSON')
-    .action(async (messageParts: string[], opts) => {
-      let walletHash: string
-      try {
-        walletHash = requireWallet(Boolean(opts.chipnet)).walletHash
-      } catch (err: any) {
-        if (opts.json) outputJson({ error: err.message })
-        else console.log(chalk.red(`\n${err.message}\n`))
-        process.exitCode = 1
-        return
-      }
-      const result = await aiChat({
-        walletHash,
-        model: opts.model,
-        system: opts.system,
-        backendUrl: opts.backendUrl,
-        messages: [{ role: 'user', content: messageParts.join(' ') }],
-      })
-      if (opts.json) {
-        outputJson(result)
-        if (!result.success) process.exitCode = 1
-        return
-      }
-      if (result.paymentRequired) {
-        console.log(chalk.yellow(`\n   ${result.message}\n`))
-        process.exitCode = 1
-        return
-      }
-      if (!result.success) {
-        console.log(chalk.red(`\n   Error: ${result.error || 'Chat failed.'}\n`))
-        process.exitCode = 1
-        return
-      }
-      console.log(`\n${result.content}\n`)
     })
 
   // ── ai auto-refill ──────────────────────────────────────────────────
