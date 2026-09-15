@@ -16,6 +16,7 @@ import { listModels, listPlans } from '../ai/models.js'
 import {
   getWalletStatus,
   summarizeCredits,
+  summarizeAllCredits,
 } from '../ai/credits.js'
 import { buyPlan } from '../ai/purchase.js'
 import {
@@ -299,7 +300,7 @@ export function registerTools(
     {
       title: 'Get AI time credits',
       description:
-        'Return remaining Paytaca AI time credits, optionally for one model.',
+        'Return remaining Paytaca AI time credits for all models, or for one model when "model" is given.',
       inputSchema: {
         model: z.string().optional(),
         chipnet: z.boolean().optional(),
@@ -314,6 +315,9 @@ export function registerTools(
           modelId: model,
           backendUrl: backend,
         })
+        if (!model) {
+          return json({ sessions: summarizeAllCredits(status) })
+        }
         return json(summarizeCredits(status, model))
       } catch (err) {
         return fail(err)

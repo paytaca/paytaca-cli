@@ -46,6 +46,14 @@ export function findSession(
   )
 }
 
+function sessionActive(session: WalletSession): boolean {
+  return (
+    session.model_active === true ||
+    session.session_active === true ||
+    (session.time_remaining_seconds ?? 0) > 0
+  )
+}
+
 export function hasActiveCredits(
   status: WalletStatus | null,
   modelId?: string
@@ -55,12 +63,7 @@ export function hasActiveCredits(
   const candidates = modelId
     ? sessions.filter((s) => sessionMatches(s, modelId))
     : sessions
-  return candidates.some(
-    (s) =>
-      s.model_active === true ||
-      s.session_active === true ||
-      (s.time_remaining_seconds ?? 0) > 0
-  )
+  return candidates.some(sessionActive)
 }
 
 export function formatRemaining(seconds: number): string {
@@ -76,20 +79,31 @@ export function formatRemaining(seconds: number): string {
   return parts.join(' ') || '0s'
 }
 
+function summarizeSession(session: WalletSession): CreditsSummary {
+  return {
+    modelId: session.model_id || session.ai_model || null,
+    displayName: session.display_name || null,
+    active: sessionActive(session),
+    timeRemainingSeconds: session.time_remaining_seconds ?? 0,
+    timeCreditsSeconds: session.time_credits_seconds ?? 0,
+    timeUsedSeconds: session.time_used_seconds ?? 0,
+    tokenLimit: session.token_limit ?? null,
+  }
+}
+
 export function summarizeCredits(
   status: WalletStatus,
   modelId?: string
 ): CreditsSummary {
   const session = findSession(status, modelId)
   return {
-    modelId: session?.model_id || session?.ai_model || null,
-    displayName: session?.display_name || null,
+    ...summarizeSession(session ?? ({} as WalletSession)),
     active: hasActiveCredits(status, modelId),
-    timeRemainingSeconds: session?.time_remaining_seconds ?? 0,
-    timeCreditsSeconds: session?.time_credits_seconds ?? 0,
-    timeUsedSeconds: session?.time_used_seconds ?? 0,
-    tokenLimit: session?.token_limit ?? null,
   }
+}
+
+export function summarizeAllCredits(status: WalletStatus): CreditsSummary[] {
+  return getSessions(status).filter(Boolean).map(summarizeSession)
 }
 
 export { getWalletStatus }

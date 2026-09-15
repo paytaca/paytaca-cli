@@ -5,6 +5,7 @@ import {
   findSession,
   hasActiveCredits,
   summarizeCredits,
+  summarizeAllCredits,
 } from './credits.js'
 
 function status(sessions: WalletStatus[]): WalletStatus {
@@ -81,5 +82,26 @@ describe('summarizeCredits', () => {
       timeRemainingSeconds: 900,
       tokenLimit: 50000,
     })
+  })
+})
+
+describe('summarizeAllCredits', () => {
+  it('summarizes every session with its own active state', () => {
+    const summaries = summarizeAllCredits(status([active, expired]))
+    expect(summaries).toHaveLength(2)
+    expect(summaries[0]).toMatchObject({
+      modelId: 'z-ai/glm-5.3-flash',
+      active: true,
+      timeRemainingSeconds: 900,
+    })
+    expect(summaries[1]).toMatchObject({
+      modelId: 'deepseek/deepseek-v4-pro',
+      active: false,
+      timeRemainingSeconds: 0,
+    })
+  })
+
+  it('returns an empty array when there are no sessions', () => {
+    expect(summarizeAllCredits(status([]))).toEqual([])
   })
 })

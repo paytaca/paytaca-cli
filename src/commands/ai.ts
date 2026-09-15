@@ -29,6 +29,7 @@ import {
 } from '../ai/models.js'
 import {
   summarizeCredits,
+  summarizeAllCredits,
   getSessions,
   formatRemaining,
 } from '../ai/credits.js'
@@ -175,19 +176,34 @@ export function registerAiCommands(program: Command): void {
           modelId: opts.model,
         })
         if (opts.json) {
-          outputJson({ walletHash, ...summarizeCredits(status, opts.model) })
+          if (opts.model) {
+            outputJson({ walletHash, ...summarizeCredits(status, opts.model) })
+          } else {
+            outputJson({ walletHash, sessions: summarizeAllCredits(status) })
+          }
           return
         }
-        const summary = summarizeCredits(status, opts.model)
+        const summaries = opts.model
+          ? [summarizeCredits(status, opts.model)]
+          : summarizeAllCredits(status)
         console.log(chalk.bold('\n   AI Credits\n'))
-        console.log(`   Model:     ${summary.displayName || summary.modelId || '(none active)'}`)
-        console.log(`   Remaining: ${formatRemaining(summary.timeRemainingSeconds)}`)
-        console.log(`   Used:      ${formatRemaining(summary.timeUsedSeconds)}`)
-        console.log(`   Total:     ${formatRemaining(summary.timeCreditsSeconds)}`)
-        console.log(
-          `   Status:    ${summary.active ? chalk.green('active') : chalk.dim('inactive')}`
-        )
-        console.log()
+        if (summaries.length === 0) {
+          console.log(chalk.dim('   No sessions found.\n'))
+          return
+        }
+        for (const summary of summaries) {
+          console.log(
+            `   ${chalk.bold(summary.displayName || summary.modelId || 'unknown')}`
+          )
+          console.log(`     Model:     ${summary.modelId || '(unknown)'}`)
+          console.log(`     Remaining: ${formatRemaining(summary.timeRemainingSeconds)}`)
+          console.log(`     Used:      ${formatRemaining(summary.timeUsedSeconds)}`)
+          console.log(`     Total:     ${formatRemaining(summary.timeCreditsSeconds)}`)
+          console.log(
+            `     Status:    ${summary.active ? chalk.green('active') : chalk.dim('inactive')}`
+          )
+          console.log()
+        }
       } catch (err: any) {
         if (opts.json) outputJson({ error: err.message })
         else console.log(chalk.red(`\nError: ${err.message}\n`))
