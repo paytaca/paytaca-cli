@@ -68,6 +68,7 @@ export interface BuyPlanResult {
 
 const PLAN_PROBE_SAMPLES = 3
 const PLAN_PROBE_SPACING_MS = 500
+const PLAN_PROBE_PRICE_DRIFT_TOLERANCE = 0.05
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -104,11 +105,16 @@ export async function probePlanStability(
   }
 
   if (okSamples === PLAN_PROBE_SAMPLES && prices.length > 0) {
-    const first = prices[0]
-    if (prices.every((p) => p === first)) return
+    const min = Math.min(...prices)
+    const max = Math.max(...prices)
+    const drift = min > 0 ? (max - min) / min : max === min ? 0 : Infinity
+    if (drift <= PLAN_PROBE_PRICE_DRIFT_TOLERANCE) return
+    throw new Error(
+      `Backend plan price was unstable before purchase (${prices.join(', ')} sats). No payment was broadcast — please retry in a few seconds.`
+    )
   }
   throw new Error(
-    `Backend plan endpoint looked unstable before purchase (reachable ${okSamples}/${PLAN_PROBE_SAMPLES}${
+    `Backend plan endpoint was unreachable before purchase (reachable ${okSamples}/${PLAN_PROBE_SAMPLES}${
       lastError ? `, last error: ${lastError}` : ''
     }). No payment was broadcast — please retry in a few seconds.`
   )
