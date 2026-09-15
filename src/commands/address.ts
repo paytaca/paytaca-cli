@@ -24,7 +24,7 @@ export function registerAddressCommands(program: Command): void {
     .argument('[index]', 'Address index (default: 0)', '0')
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .option('--token', 'Show token-aware (z-prefix) addresses for CashTokens')
-    .action((_index, opts) => {
+    .action(async (_index, opts) => {
       const isChipnet = Boolean(opts.chipnet)
       const isToken = Boolean(opts.token)
       const index = parseInt(_index, 10)
@@ -50,6 +50,16 @@ export function registerAddressCommands(program: Command): void {
         ? bchWallet.getTokenAddressSetAt(index)
         : bchWallet.getAddressSetAt(index)
 
+      // ── Subscribe the address with Watchtower ───────────────────────
+      // The backend derives the token-aware variant automatically, so this
+      // covers both BCH and CashToken payments to the derived addresses.
+      let subscribed = false
+      try {
+        subscribed = Boolean(await bchWallet.getNewAddressSet(index))
+      } catch {
+        // Non-critical: deriving the address should still succeed
+      }
+
       const label = isToken ? 'Token address' : 'Address'
       console.log(chalk.bold(`\n   ${label} at index ${index} (${network})\n`))
       console.log(`   Receiving:  ${addressSet.receiving}`)
@@ -57,6 +67,11 @@ export function registerAddressCommands(program: Command): void {
       if (isToken) {
         console.log(chalk.dim('   Type:       token-aware (z-prefix)'))
       }
+      console.log(
+        subscribed
+          ? chalk.dim('   Watching:   subscribed with Watchtower')
+          : chalk.yellow('   Watching:   not subscribed (address may not be monitored)')
+      )
       console.log()
     })
 
