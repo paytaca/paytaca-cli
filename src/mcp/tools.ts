@@ -13,11 +13,13 @@ import {
 import { WalletNotConfiguredError } from '../core/context.js'
 import { loadWalletRef } from '../wallet/index.js'
 import { getConfig } from '../ai/client.js'
-import { listModels, listPlans } from '../ai/models.js'
+import { listModels, listPlans, selectModel } from '../ai/models.js'
 import {
   getWalletStatus,
   summarizeCredits,
   summarizeAllCredits,
+  buildPurchaseHint,
+  type PurchaseHint,
 } from '../ai/credits.js'
 import { buyPlan } from '../ai/purchase.js'
 import {
@@ -45,6 +47,19 @@ function fail(err: unknown): ToolResult {
   return { content: [{ type: 'text', text: message }], isError: true }
 }
 
+async function resolvePurchaseHint(
+  modelQuery: string | undefined,
+  backend: string | undefined
+): Promise<PurchaseHint | null> {
+  try {
+    const config = await getConfig({ backendUrl: backend })
+    const model = modelQuery ? selectModel(listModels(config), modelQuery) : null
+    return buildPurchaseHint(model)
+  } catch {
+    return null
+  }
+}
+
 const HELP = `Paytaca MCP tools
 
 Wallet (read):
@@ -67,6 +82,9 @@ Notes:
   - All tools accept an optional "chipnet" flag (default mainnet).
   - send and buy_plan spend real funds from the active wallet; the MCP host
     is responsible for asking the user for approval before invoking them.
+  - When get_credits reports an inactive session it includes a purchaseHint
+    with a copy-paste command (e.g. "paytaca ai purchase --model <id>
+    --minutes <n>") to relay to the user.
   - Wallet is resolved from the OS keychain (run "paytaca wallet create" first).`
 
 export function registerTools(
@@ -301,7 +319,7 @@ export function registerTools(
     {
       title: 'Get AI time credits',
       description:
-        'Return remaining Paytaca AI time credits for all models, or for one model when "model" is given.',
+        'Return remaining Paytaca AI time credits for all models, or for one model when "model" is given. When a session is inactive, includes a purchaseHint with a copy-paste command to buy more time.',
       inputSchema: {
         model: z.string().optional(),
         chipnet: z.boolean().optional(),
@@ -318,9 +336,24 @@ export function registerTools(
           backendUrl: backend,
         })
         if (!model) {
-          return json({ sessions: summarizeAllCredits(status) })
+          const sessions = summarizeAllCredits(status)
+          const payload: Record<string, unknown> = { sessions }
+          if (!sessions.some((s) => s.active)) {
+            const hint = await resolvePurchaseHint(
+              sessions[0]?.modelId ?? undefined,
+              backend
+            )
+            if (hint) payload.purchaseHint = hint
+          }
+          return json(payload)
         }
-        return json(summarizeCredits(status, model))
+        const summary = summarizeCredits(status, model)
+        const payload: Record<string, unknown> = { ...summary }
+        if (!summary.active) {
+          const hint = await resolvePurchaseHint(model, backend)
+          if (hint) payload.purchaseHint = hint
+        }
+        return json(payload)
       } catch (err) {
         return fail(err)
       }

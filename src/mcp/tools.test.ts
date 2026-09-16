@@ -45,16 +45,24 @@ vi.mock('../ai/client.js', () => ({
   getConfig: mocks.getConfig,
 }))
 
-vi.mock('../ai/models.js', () => ({
-  listModels: mocks.listModels,
-  listPlans: mocks.listPlans,
-}))
+vi.mock('../ai/models.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../ai/models.js')>()
+  return {
+    ...actual,
+    listModels: mocks.listModels,
+    listPlans: mocks.listPlans,
+  }
+})
 
-vi.mock('../ai/credits.js', () => ({
-  getWalletStatus: mocks.getWalletStatus,
-  summarizeCredits: mocks.summarizeCredits,
-  summarizeAllCredits: mocks.summarizeAllCredits,
-}))
+vi.mock('../ai/credits.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../ai/credits.js')>()
+  return {
+    ...actual,
+    getWalletStatus: mocks.getWalletStatus,
+    summarizeCredits: mocks.summarizeCredits,
+    summarizeAllCredits: mocks.summarizeAllCredits,
+  }
+})
 
 vi.mock('../ai/purchase.js', () => ({
   buyPlan: mocks.buyPlan,
@@ -282,6 +290,15 @@ describe('MCP tools', () => {
   })
 
   describe('get_credits', () => {
+    const model = {
+      id: 'm',
+      display_name: 'Model M',
+      price_tiers: [
+        { minutes: 60, price_sats: 1000, price_usd: 1 },
+        { minutes: 15, price_sats: 300, price_usd: 0.3 },
+      ],
+    }
+
     it('fails with a wallet-not-configured message when no wallet exists', async () => {
       mocks.loadWalletRef.mockReturnValue(null)
       const c = await connect()
@@ -294,27 +311,83 @@ describe('MCP tools', () => {
     it('summarizes all sessions when no model is given', async () => {
       mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
       mocks.getWalletStatus.mockResolvedValue({})
-      mocks.summarizeAllCredits.mockReturnValue([{ modelId: 'm' }])
+      mocks.summarizeAllCredits.mockReturnValue([{ modelId: 'm', active: true }])
       const c = await connect()
       const result = await c.callTool({ name: 'get_credits', arguments: {} })
       expect(mocks.getWalletStatus).toHaveBeenCalledWith('h', {
         modelId: undefined,
         backendUrl: undefined,
       })
-      expect(JSON.parse(text(result))).toEqual({ sessions: [{ modelId: 'm' }] })
+      expect(JSON.parse(text(result))).toEqual({
+        sessions: [{ modelId: 'm', active: true }],
+      })
     })
 
-    it('summarizes a single model when requested', async () => {
+    it('adds a purchase hint when every session is inactive', async () => {
       mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
       mocks.getWalletStatus.mockResolvedValue({})
-      mocks.summarizeCredits.mockReturnValue({ modelId: 'm' })
+      mocks.summarizeAllCredits.mockReturnValue([{ modelId: 'm', active: false }])
+      mocks.getConfig.mockResolvedValue({ models: [model] })
+      mocks.listModels.mockReturnValue([model])
+      const c = await connect()
+      const result = await c.callTool({ name: 'get_credits', arguments: {} })
+      const body = JSON.parse(text(result))
+      expect(body.sessions).toHaveLength(1)
+      expect(body.purchaseHint).toEqual({
+        model: 'm',
+        minutes: 15,
+        command: 'paytaca ai purchase --model m --minutes 15',
+      })
+    })
+
+    it('summarizes a single active model without a hint', async () => {
+      mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
+      mocks.getWalletStatus.mockResolvedValue({})
+      mocks.summarizeCredits.mockReturnValue({ modelId: 'm', active: true })
       const c = await connect()
       const result = await c.callTool({
         name: 'get_credits',
         arguments: { model: 'm' },
       })
       expect(mocks.summarizeCredits).toHaveBeenCalledWith({}, 'm')
-      expect(JSON.parse(text(result))).toEqual({ modelId: 'm' })
+      expect(JSON.parse(text(result))).toEqual({ modelId: 'm', active: true })
+    })
+
+    it('includes the copy-paste purchase command for an inactive model', async () => {
+      mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
+      mocks.getWalletStatus.mockResolvedValue({})
+      mocks.summarizeCredits.mockReturnValue({
+        modelId: 'm',
+        displayName: 'Model M',
+        active: false,
+      })
+      mocks.getConfig.mockResolvedValue({ models: [model] })
+      mocks.listModels.mockReturnValue([model])
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'get_credits',
+        arguments: { model: 'm' },
+      })
+      const body = JSON.parse(text(result))
+      expect(body.modelId).toBe('m')
+      expect(body.active).toBe(false)
+      expect(body.purchaseHint.command).toBe(
+        'paytaca ai purchase --model m --minutes 15'
+      )
+    })
+
+    it('omits the hint when the model has no plans', async () => {
+      mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
+      mocks.getWalletStatus.mockResolvedValue({})
+      mocks.summarizeCredits.mockReturnValue({ modelId: 'm', active: false })
+      mocks.getConfig.mockResolvedValue({ models: [] })
+      mocks.listModels.mockReturnValue([])
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'get_credits',
+        arguments: { model: 'm' },
+      })
+      expect(JSON.parse(text(result))).toEqual({ modelId: 'm', active: false })
     })
   })
 

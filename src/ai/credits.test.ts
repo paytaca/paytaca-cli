@@ -6,6 +6,7 @@ import {
   hasActiveCredits,
   summarizeCredits,
   summarizeAllCredits,
+  buildPurchaseHint,
 } from './credits.js'
 
 function status(sessions: WalletStatus[]): WalletStatus {
@@ -103,5 +104,36 @@ describe('summarizeAllCredits', () => {
 
   it('returns an empty array when there are no sessions', () => {
     expect(summarizeAllCredits(status([]))).toEqual([])
+  })
+})
+
+describe('buildPurchaseHint', () => {
+  const model = {
+    id: 'deepseek/deepseek-v4.1-flash',
+    price_tiers: [
+      { minutes: 60, price_sats: 5000, price_usd: 5 },
+      { minutes: 15, price_sats: 1200, price_usd: 1.2 },
+      { minutes: 30, price_sats: 2500, price_usd: 2.5 },
+    ],
+  }
+
+  it('picks the shortest plan and builds a copy-paste command', () => {
+    expect(buildPurchaseHint(model)).toEqual({
+      model: 'deepseek/deepseek-v4.1-flash',
+      minutes: 15,
+      command:
+        'paytaca ai purchase --model deepseek/deepseek-v4.1-flash --minutes 15',
+    })
+  })
+
+  it('returns null without a model', () => {
+    expect(buildPurchaseHint(null)).toBeNull()
+    expect(buildPurchaseHint(undefined)).toBeNull()
+    expect(buildPurchaseHint({ id: '', price_tiers: [] })).toBeNull()
+  })
+
+  it('returns null when there are no usable tiers', () => {
+    expect(buildPurchaseHint({ id: 'm', price_tiers: [] })).toBeNull()
+    expect(buildPurchaseHint({ id: 'm', price_tiers: [{ minutes: 0, price_sats: 0 }] })).toBeNull()
   })
 })

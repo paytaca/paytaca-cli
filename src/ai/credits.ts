@@ -1,4 +1,32 @@
-import { getWalletStatus, type WalletStatus, type WalletSession } from './client.js'
+import {
+  getWalletStatus,
+  type AiModelConfig,
+  type WalletStatus,
+  type WalletSession,
+} from './client.js'
+
+export interface PurchaseHint {
+  model: string
+  minutes: number
+  command: string
+}
+
+export function buildPurchaseHint(
+  model: Pick<AiModelConfig, 'id' | 'price_tiers'> | null | undefined
+): PurchaseHint | null {
+  if (!model || !model.id) return null
+  const tiers = Array.isArray(model.price_tiers) ? model.price_tiers : []
+  const sorted = tiers
+    .filter((t) => Number(t.minutes) > 0)
+    .sort((a, b) => Number(a.minutes) - Number(b.minutes))
+  if (sorted.length === 0) return null
+  const minutes = Number(sorted[0].minutes)
+  return {
+    model: model.id,
+    minutes,
+    command: `paytaca ai purchase --model ${model.id} --minutes ${minutes}`,
+  }
+}
 
 export interface CreditsSummary {
   modelId: string | null

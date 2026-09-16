@@ -205,6 +205,20 @@ Read-only wallets report credits from the shared wallet hash but can't buy plans
 
 Spending tools (`send`, `buy_plan`, `auto_refill`) require host-level approval. By default MCP operates on your **main wallet** and can spend real funds.
 
+When `get_credits` finds a model with no active session (e.g. after a `402` from the Paytaca AI provider), the result includes a `purchaseHint` with a copy-paste command so the agent can tell you how to top up:
+
+```json
+{
+  "modelId": "deepseek/deepseek-v4.1-flash",
+  "active": false,
+  "purchaseHint": {
+    "model": "deepseek/deepseek-v4.1-flash",
+    "minutes": 15,
+    "command": "paytaca ai purchase --model deepseek/deepseek-v4.1-flash --minutes 15"
+  }
+}
+```
+
 ### Nostr Chat
 
 End-to-end encrypted Nostr chat keyed from the wallet mnemonic (HD path `m/44'/1237'/0'/0/0`; keys are derived in memory and never stored). Conversation metadata (contacts, rooms, messages) is persisted at `~/.paytaca/chat-state.json`.
