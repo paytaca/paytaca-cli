@@ -10,7 +10,8 @@ import {
   sendToken,
   isValidBchAddress,
 } from '../core/wallet.js'
-import { requireWallet } from '../core/context.js'
+import { WalletNotConfiguredError } from '../core/context.js'
+import { loadWalletRef } from '../wallet/index.js'
 import { getConfig } from '../ai/client.js'
 import { listModels, listPlans } from '../ai/models.js'
 import {
@@ -310,8 +311,9 @@ export function registerTools(
     },
     async ({ model, chipnet, backend }) => {
       try {
-        const ctx = requireWallet(cn(chipnet))
-        const status = await getWalletStatus(ctx.walletHash, {
+        const wallet = loadWalletRef()
+        if (!wallet) throw new WalletNotConfiguredError()
+        const status = await getWalletStatus(wallet.walletHash, {
           modelId: model,
           backendUrl: backend,
         })

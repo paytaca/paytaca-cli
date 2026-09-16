@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import { createHash } from 'node:crypto'
+import { hexToBin, secp256k1 } from '@bitauth/libauth'
 import {
   parsePaymentRequiredJson,
   selectBchPaymentRequirements,
@@ -7,6 +9,7 @@ import {
   parsePaymentResponse,
   isBchNetwork,
   isChipnetNetwork,
+  signMessageBCH,
   BCH_MAINNET_NETWORK,
   BCH_CHIPNET_NETWORK,
   BCH_ASSET_ID,
@@ -244,6 +247,37 @@ describe('parsePaymentResponse', () => {
     const result = parsePaymentResponse(data)
     expect(result.isValid).toBe(false)
     expect(result.invalidReason).toBe('unknown_response_format')
+  })
+})
+
+describe('signMessageBCH', () => {
+  it('signs the Bitcoin Signed Message digest in the correct key order', () => {
+    const privateKey = new Uint8Array(32).fill(7)
+    const privateKeyHex = Buffer.from(privateKey).toString('hex')
+    const message = 'x402 payment'
+
+    const signature = signMessageBCH(message, privateKeyHex)
+
+    const prefix = '\x18Bitcoin Signed Message:\n'
+    const messageBytes = Buffer.from(message, 'utf8')
+    const prefixed = Buffer.concat([
+      Buffer.from(prefix, 'utf8'),
+      Buffer.from([messageBytes.length]),
+      messageBytes,
+    ])
+    const digest = createHash('sha256')
+      .update(createHash('sha256').update(prefixed).digest())
+      .digest()
+    const publicKey = secp256k1.derivePublicKeyCompressed(privateKey)
+    expect(typeof publicKey).not.toBe('string')
+    expect(
+      secp256k1.verifySignatureDER(
+        Buffer.from(signature, 'base64'),
+        publicKey as Uint8Array,
+        digest
+      )
+    ).toBe(true)
+    expect(hexToBin(privateKeyHex)).toEqual(privateKey)
   })
 })
 
