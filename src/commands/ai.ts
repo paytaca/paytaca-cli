@@ -88,6 +88,7 @@ function promptSecret(message: string): Promise<string> {
     let value = ''
     const finish = (result: string) => {
       stdin.removeListener('data', onData)
+      stdin.removeListener('end', onEnd)
       stdin.setRawMode?.(false)
       stdin.pause()
       process.stdout.write('\n')
@@ -110,7 +111,9 @@ function promptSecret(message: string): Promise<string> {
         value += char
       }
     }
+    const onEnd = () => finish(value)
     stdin.on('data', onData)
+    stdin.on('end', onEnd)
   })
 }
 

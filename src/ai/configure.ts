@@ -224,6 +224,7 @@ function appendToml(path: string, toml: string): void {
   mkdirSync(dirname(path), { recursive: true })
   const separator = existing && !existing.endsWith('\n') ? '\n\n' : existing ? '\n' : ''
   writeFileSync(path, existing + separator + toml, 'utf-8')
+  chmodSync(path, 0o600)
 }
 
 function buildPlanSuggestion(config: AiConfig): PlanSuggestion | undefined {

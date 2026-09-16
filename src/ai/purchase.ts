@@ -5,6 +5,7 @@ import {
   binToHex,
 } from '@cashlab/common/libauth.js'
 import { requireWallet, type WalletContext } from '../core/context.js'
+import { isValidBchAddress } from '../core/wallet.js'
 import { LibauthHDWallet } from '../wallet/keys.js'
 import { X402Payer } from '../wallet/x402.js'
 import {
@@ -516,6 +517,14 @@ export async function buyPlan(opts: BuyPlanOptions): Promise<BuyPlanResult> {
       txid = result.txid
       vout = result.vout
     } else {
+      if (!isValidBchAddress(requirements.payTo, isChipnet)) {
+        return {
+          success: false,
+          paid: false,
+          status: 402,
+          error: 'Server returned an invalid BCH payment address.',
+        }
+      }
       const amountBch = Number(requirements.amount) / 1e8
       const sendResult = await ctx.bch.sendBch(
         amountBch,
