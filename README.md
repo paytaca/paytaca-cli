@@ -4,7 +4,7 @@ A command-line interface for the Paytaca [Bitcoin Cash](https://bitcoincash.org)
 
 Bitcoin Cash is peer-to-peer electronic cash, enabling fast, low-fee transactions for everyday use. Paytaca CLI brings the full capabilities of the Paytaca wallet to the terminal — create wallets, derive addresses, send and receive BCH, manage CashTokens (fungible tokens and NFTs), swap tokens on the Cauldron DEX, pay x402 HTTP APIs, chat over Nostr, and view transaction history, all from the command line.
 
-Designed to be AI agent-friendly and useful for automation by power users. It ships an MCP server and a one-step installer for the Paytaca AI provider, plus installable agent skills.
+Designed to be AI agent-friendly and useful for automation by power users. It ships an MCP server and a one-step installer for the Paytaca AI provider.
 
 ## Requirements
 
@@ -204,21 +204,6 @@ Read-only wallets report credits from the shared wallet hash but can't buy plans
 **MCP tools:** wallet reads (`get_balance`, `get_transactions`, `get_receiving_address`, `get_tokens`, `send`) plus Paytaca AI (`get_models`, `get_plans`, `get_credits`, `buy_plan`, `auto_refill`, `get_help`).
 
 Spending tools (`send`, `buy_plan`, `auto_refill`) require host-level approval. By default MCP operates on your **main wallet** and can spend real funds.
-
-### Agent Skills
-
-Prebuilt skills teach an agent how to use the CLI safely. They live in [`.agents/skills`](.agents/skills) and can be installed into 45+ AI frameworks:
-
-```bash
-npx skills add paytaca/paytaca-cli --all
-npx skills add paytaca/paytaca-cli --skill paytaca-x402 -a opencode -g
-```
-
-| Skill | Purpose | Approval Needed |
-|-------|---------|------------------|
-| `paytaca-x402` | HTTP 402 payment handling | Yes (before payment) |
-| `paytaca-wallet` | Balance, addresses, history, token info | No (read-only) |
-| `paytaca-send` | Send BCH and CashTokens | Yes (before sending) |
 
 ### Nostr Chat
 
