@@ -205,7 +205,7 @@ Read-only wallets report credits from the shared wallet hash but can't buy plans
 
 Spending tools (`send`, `buy_plan`, `auto_refill`) require host-level approval. By default MCP operates on your **main wallet** and can spend real funds.
 
-When `get_credits` finds a model with no active session (e.g. after a `402` from the Paytaca AI provider), the result includes a `purchaseHint` with a copy-paste command so the agent can tell you how to top up:
+When `get_credits` finds a model with no active session (e.g. after a `402` from the Paytaca AI provider), the result includes a `purchaseHint`. Relay `purchaseHint.message` as-is — it carries the exact copy-paste top-up command (no upsell or follow-up questions needed):
 
 ```json
 {
@@ -214,7 +214,8 @@ When `get_credits` finds a model with no active session (e.g. after a `402` from
   "purchaseHint": {
     "model": "deepseek/deepseek-v4.1-flash",
     "minutes": 15,
-    "command": "paytaca ai purchase --model deepseek/deepseek-v4.1-flash --minutes 15"
+    "command": "paytaca ai purchase --model deepseek/deepseek-v4.1-flash --minutes 15",
+    "message": "To keep using DeepSeek V4.1 Flash, top up by running this in a terminal:\n\n    paytaca ai purchase --model deepseek/deepseek-v4.1-flash --minutes 15\n\n(Switch models with `paytaca ai plans`.)"
   }
 }
 ```

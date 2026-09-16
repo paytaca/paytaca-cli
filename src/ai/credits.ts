@@ -9,10 +9,16 @@ export interface PurchaseHint {
   model: string
   minutes: number
   command: string
+  message: string
 }
 
 export function buildPurchaseHint(
-  model: Pick<AiModelConfig, 'id' | 'price_tiers'> | null | undefined
+  model:
+    | (Pick<AiModelConfig, 'id' | 'price_tiers'> & {
+        display_name?: string | null
+      })
+    | null
+    | undefined
 ): PurchaseHint | null {
   if (!model || !model.id) return null
   const tiers = Array.isArray(model.price_tiers) ? model.price_tiers : []
@@ -21,10 +27,13 @@ export function buildPurchaseHint(
     .sort((a, b) => Number(a.minutes) - Number(b.minutes))
   if (sorted.length === 0) return null
   const minutes = Number(sorted[0].minutes)
+  const name = model.display_name || model.id
+  const command = `paytaca ai purchase --model ${model.id} --minutes ${minutes}`
   return {
     model: model.id,
     minutes,
-    command: `paytaca ai purchase --model ${model.id} --minutes ${minutes}`,
+    command,
+    message: `To keep using ${name}, top up by running this in a terminal:\n\n    ${command}\n\n(Switch models with \`paytaca ai plans\`.)`,
   }
 }
 

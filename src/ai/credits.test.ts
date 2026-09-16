@@ -118,12 +118,21 @@ describe('buildPurchaseHint', () => {
   }
 
   it('picks the shortest plan and builds a copy-paste command', () => {
-    expect(buildPurchaseHint(model)).toEqual({
+    const hint = buildPurchaseHint(model)
+    expect(hint).toMatchObject({
       model: 'deepseek/deepseek-v4.1-flash',
       minutes: 15,
       command:
         'paytaca ai purchase --model deepseek/deepseek-v4.1-flash --minutes 15',
     })
+    expect(hint?.message).toContain(
+      'paytaca ai purchase --model deepseek/deepseek-v4.1-flash --minutes 15'
+    )
+  })
+
+  it('uses the display name in the relay message', () => {
+    const hint = buildPurchaseHint({ ...model, display_name: 'DeepSeek V4.1 Flash' })
+    expect(hint?.message).toContain('DeepSeek V4.1 Flash')
   })
 
   it('returns null without a model', () => {

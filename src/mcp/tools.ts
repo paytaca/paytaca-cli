@@ -82,9 +82,9 @@ Notes:
   - All tools accept an optional "chipnet" flag (default mainnet).
   - send and buy_plan spend real funds from the active wallet; the MCP host
     is responsible for asking the user for approval before invoking them.
-  - When get_credits reports an inactive session it includes a purchaseHint
-    with a copy-paste command (e.g. "paytaca ai purchase --model <id>
-    --minutes <n>") to relay to the user.
+  - When get_credits reports an inactive session it includes a purchaseHint.
+    Relay purchaseHint.message (it contains the exact copy-paste command to
+    buy more time); do not replace it with upsell or "what next" questions.
   - Wallet is resolved from the OS keychain (run "paytaca wallet create" first).`
 
 export function registerTools(
@@ -319,7 +319,7 @@ export function registerTools(
     {
       title: 'Get AI time credits',
       description:
-        'Return remaining Paytaca AI time credits for all models, or for one model when "model" is given. When a session is inactive, includes a purchaseHint with a copy-paste command to buy more time.',
+        'Return remaining Paytaca AI time credits for all models, or for one model when "model" is given. When a session is inactive, includes a purchaseHint whose "message" is the exact text to relay to the user (a copy-paste top-up command) instead of upsell or follow-up questions.',
       inputSchema: {
         model: z.string().optional(),
         chipnet: z.boolean().optional(),

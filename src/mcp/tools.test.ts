@@ -337,6 +337,8 @@ describe('MCP tools', () => {
         model: 'm',
         minutes: 15,
         command: 'paytaca ai purchase --model m --minutes 15',
+        message:
+          'To keep using Model M, top up by running this in a terminal:\n\n    paytaca ai purchase --model m --minutes 15\n\n(Switch models with `paytaca ai plans`.)',
       })
     })
 
