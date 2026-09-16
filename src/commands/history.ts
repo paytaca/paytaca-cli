@@ -10,33 +10,10 @@
 
 import { Command } from 'commander'
 import chalk from 'chalk'
-import { loadWallet, loadMnemonic } from '../wallet/index.js'
+import { WalletNotConfiguredError } from '../core/context.js'
+import { getHistoryView } from '../core/wallet.js'
+import { bchToSats, formatDate, shortTxid } from '../utils/format.js'
 import { formatUsd } from '../utils/prices.js'
-
-/** Convert BCH to satoshis (1 BCH = 100,000,000 sats) */
-function bchToSats(bch: number): number {
-  return Math.round(bch * 1e8)
-}
-
-/** Format a date string to a concise local representation */
-function formatDate(isoDate: string): string {
-  const d = new Date(isoDate)
-  if (isNaN(d.getTime())) return isoDate
-  return d.toLocaleString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  })
-}
-
-/** Truncate a txid for display */
-function shortTxid(txid: string): string {
-  if (txid.length <= 20) return txid
-  return txid.slice(0, 10) + '...' + txid.slice(-10)
-}
 
 export function registerHistoryCommand(program: Command): void {
   program
@@ -51,9 +28,11 @@ export function registerHistoryCommand(program: Command): void {
     )
     .option('--token <id>', 'Filter by CashToken category ID (64-character hex)')
     .option('--sats', 'Display amounts in satoshis')
+    .option('--json', 'Output as JSON')
     .action(async (opts) => {
       const isChipnet = Boolean(opts.chipnet)
       const showSats = Boolean(opts.sats)
+      const asJson = Boolean(opts.json)
       const network = isChipnet ? 'chipnet' : 'mainnet'
       const page = parseInt(opts.page, 10)
       const recordType: string = opts.type
@@ -78,62 +57,26 @@ export function registerHistoryCommand(program: Command): void {
         process.exit(1)
       }
 
-      // ── Validate wallet ──────────────────────────────────────────────
-      const data = loadMnemonic()
-      if (!data) {
-        console.log(
-          chalk.red(
-            '\nNo wallet found. Run `paytaca wallet create` or `paytaca wallet import` first.\n'
-          )
-        )
-        process.exit(1)
-      }
-
-      const w = loadWallet()!
-      const bchWallet = w.forNetwork(isChipnet)
-
-      // Resolve token label for header
-      let headerLabel = 'Transaction History'
-      if (tokenId) {
-        try {
-          const info = await bchWallet.getTokenInfo(tokenId)
-          if (info?.symbol) {
-            headerLabel = `${info.symbol} Transaction History`
-          } else if (info?.name && info.name !== 'Unknown Token') {
-            headerLabel = `${info.name} Transaction History`
-          } else {
-            headerLabel = `Token Transaction History`
-          }
-        } catch {
-          headerLabel = 'Token Transaction History'
-        }
-      }
-
-      console.log(chalk.bold(`\n   ${headerLabel} (${network})\n`))
-
-      if (tokenId) {
-        console.log(chalk.dim(`   Category: ${tokenId}\n`))
-      }
-
       try {
-        const result = await bchWallet.getHistory({ page, recordType, tokenId })
+        const view = await getHistoryView({ page, recordType, tokenId }, isChipnet)
 
-        if (!result.history || result.history.length === 0) {
+        if (asJson) {
+          console.log(JSON.stringify(view, null, 2))
+          return
+        }
+
+        console.log(chalk.bold(`\n   ${view.headerLabel} (${network})\n`))
+        if (tokenId) console.log(chalk.dim(`   Category: ${tokenId}\n`))
+
+        if (view.records.length === 0) {
           console.log(chalk.dim('   No transactions found.\n'))
           return
         }
 
-        const explorer = isChipnet
-          ? 'https://chipnet.chaingraph.cash/tx/'
-          : 'https://bchexplorer.info/tx/'
-
-        for (const tx of result.history) {
+        for (const tx of view.records) {
           const isIncoming = tx.record_type === 'incoming'
-          const arrow = isIncoming
-            ? chalk.green('  IN')
-            : chalk.red(' OUT')
+          const arrow = isIncoming ? chalk.green('  IN') : chalk.red(' OUT')
 
-          // When filtering by token, the amount is the token amount (not BCH)
           const amount = tokenId
             ? `${tx.amount}`
             : showSats
@@ -141,18 +84,22 @@ export function registerHistoryCommand(program: Command): void {
               : `${tx.amount} BCH`
 
           let usdSuffix = ''
-          if (!tokenId && typeof tx.usd_price === 'number' && tx.usd_price > 0 && tx.amount != null) {
+          if (
+            !tokenId &&
+            typeof tx.usd_price === 'number' &&
+            tx.usd_price > 0 &&
+            tx.amount != null
+          ) {
             const usdValue = tx.amount * tx.usd_price
-            if (usdValue > 0) {
-              usdSuffix = chalk.dim(` | ≈ ${formatUsd(usdValue)}`)
-            }
+            if (usdValue > 0) usdSuffix = chalk.dim(` | ≈ ${formatUsd(usdValue)}`)
           }
 
-          const amountColored = (isIncoming
-            ? chalk.green(`+${amount}`)
-            : chalk.red(`-${amount}`)) + usdSuffix
-
+          const amountColored =
+            (isIncoming ? chalk.green(`+${amount}`) : chalk.red(`-${amount}`)) + usdSuffix
           const date = formatDate(tx.tx_timestamp || tx.date_created)
+          const explorer = isChipnet
+            ? 'https://chipnet.bchexplorer.info/tx/'
+            : 'https://bchexplorer.info/tx/'
 
           console.log(`   ${arrow}  ${amountColored}`)
           console.log(chalk.dim(`         ${date}`))
@@ -161,18 +108,25 @@ export function registerHistoryCommand(program: Command): void {
           console.log()
         }
 
-        // ── Pagination info ────────────────────────────────────────────
-        const pageNum = parseInt(result.page, 10) || page
         const tokenFlag = tokenId ? ` --token ${tokenId}` : ''
         console.log(
           chalk.dim(
-            `   Page ${pageNum} of ${result.num_pages}` +
-              (result.has_next
-                ? `  —  next: paytaca history --page ${pageNum + 1}${tokenFlag}${isChipnet ? ' --chipnet' : ''}`
+            `   Page ${view.page} of ${view.numPages}` +
+              (view.hasNext
+                ? `  —  next: paytaca history --page ${view.page + 1}${tokenFlag}${isChipnet ? ' --chipnet' : ''}`
                 : '')
           )
         )
+        console.log()
       } catch (err: any) {
+        if (asJson) {
+          console.log(JSON.stringify({ error: err.message || String(err) }, null, 2))
+          process.exit(1)
+        }
+        if (err instanceof WalletNotConfiguredError) {
+          console.log(chalk.red(`\n${err.message}\n`))
+          process.exit(1)
+        }
         const status = err?.response?.status
         if (status === 404) {
           console.log(
@@ -186,13 +140,10 @@ export function registerHistoryCommand(program: Command): void {
             )
           )
         } else {
-          console.log(
-            chalk.red(`   Error fetching history: ${err.message || err}`)
-          )
+          console.log(chalk.red(`   Error fetching history: ${err.message || err}`))
           process.exit(1)
         }
+        console.log()
       }
-
-      console.log()
     })
 }

@@ -10,7 +10,7 @@
 
 import { Command } from 'commander'
 import chalk from 'chalk'
-import { loadWallet, loadMnemonic } from '../wallet/index.js'
+import { WalletNotConfiguredError, resolveNetwork, requireWallet } from '../core/context.js'
 
 export function registerAddressCommands(program: Command): void {
   const address = program
@@ -24,9 +24,11 @@ export function registerAddressCommands(program: Command): void {
     .argument('[index]', 'Address index (default: 0)', '0')
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .option('--token', 'Show token-aware (z-prefix) addresses for CashTokens')
+    .option('--json', 'Output as JSON')
     .action(async (_index, opts) => {
       const isChipnet = Boolean(opts.chipnet)
       const isToken = Boolean(opts.token)
+      const asJson = Boolean(opts.json)
       const index = parseInt(_index, 10)
 
       if (isNaN(index) || index < 0) {
@@ -34,45 +36,61 @@ export function registerAddressCommands(program: Command): void {
         process.exit(1)
       }
 
-      const data = loadMnemonic()
-      if (!data) {
+      try {
+        const ctx = requireWallet(isChipnet)
+        const network = resolveNetwork(isChipnet).network
+        const addressSet = isToken
+          ? ctx.bch.getTokenAddressSetAt(index)
+          : ctx.bch.getAddressSetAt(index)
+
+        let subscribed = false
+        try {
+          subscribed = Boolean(await ctx.bch.getNewAddressSet(index))
+        } catch {
+          // Non-critical
+        }
+
+        if (asJson) {
+          console.log(
+            JSON.stringify(
+              {
+                network,
+                index,
+                token: isToken,
+                receiving: addressSet.receiving,
+                change: addressSet.change,
+                subscribed,
+              },
+              null,
+              2
+            )
+          )
+          return
+        }
+
+        const label = isToken ? 'Token address' : 'Address'
+        console.log(chalk.bold(`\n   ${label} at index ${index} (${network})\n`))
+        console.log(`   Receiving:  ${addressSet.receiving}`)
+        console.log(chalk.dim(`   Change:     ${addressSet.change}`))
+        if (isToken) console.log(chalk.dim('   Type:       token-aware (z-prefix)'))
         console.log(
-          chalk.red('\nNo wallet found. Run `paytaca wallet create` or `paytaca wallet import` first.\n')
+          subscribed
+            ? chalk.dim('   Watching:   subscribed with Watchtower')
+            : chalk.yellow('   Watching:   not subscribed (address may not be monitored)')
         )
+        console.log()
+      } catch (err: any) {
+        if (asJson) {
+          console.log(JSON.stringify({ error: err.message || String(err) }, null, 2))
+          process.exit(1)
+        }
+        if (err instanceof WalletNotConfiguredError) {
+          console.log(chalk.red(`\n${err.message}\n`))
+          process.exit(1)
+        }
+        console.log(chalk.red(`\n   Error: ${err.message || err}\n`))
         process.exit(1)
       }
-
-      const w = loadWallet()!
-      const bchWallet = w.forNetwork(isChipnet)
-      const network = isChipnet ? 'chipnet' : 'mainnet'
-
-      const addressSet = isToken
-        ? bchWallet.getTokenAddressSetAt(index)
-        : bchWallet.getAddressSetAt(index)
-
-      // ── Subscribe the address with Watchtower ───────────────────────
-      // The backend derives the token-aware variant automatically, so this
-      // covers both BCH and CashToken payments to the derived addresses.
-      let subscribed = false
-      try {
-        subscribed = Boolean(await bchWallet.getNewAddressSet(index))
-      } catch {
-        // Non-critical: deriving the address should still succeed
-      }
-
-      const label = isToken ? 'Token address' : 'Address'
-      console.log(chalk.bold(`\n   ${label} at index ${index} (${network})\n`))
-      console.log(`   Receiving:  ${addressSet.receiving}`)
-      console.log(chalk.dim(`   Change:     ${addressSet.change}`))
-      if (isToken) {
-        console.log(chalk.dim('   Type:       token-aware (z-prefix)'))
-      }
-      console.log(
-        subscribed
-          ? chalk.dim('   Watching:   subscribed with Watchtower')
-          : chalk.yellow('   Watching:   not subscribed (address may not be monitored)')
-      )
-      console.log()
     })
 
   // ── address list ───────────────────────────────────────────────────────
@@ -82,9 +100,11 @@ export function registerAddressCommands(program: Command): void {
     .option('-n, --count <count>', 'Number of addresses to derive', '5')
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .option('--token', 'Show token-aware (z-prefix) addresses for CashTokens')
+    .option('--json', 'Output as JSON')
     .action((_opts) => {
       const isChipnet = Boolean(_opts.chipnet)
       const isToken = Boolean(_opts.token)
+      const asJson = Boolean(_opts.json)
       const count = parseInt(_opts.count, 10)
 
       if (isNaN(count) || count < 1) {
@@ -92,34 +112,48 @@ export function registerAddressCommands(program: Command): void {
         process.exit(1)
       }
 
-      const data = loadMnemonic()
-      if (!data) {
-        console.log(
-          chalk.red('\nNo wallet found. Run `paytaca wallet create` or `paytaca wallet import` first.\n')
-        )
+      try {
+        const ctx = requireWallet(isChipnet)
+        const network = resolveNetwork(isChipnet).network
+
+        const addresses = []
+        for (let i = 0; i < count; i++) {
+          const addressSet = isToken
+            ? ctx.bch.getTokenAddressSetAt(i)
+            : ctx.bch.getAddressSetAt(i)
+          addresses.push({
+            index: i,
+            receiving: addressSet.receiving,
+            change: addressSet.change,
+          })
+        }
+
+        if (asJson) {
+          console.log(JSON.stringify({ network, token: isToken, addresses }, null, 2))
+          return
+        }
+
+        const typeLabel = isToken ? 'Token Addresses' : 'Addresses'
+        console.log(chalk.bold(`\n   ${typeLabel} (${network})\n`))
+        console.log(chalk.dim(`   ${'Index'.padEnd(8)}${'Receiving Address'}`))
+        console.log(chalk.dim(`   ${'─'.repeat(70)}`))
+
+        for (const a of addresses) {
+          console.log(`   ${String(a.index).padEnd(8)}${a.receiving}`)
+        }
+
+        console.log()
+      } catch (err: any) {
+        if (asJson) {
+          console.log(JSON.stringify({ error: err.message || String(err) }, null, 2))
+          process.exit(1)
+        }
+        if (err instanceof WalletNotConfiguredError) {
+          console.log(chalk.red(`\n${err.message}\n`))
+          process.exit(1)
+        }
+        console.log(chalk.red(`\n   Error: ${err.message || err}\n`))
         process.exit(1)
       }
-
-      const w = loadWallet()!
-      const bchWallet = w.forNetwork(isChipnet)
-      const network = isChipnet ? 'chipnet' : 'mainnet'
-
-      const typeLabel = isToken ? 'Token Addresses' : 'Addresses'
-      console.log(chalk.bold(`\n   ${typeLabel} (${network})\n`))
-      console.log(
-        chalk.dim(
-          `   ${'Index'.padEnd(8)}${'Receiving Address'}`
-        )
-      )
-      console.log(chalk.dim(`   ${'─'.repeat(70)}`))
-
-      for (let i = 0; i < count; i++) {
-        const addressSet = isToken
-          ? bchWallet.getTokenAddressSetAt(i)
-          : bchWallet.getAddressSetAt(i)
-        console.log(`   ${String(i).padEnd(8)}${addressSet.receiving}`)
-      }
-
-      console.log()
     })
 }

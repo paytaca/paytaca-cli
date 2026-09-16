@@ -100,6 +100,31 @@ export function loadMnemonic(): {
   return { mnemonic, walletHash }
 }
 
+export interface WalletRef {
+  walletHash: string
+  mnemonic?: string
+  canSign: boolean
+}
+
+/**
+ * Load a reference to the active wallet without requiring a signing mnemonic.
+ *
+ * Full wallets have both a wallet hash and a mnemonic; read-only wallets only
+ * have the wallet hash. Callers that must sign should reject `canSign === false`,
+ * while read-only flows can still use the hash.
+ */
+export function loadWalletRef(): WalletRef | null {
+  const walletHash = getActiveWallet()
+  if (!walletHash) return null
+
+  const mnemonic = keychainGetMnemonic(walletHash)
+  return {
+    walletHash,
+    mnemonic: mnemonic ?? undefined,
+    canSign: Boolean(mnemonic),
+  }
+}
+
 /**
  * High-level wallet class that provides access to BCH sub-wallets.
  *

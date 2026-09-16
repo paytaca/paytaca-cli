@@ -173,7 +173,7 @@ async function runPayHuman(
 
     if (result.payment?.required && result.payment.txid) {
       const explorer = isChipnet
-        ? 'https://chipnet.chaingraph.cash/tx/'
+        ? 'https://chipnet.bchexplorer.info/tx/'
         : 'https://bchexplorer.info/tx/'
       console.log(chalk.dim(`   Payment txid: ${explorer}${result.payment.txid}`))
       if (result.payment.recipientAddress) {

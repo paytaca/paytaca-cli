@@ -135,7 +135,7 @@ export function signMessageBCH(
   const prefixedMessage = Buffer.concat([prefixBytes, lengthByte, messageBytes])
   const hash = crypto.createHash('sha256').update(crypto.createHash('sha256').update(prefixedMessage).digest()).digest()
   const privateKey = Buffer.from(privateKeyHex, 'hex')
-  const signature = secp256k1.signMessageHashDER(hash, privateKey)
+  const signature = secp256k1.signMessageHashDER(privateKey, hash)
   return Buffer.from(signature).toString('base64')
 }
 
