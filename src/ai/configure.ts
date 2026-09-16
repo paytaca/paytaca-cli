@@ -4,7 +4,7 @@
  * after `paytaca ai configure`.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { CLIENTS, buildTemplate, type ClientTemplate, type McpClient } from '../commands/mcp.js'
 import { WalletNotConfiguredError } from '../core/context.js'
@@ -214,7 +214,8 @@ function readJson(path: string): Record<string, unknown> {
 
 function writeJsonFile(path: string, value: Record<string, unknown>): void {
   mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, JSON.stringify(value, null, 2) + '\n', 'utf-8')
+  writeFileSync(path, JSON.stringify(value, null, 2) + '\n', { encoding: 'utf-8', mode: 0o600 })
+  chmodSync(path, 0o600)
 }
 
 function appendToml(path: string, toml: string): void {

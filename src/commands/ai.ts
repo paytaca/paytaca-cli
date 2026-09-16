@@ -8,7 +8,7 @@
 import { Command } from 'commander'
 import chalk from 'chalk'
 import readline from 'readline'
-import { requireWallet } from '../core/context.js'
+import { WalletNotConfiguredError } from '../core/context.js'
 import { loadWalletRef } from '../wallet/index.js'
 import { getBalanceView, getTokenBalances } from '../core/wallet.js'
 import { formatSats, bchToSats } from '../utils/format.js'
@@ -49,9 +49,9 @@ function outputJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2))
 }
 
-async function loadConfigOrExit(opts: { backendUrl?: string; json?: boolean }): Promise<AiConfig | null> {
+async function loadConfigOrExit(opts: { backend?: string; json?: boolean }): Promise<AiConfig | null> {
   try {
-    return await getConfig({ backendUrl: opts.backendUrl })
+    return await getConfig({ backendUrl: opts.backend })
   } catch (err: any) {
     const message = err?.message || String(err)
     if (opts.json) outputJson({ error: message })
@@ -391,18 +391,18 @@ export function registerAiCommands(program: Command): void {
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .option('--json', 'Output as JSON')
     .action(async (opts) => {
-      let walletHash: string
-      try {
-        walletHash = requireWallet(Boolean(opts.chipnet)).walletHash
-      } catch (err: any) {
+      const wallet = loadWalletRef()
+      if (!wallet) {
+        const err = new WalletNotConfiguredError()
         if (opts.json) outputJson({ error: err.message })
         else console.log(chalk.red(`\n${err.message}\n`))
         process.exitCode = 1
         return
       }
+      const walletHash = wallet.walletHash
       try {
         const status = await getWalletStatus(walletHash, {
-          backendUrl: opts.backendUrl,
+          backendUrl: opts.backend,
           modelId: opts.model,
         })
         if (opts.json) {
@@ -448,17 +448,17 @@ export function registerAiCommands(program: Command): void {
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .option('--json', 'Output as JSON')
     .action(async (opts) => {
-      let walletHash: string
-      try {
-        walletHash = requireWallet(Boolean(opts.chipnet)).walletHash
-      } catch (err: any) {
+      const wallet = loadWalletRef()
+      if (!wallet) {
+        const err = new WalletNotConfiguredError()
         if (opts.json) outputJson({ error: err.message })
         else console.log(chalk.red(`\n${err.message}\n`))
         process.exitCode = 1
         return
       }
+      const walletHash = wallet.walletHash
       try {
-        const status = await getWalletStatus(walletHash, { backendUrl: opts.backendUrl })
+        const status = await getWalletStatus(walletHash, { backendUrl: opts.backend })
         const sessions = getSessions(status).map((s) => ({
           model: s.model_id || s.ai_model || null,
           displayName: s.display_name || null,
@@ -627,7 +627,7 @@ export function registerAiCommands(program: Command): void {
         minutes: tier.minutes,
         paymentMethod,
         isChipnet: Boolean(opts.chipnet),
-        backendUrl: opts.backendUrl,
+        backendUrl: opts.backend,
         confirmed: true,
       })
 
@@ -670,11 +670,23 @@ export function registerAiCommands(program: Command): void {
     .option('--json', 'Output as JSON')
     .action((opts) => {
       if (opts.enable) {
+        const minutes = opts.minutes !== undefined ? Number(opts.minutes) : undefined
+        const maxMinutes =
+          opts.maxMinutes !== undefined ? Number(opts.maxMinutes) : undefined
+        const badMinutes = minutes !== undefined && (!Number.isFinite(minutes) || minutes <= 0)
+        const badMaxMinutes =
+          maxMinutes !== undefined && (!Number.isFinite(maxMinutes) || maxMinutes <= 0)
+        if (badMinutes || badMaxMinutes) {
+          const message = '--minutes and --max-minutes must be positive numbers.'
+          if (opts.json) outputJson({ error: message })
+          else console.log(chalk.red(`\nError: ${message}\n`))
+          process.exitCode = 1
+          return
+        }
         const state = armAutoRefill({
           model: opts.model,
-          minutes: opts.minutes !== undefined ? Number(opts.minutes) : undefined,
-          maxMinutes:
-            opts.maxMinutes !== undefined ? Number(opts.maxMinutes) : undefined,
+          minutes,
+          maxMinutes,
           paymentMethod: opts.lift ? 'lift' : 'bch',
         })
         if (opts.json) outputJson(state)
