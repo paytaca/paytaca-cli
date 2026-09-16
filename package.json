@@ -21,6 +21,7 @@
     "clean": "rm -rf dist",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "prepublishOnly": "npm run clean && npm run build"
   },
   "keywords": [
@@ -55,6 +56,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/qrcode-terminal": "^0.12.2",
+    "@vitest/coverage-v8": "^4.1.2",
     "@vitest/ui": "^4.1.2",
     "typescript": "^5.9.3",
     "vitest": "^4.1.2"

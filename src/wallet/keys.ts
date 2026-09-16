@@ -92,6 +92,7 @@ export class LibauthHDWallet {
   getNodeAt(path: string = ''): HdPrivateNodeValid {
     if (!path?.startsWith('m/') && !path.startsWith('M/')) path = 'm/' + path
     if (!path?.startsWith('m') && !path.startsWith('M')) path = 'm' + path
+    if (path.startsWith('M')) path = 'm' + path.slice(1)
     const mainNode = this.getMainNode()
     const node = deriveHdPath(mainNode, path)
     if (typeof node === 'string') throw new Error(node)
