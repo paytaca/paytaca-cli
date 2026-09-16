@@ -146,19 +146,30 @@ paytaca pay https://api.example.com/v1/complete --method POST --body '{"prompt":
 # → Handles 402 → pays → returns response
 ```
 
-### AI Agent Integration (MCP)
+### AI Agent Integration (MCP + Paytaca AI)
 
-Paytaca CLI exposes its capabilities to AI agents over the Model Context Protocol (MCP). Add it to your MCP client:
+Configure an AI harness in one step. This installs the Paytaca MCP server and, for opencode, also the Paytaca AI provider (model catalogue + API key) so the Paytaca AI models are usable immediately:
 
 ```bash
-paytaca mcp config --client opencode   # claude | opencode | cursor | codex | pi
+paytaca ai configure opencode   # claude | opencode | cursor | codex | pi | generic
 ```
 
-Then run the server over stdio:
+The command creates a wallet-bound API key against the Paytaca AI backend, writes the provider (base URL, models, key) and MCP server into the harness config, then checks your AI credits and offers to buy a plan when none are active.
+
+Re-running is idempotent: an existing provider API key is reused. Then run the server over stdio:
 
 ```bash
 paytaca mcp
 ```
+
+**Read-only wallets:** if the active wallet cannot sign (no seed phrase in the keychain), `ai configure` asks for an API key instead of creating one. Generate it from your full wallet and hand it over:
+
+```bash
+paytaca ai api-key create                          # full wallet: prints sk-pytc-… once
+paytaca ai configure opencode --api-key sk-pytc-…  # read-only wallet
+```
+
+Read-only wallets report credits from the shared wallet hash but can't buy plans — fund credits from the full wallet.
 
 **MCP tools:** wallet reads (`get_balance`, `get_transactions`, `get_receiving_address`, `get_tokens`, `send`) plus Paytaca AI (`get_models`, `get_plans`, `get_credits`, `buy_plan`, `auto_refill`, `get_help`).
 
@@ -213,6 +224,10 @@ src/
     x402.ts          x402 header parsing, payment requirement selection
   types/
     x402.ts          x402 payment types (PaymentRequired, PaymentPayload, etc.)
+  ai/
+    client.ts        Paytaca AI backend client (config, wallet status, chat)
+    oauth.ts         BCH OAuth challenge -> access token -> API key
+    configure.ts     Harness setup (MCP + Paytaca AI provider + credits offer)
 ```
 
 ## Key Dependencies

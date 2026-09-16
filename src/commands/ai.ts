@@ -9,6 +9,7 @@ import { Command } from 'commander'
 import chalk from 'chalk'
 import readline from 'readline'
 import { requireWallet } from '../core/context.js'
+import { loadWalletRef } from '../wallet/index.js'
 import { getBalanceView, getTokenBalances } from '../core/wallet.js'
 import { formatSats, bchToSats } from '../utils/format.js'
 import { formatUsd } from '../utils/prices.js'
@@ -34,6 +35,9 @@ import {
   formatRemaining,
 } from '../ai/credits.js'
 import { buyPlan, type PaymentMethod } from '../ai/purchase.js'
+import { provisionApiKey } from '../ai/oauth.js'
+import { configureHarness, type ConfigureResult } from '../ai/configure.js'
+import { CLIENTS, type McpClient } from './mcp.js'
 import {
   armAutoRefill,
   disarmAutoRefill,
@@ -70,6 +74,46 @@ async function promptConfirmation(message: string): Promise<boolean> {
   })
 }
 
+function promptSecret(message: string): Promise<string> {
+  if (!process.stdin.isTTY) {
+    return Promise.reject(new Error('A terminal is required to enter the API key.'))
+  }
+  process.stdout.write(chalk.bold(`\n   ${message}: `))
+  const stdin = process.stdin as NodeJS.ReadStream & { setRawMode?: (mode: boolean) => void }
+  stdin.setRawMode?.(true)
+  stdin.resume()
+  stdin.setEncoding('utf8')
+
+  return new Promise((resolve) => {
+    let value = ''
+    const finish = (result: string) => {
+      stdin.removeListener('data', onData)
+      stdin.setRawMode?.(false)
+      stdin.pause()
+      process.stdout.write('\n')
+      resolve(result)
+    }
+    const onData = (chunk: string) => {
+      for (const char of chunk) {
+        if (char === '\r' || char === '\n') {
+          finish(value)
+          return
+        }
+        if (char === '\u0003') {
+          finish('')
+          process.exit(130)
+        }
+        if (char === '\u007f' || char === '\b') {
+          value = value.slice(0, -1)
+          continue
+        }
+        value += char
+      }
+    }
+    stdin.on('data', onData)
+  })
+}
+
 function printPlanGroups(config: AiConfig, modelQuery?: string): void {
   const groups = listPlans(config, modelQuery)
   if (groups.length === 0) {
@@ -94,6 +138,192 @@ function printPlanGroups(config: AiConfig, modelQuery?: string): void {
 
 export function registerAiCommands(program: Command): void {
   const ai = program.command('ai').description('Paytaca AI: models, plans, credits, purchase')
+
+  // ── ai configure ────────────────────────────────────────────────────
+  ai.command('configure')
+    .description('Install the Paytaca MCP + AI provider into an AI harness')
+    .argument('[harness]', `Target harness: ${CLIENTS.join(', ')}`, 'opencode')
+    .option('--backend <url>', 'Override backend URL')
+    .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
+    .option('--path <path>', 'Override the target config file path')
+    .option('--api-key <key>', 'Use an existing Paytaca API key (required for read-only wallets)')
+    .option('-y, --yes', 'Buy a plan without prompting when no credits are active')
+    .option('--json', 'Output as JSON')
+    .action(async (harnessArg: string | undefined, opts) => {
+      const harness = String(harnessArg || 'opencode').toLowerCase() as McpClient
+      const json = Boolean(opts.json)
+      const interactive =
+        !json && Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY)
+
+      const requestApiKey = async (): Promise<string | null> => {
+        console.log(chalk.yellow('\n   This wallet is read-only; an API key is required.'))
+        console.log(
+          chalk.dim('   Create one from your full wallet: paytaca ai api-key create')
+        )
+        const entered = await promptSecret('Paste your Paytaca API key')
+        return entered.trim() || null
+      }
+
+      let result: ConfigureResult
+      try {
+        result = await configureHarness({
+          harness,
+          chipnet: Boolean(opts.chipnet),
+          backendUrl: opts.backend,
+          path: opts.path,
+          apiKey: opts.apiKey,
+          requestApiKey: interactive ? requestApiKey : undefined,
+        })
+      } catch (err: any) {
+        if (json) outputJson({ error: err.message })
+        else console.log(chalk.red(`\nError: ${err.message}\n`))
+        process.exitCode = 1
+        return
+      }
+
+      let purchased: Awaited<ReturnType<typeof buyPlan>> | null = null
+
+      if (!json && result.canSign && !result.creditsActive && result.planSuggestion) {
+        const plan = result.planSuggestion
+        const proceed =
+          Boolean(opts.yes) ||
+          (await promptConfirmation(
+            `No active AI credits. Buy a ${plan.minutes}-minute plan for ${plan.displayName} (${formatPriceUsd(plan.priceUsd)})?`
+          ))
+        if (proceed) {
+          purchased = await buyPlan({
+            model: plan.modelId,
+            minutes: plan.minutes,
+            paymentMethod: 'bch',
+            isChipnet: Boolean(opts.chipnet),
+            backendUrl: opts.backend,
+            confirmed: true,
+          })
+        }
+      }
+
+      if (json) {
+        outputJson({ ...result, purchased })
+        if (!result.mcpInstalled || result.providerError) process.exitCode = 1
+        return
+      }
+
+      console.log(chalk.bold(`\n   Paytaca AI — ${result.harness}\n`))
+      if (result.path) console.log(`   Config:   ${result.path}`)
+      console.log(
+        `   MCP:      ${result.mcpInstalled ? chalk.green('configured') : chalk.red('failed')}`
+      )
+      if (result.harness === 'opencode') {
+        if (result.providerInstalled) {
+          const how = result.apiKeyReused
+            ? 'existing API key'
+            : result.apiKeyProvided
+              ? 'provided API key'
+              : 'new API key'
+          const suffix = result.apiKeyPrefix ? `, ${result.apiKeyPrefix}…` : ''
+          console.log(
+            `   Provider: ${chalk.green('configured')} ${chalk.dim(`(${how}${suffix})`)}`
+          )
+          if (result.models.length > 0) {
+            console.log(
+              chalk.dim(
+                `   Models:   ${result.models.length} available — use \`paytaca-ai/<model-id>\``
+              )
+            )
+          }
+        } else {
+          const detail = result.providerError ? chalk.dim(` (${result.providerError})`) : ''
+          console.log(`   Provider: ${chalk.yellow('not configured')}${detail}`)
+        }
+      }
+
+      if (result.creditsActive) {
+        console.log(chalk.green('\n   AI credits active — ready to use.'))
+      } else if (purchased?.paid) {
+        console.log(
+          chalk.green(
+            `\n   Plan purchased: ${purchased.displayName || purchased.model} — ${purchased.minutes} minutes.`
+          )
+        )
+        if (purchased.txid) console.log(chalk.dim(`   txid: ${purchased.txid}`))
+      } else if (purchased && !purchased.success) {
+        console.log(chalk.red(`\n   Purchase failed: ${purchased.error || 'unknown error'}`))
+      } else if (!result.canSign) {
+        console.log(chalk.yellow('\n   No active AI credits.'))
+        if (result.planSuggestion) {
+          console.log(
+            chalk.dim(
+              `   Fund from your full wallet: paytaca ai purchase --model ${result.planSuggestion.modelId} --minutes ${result.planSuggestion.minutes}`
+            )
+          )
+        }
+      } else if (result.planSuggestion) {
+        console.log(chalk.yellow('\n   No active AI credits.'))
+        console.log(
+          chalk.dim(
+            `   Buy a plan: paytaca ai purchase --model ${result.planSuggestion.modelId} --minutes ${result.planSuggestion.minutes}`
+          )
+        )
+      }
+
+      console.log(chalk.dim('\n   Restart your AI harness to load the new configuration.\n'))
+      if (!result.mcpInstalled) process.exitCode = 1
+    })
+
+  // ── ai api-key ──────────────────────────────────────────────────────
+  const apiKey = ai.command('api-key').description('Manage Paytaca AI API keys')
+
+  apiKey
+    .command('create')
+    .description('Create an API key bound to your wallet (requires a full wallet)')
+    .option('--name <name>', 'Label for the key', 'paytaca-cli')
+    .option('--backend <url>', 'Override backend URL')
+    .option('--json', 'Output as JSON')
+    .action(async (opts) => {
+      const wallet = loadWalletRef()
+      if (!wallet) {
+        const message =
+          'No wallet found. Run `paytaca wallet create` or `paytaca wallet import` first.'
+        if (opts.json) outputJson({ error: message })
+        else console.log(chalk.red(`\nError: ${message}\n`))
+        process.exitCode = 1
+        return
+      }
+      if (!wallet.canSign || !wallet.mnemonic) {
+        const message = 'This wallet is read-only. Create an API key from your full wallet.'
+        if (opts.json) outputJson({ error: message })
+        else console.log(chalk.red(`\nError: ${message}\n`))
+        process.exitCode = 1
+        return
+      }
+
+      try {
+        const created = await provisionApiKey({
+          mnemonic: wallet.mnemonic,
+          walletHash: wallet.walletHash,
+          backendUrl: opts.backend,
+          name: opts.name,
+        })
+        if (opts.json) {
+          outputJson(created)
+          return
+        }
+        console.log(chalk.bold('\n   Paytaca AI API key created\n'))
+        console.log(`   Name:    ${created.name}`)
+        console.log(`   Prefix:  ${created.keyPrefix}`)
+        console.log(`   API key: ${chalk.bold(created.key)}`)
+        console.log(chalk.yellow('\n   Copy this key now — it will not be shown again.'))
+        console.log(
+          chalk.dim(
+            '   Then configure a harness: paytaca ai configure opencode --api-key <key>\n'
+          )
+        )
+      } catch (err: any) {
+        if (opts.json) outputJson({ error: err.message })
+        else console.log(chalk.red(`\nError: ${err.message}\n`))
+        process.exitCode = 1
+      }
+    })
 
   // ── ai models ───────────────────────────────────────────────────────
   ai.command('models')
