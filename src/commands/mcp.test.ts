@@ -5,7 +5,7 @@ import { CLIENTS, buildTemplate } from './mcp.js'
 
 describe('mcp config templates', () => {
   it('exposes every supported client', () => {
-    expect(CLIENTS).toEqual(['claude', 'opencode', 'cursor', 'codex', 'pi', 'generic'])
+    expect(CLIENTS).toEqual(['opencode', 'pi'])
   })
 
   it('opencode uses the local mcp block with an array command', () => {
@@ -21,15 +21,6 @@ describe('mcp config templates', () => {
     })
   })
 
-  it('claude and cursor use mcpServers with command/args', () => {
-    for (const client of ['claude', 'cursor', 'generic'] as const) {
-      const { json } = buildTemplate(client, false)
-      expect(json).toEqual({
-        mcpServers: { paytaca: { command: 'paytaca', args: ['mcp'] } },
-      })
-    }
-  })
-
   it('pi writes the standard mcpServers block to the adapter path', () => {
     const template = buildTemplate('pi', false)
     expect(template.format).toBe('json')
@@ -38,13 +29,6 @@ describe('mcp config templates', () => {
       mcpServers: { paytaca: { command: 'paytaca', args: ['mcp'], directTools: true } },
     })
     expect(template.instructions).toMatch(/pi-mcp-adapter/)
-  })
-
-  it('codex emits a TOML table', () => {
-    const template = buildTemplate('codex', false)
-    expect(template.format).toBe('toml')
-    expect(template.toml).toContain('[mcp_servers.paytaca]')
-    expect(template.toml).toContain('command = "paytaca"')
   })
 
   it('adds --chipnet when requested', () => {

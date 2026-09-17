@@ -31,7 +31,7 @@ export interface PlanSuggestion {
 export interface ConfigureResult {
   harness: McpClient
   path: string | null
-  format: 'json' | 'toml'
+  format: 'json'
   instructions: string
   mcpInstalled: boolean
   providerInstalled: boolean
@@ -219,15 +219,6 @@ function writeJsonFile(path: string, value: Record<string, unknown>): void {
   chmodSync(path, 0o600)
 }
 
-function appendToml(path: string, toml: string): void {
-  const existing = existsSync(path) ? readFileSync(path, 'utf-8') : ''
-  if (existing.includes('[mcp_servers.paytaca]')) return
-  mkdirSync(dirname(path), { recursive: true })
-  const separator = existing && !existing.endsWith('\n') ? '\n\n' : existing ? '\n' : ''
-  writeFileSync(path, existing + separator + toml, 'utf-8')
-  chmodSync(path, 0o600)
-}
-
 function buildPlanSuggestion(config: AiConfig): PlanSuggestion | undefined {
   const models = config.models || []
   const model = selectModel(models, config.default_model || '') || models[0]
@@ -338,12 +329,8 @@ export async function configureHarness(options: ConfigureOptions): Promise<Confi
     result.mcpInstalled = true
   } else {
     if (!target) throw new Error(`No known config file for harness "${harness}". Use --path.`)
-    if (template.format === 'toml') {
-      appendToml(target, template.toml as string)
-    } else {
-      const existing = readJson(target)
-      writeJsonFile(target, deepMerge(existing, template.json as Record<string, unknown>))
-    }
+    const existing = readJson(target)
+    writeJsonFile(target, deepMerge(existing, template.json as Record<string, unknown>))
     result.mcpInstalled = true
   }
 

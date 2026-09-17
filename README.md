@@ -180,7 +180,7 @@ paytaca ai auto-refill --status     # Inspect; also --disable
 Configure an AI harness in one step. This installs the Paytaca MCP server and, for opencode, also the Paytaca AI provider (model catalogue + API key) so the Paytaca AI models are usable immediately:
 
 ```bash
-paytaca ai configure opencode   # claude | opencode | cursor | codex | pi | generic
+paytaca ai configure opencode   # opencode | pi
 ```
 
 The command creates a wallet-bound API key against the Paytaca AI backend, writes the provider (base URL, models, key) and MCP server into the harness config, then checks your AI credits and offers to buy a plan when none are active.

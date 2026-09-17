@@ -5,9 +5,7 @@ coverage/
 
 # AI agent skill installations (local only)
 .agents/
-.claude/
 .openclaw/
-.cursor/
 .cline/
 .windsurf/
 .roo/
