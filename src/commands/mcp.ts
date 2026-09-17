@@ -3,9 +3,9 @@ import { homedir } from 'node:os'
 import { Command } from 'commander'
 import { runMcpServer } from '../mcp/server.js'
 
-export type McpClient = 'opencode' | 'pi'
+export type McpClient = 'opencode' | 'pi' | 'omp'
 
-export const CLIENTS: McpClient[] = ['opencode', 'pi']
+export const CLIENTS: McpClient[] = ['opencode', 'pi', 'omp']
 
 export interface ClientTemplate {
   client: McpClient
@@ -56,6 +56,20 @@ export function buildTemplate(client: McpClient, chipnet: boolean): ClientTempla
         snippet: JSON.stringify(json, null, 2),
         instructions:
           'Pi requires the pi-mcp-adapter extension.\nInstall it: pi install npm:pi-mcp-adapter\nThen restart Pi and verify it loaded with: pi list.\nPi reads standard mcpServers config from ~/.pi/agent/mcp.json (or ~/.config/mcp/mcp.json).',
+      }
+    }
+    case 'omp': {
+      const json = {
+        mcpServers: { paytaca: { command: 'paytaca', args } },
+      }
+      return {
+        client,
+        format: 'json',
+        path: join(homedir(), '.omp', 'agent', 'mcp.json'),
+        json,
+        snippet: JSON.stringify(json, null, 2),
+        instructions:
+          'Oh My Pi has native MCP support.\nRestart omp and verify with /mcp.\nomp reads standard mcpServers config from ~/.omp/agent/mcp.json.',
       }
     }
   }

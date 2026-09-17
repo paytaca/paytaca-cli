@@ -5,10 +5,12 @@ import {
   buildPiProvider,
   deepMerge,
   extractExistingApiKey,
+  extractOmpDefaultModel,
   extractPiApiKey,
   isValidApiKey,
   OPENCODE_PROVIDER_NPM,
   parseJsonConfig,
+  replaceOmpDefaultModel,
 } from './configure.js'
 
 const CONFIG: AiConfig = {
@@ -95,6 +97,25 @@ describe('configure', () => {
     expect(extractPiApiKey({ providers: {} })).toBeNull()
     expect(extractPiApiKey({})).toBeNull()
     expect(extractPiApiKey({ providers: { 'paytaca-ai': {} } })).toBeNull()
+  })
+
+  it('extracts the omp saved default model from config.yml', () => {
+    const yaml = 'setupVersion: 2\nmodelRoles:\n  default: paytaca-ai/z-ai/glm-5.3\n'
+    expect(extractOmpDefaultModel(yaml)).toBe('paytaca-ai/z-ai/glm-5.3')
+    expect(extractOmpDefaultModel('modelRoles:\n  default: anthropic/claude-x\n')).toBe(
+      'anthropic/claude-x'
+    )
+    expect(extractOmpDefaultModel('modelRoles: {}\n')).toBeNull()
+    expect(extractOmpDefaultModel('')).toBeNull()
+    expect(extractOmpDefaultModel('modelRoles:\n  smol: paytaca-ai/z-ai/glm-5.3-flash\n')).toBeNull()
+  })
+
+  it('replaces only the omp modelRoles default line', () => {
+    const yaml = 'setupVersion: 2\nmodelRoles:\n  default: paytaca-ai/z-ai/glm-5.3\n'
+    expect(replaceOmpDefaultModel(yaml, 'paytaca-ai/z-ai/glm-5.3-flash')).toBe(
+      'setupVersion: 2\nmodelRoles:\n  default: paytaca-ai/z-ai/glm-5.3-flash\n'
+    )
+    expect(replaceOmpDefaultModel('other: 1\n', 'paytaca-ai/x')).toBeNull()
   })
 
   it('ignores unresolved environment and command api key references', () => {

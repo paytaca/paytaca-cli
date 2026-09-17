@@ -17,6 +17,7 @@ import { provisionApiKey } from './oauth.js'
 
 export const OPENCODE_PROVIDER_ID = 'paytaca-ai'
 export const PI_PROVIDER_ID = 'paytaca-ai'
+export const OMP_PROVIDER_ID = 'paytaca-ai'
 export const OPENCODE_PROVIDER_NPM = '@ai-sdk/openai-compatible'
 export const DEFAULT_MODEL_CONTEXT = 128000
 export const DEFAULT_MODEL_OUTPUT = 8192
@@ -45,6 +46,7 @@ export interface ConfigureResult {
   creditsActive: boolean
   credits: CreditsSummary[]
   planSuggestion?: PlanSuggestion
+  warnings?: string[]
 }
 
 export interface ConfigureOptions {
@@ -150,6 +152,39 @@ export function extractPiApiKey(
   }
   if (apiKey.trim().startsWith('!')) return null
   return apiKey
+}
+
+const YAML_KEY_LINE = /^(\s*)([A-Za-z0-9_-]+):\s*(.*)$/
+
+function locateModelRolesDefault(
+  lines: string[]
+): { index: number; indent: number; value: string } | null {
+  let rolesIndent: number | null = null
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].match(YAML_KEY_LINE)
+    if (!match) continue
+    const indent = match[1].length
+    const key = match[2]
+    const value = match[3].trim()
+    if (rolesIndent === null || indent <= rolesIndent) {
+      rolesIndent = key === 'modelRoles' && value === '' ? indent : null
+      continue
+    }
+    if (key === 'default' && value !== '') return { index: i, indent, value }
+  }
+  return null
+}
+
+export function extractOmpDefaultModel(yaml: string): string | null {
+  return locateModelRolesDefault(yaml.split('\n'))?.value ?? null
+}
+
+export function replaceOmpDefaultModel(yaml: string, nextModelRef: string): string | null {
+  const lines = yaml.split('\n')
+  const found = locateModelRolesDefault(lines)
+  if (!found) return null
+  lines[found.index] = `${' '.repeat(found.indent)}default: ${nextModelRef}`
+  return lines.join('\n')
 }
 
 async function resolveApiKey(
@@ -325,6 +360,38 @@ function buildPlanSuggestion(config: AiConfig): PlanSuggestion | undefined {
   }
 }
 
+function syncOmpDefaultModel(
+  agentDir: string,
+  credits: CreditsSummary[],
+  result: ConfigureResult
+): void {
+  const configPath = join(agentDir, 'config.yml')
+  if (!existsSync(configPath)) return
+  let yaml: string
+  try {
+    yaml = readFileSync(configPath, 'utf-8')
+  } catch {
+    return
+  }
+  const current = extractOmpDefaultModel(yaml)
+  if (!current || !current.startsWith(`${OMP_PROVIDER_ID}/`)) return
+  const modelId = current.slice(OMP_PROVIDER_ID.length + 1)
+  const session = credits.find((c) => c.modelId === modelId)
+  if (session?.active && session.timeRemainingSeconds > 0) return
+  const fallback = credits
+    .filter((c) => c.modelId && c.active && c.timeRemainingSeconds > 0)
+    .sort((a, b) => b.timeRemainingSeconds - a.timeRemainingSeconds)[0]
+  if (!fallback?.modelId) return
+  const next = `${OMP_PROVIDER_ID}/${fallback.modelId}`
+  const updated = replaceOmpDefaultModel(yaml, next)
+  if (updated === null || updated === yaml) return
+  writeFileSync(configPath, updated, 'utf-8')
+  result.warnings = [
+    ...(result.warnings ?? []),
+    `Switched ${configPath} modelRoles.default to ${next} — ${modelId} has no active credits.`,
+  ]
+}
+
 export async function configureHarness(options: ConfigureOptions): Promise<ConfigureResult> {
   const { harness } = options
   if (!CLIENTS.includes(harness)) {
@@ -361,6 +428,9 @@ export async function configureHarness(options: ConfigureOptions): Promise<Confi
     configError = err?.message || String(err)
   }
 
+  let apiKeyValue: string | null = null
+  let ompAgentDir: string | null = null
+
   if (harness === 'opencode') {
     if (!target) throw new Error('No known config path for opencode. Use --path.')
     const existing = readJson(target)
@@ -394,26 +464,41 @@ export async function configureHarness(options: ConfigureOptions): Promise<Confi
     writeJsonFile(target, deepMerge(existingMcp, template.json as Record<string, unknown>))
     result.mcpInstalled = true
 
-    const modelsPath = join(dirname(target), 'models.json')
+    ompAgentDir = dirname(target)
+    const modelsPath = join(ompAgentDir, 'models.json')
     const existingModels = readJson(modelsPath)
-    const apiKey = await resolveApiKey(
+    apiKeyValue = await resolveApiKey(
       extractPiApiKey(existingModels),
       options,
       wallet,
       backendUrl,
       result
     )
+    const apiKey = apiKeyValue
+
+    if (harness === 'omp') {
+      const yamlPath = ['models.yml', 'models.yaml']
+        .map((name) => join(ompAgentDir as string, name))
+        .find((path) => existsSync(path))
+      if (yamlPath) {
+        result.warnings = [
+          `${yamlPath} exists — omp prefers it over models.json, so the Paytaca provider there may be ignored.`,
+        ]
+      }
+    }
 
     if (config && apiKey) {
       const provider = buildPiProvider(config, backendUrl, apiKey)
       writeJsonFile(modelsPath, deepMerge(existingModels, { providers: { [PI_PROVIDER_ID]: provider } }))
-      const authPath = join(dirname(target), 'auth.json')
-      const existingAuth = readJson(authPath)
-      const entry = existingAuth[PI_PROVIDER_ID]
-      if (!isPlainObject(entry) || entry.key !== apiKey) {
-        writeJsonFile(authPath, deepMerge(existingAuth, {
-          [PI_PROVIDER_ID]: { type: 'api_key', key: apiKey },
-        }))
+      if (harness === 'pi') {
+        const authPath = join(dirname(target), 'auth.json')
+        const existingAuth = readJson(authPath)
+        const entry = existingAuth[PI_PROVIDER_ID]
+        if (!isPlainObject(entry) || entry.key !== apiKey) {
+          writeJsonFile(authPath, deepMerge(existingAuth, {
+            [PI_PROVIDER_ID]: { type: 'api_key', key: apiKey },
+          }))
+        }
       }
       result.models = (config.models || [])
         .filter((m) => m?.id)
@@ -432,6 +517,10 @@ export async function configureHarness(options: ConfigureOptions): Promise<Confi
     result.creditsActive = hasActiveCredits(status)
   } catch {
     result.creditsActive = false
+  }
+
+  if (harness === 'omp' && ompAgentDir && config && apiKeyValue) {
+    syncOmpDefaultModel(ompAgentDir, result.credits, result)
   }
 
   return result

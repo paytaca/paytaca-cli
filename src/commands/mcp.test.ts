@@ -5,7 +5,7 @@ import { CLIENTS, buildTemplate } from './mcp.js'
 
 describe('mcp config templates', () => {
   it('exposes every supported client', () => {
-    expect(CLIENTS).toEqual(['opencode', 'pi'])
+    expect(CLIENTS).toEqual(['opencode', 'pi', 'omp'])
   })
 
   it('opencode uses the local mcp block with an array command', () => {
@@ -29,6 +29,16 @@ describe('mcp config templates', () => {
       mcpServers: { paytaca: { command: 'paytaca', args: ['mcp'], directTools: true } },
     })
     expect(template.instructions).toMatch(/pi-mcp-adapter/)
+  })
+
+  it('omp writes the native mcpServers block without adapter fields', () => {
+    const template = buildTemplate('omp', false)
+    expect(template.format).toBe('json')
+    expect(template.path).toBe(join(homedir(), '.omp', 'agent', 'mcp.json'))
+    expect(template.json).toEqual({
+      mcpServers: { paytaca: { command: 'paytaca', args: ['mcp'] } },
+    })
+    expect(template.instructions).not.toMatch(/adapter/)
   })
 
   it('adds --chipnet when requested', () => {

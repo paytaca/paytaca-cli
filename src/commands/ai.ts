@@ -213,7 +213,7 @@ export function registerAiCommands(program: Command): void {
       console.log(
         `   MCP:      ${result.mcpInstalled ? chalk.green('configured') : chalk.red('failed')}`
       )
-      if (result.harness === 'opencode' || result.harness === 'pi') {
+      if (result.harness === 'opencode' || result.harness === 'pi' || result.harness === 'omp') {
         if (result.providerInstalled) {
           const how = result.apiKeyReused
             ? 'existing API key'
@@ -235,6 +235,10 @@ export function registerAiCommands(program: Command): void {
           const detail = result.providerError ? chalk.dim(` (${result.providerError})`) : ''
           console.log(`   Provider: ${chalk.yellow('not configured')}${detail}`)
         }
+      }
+
+      for (const warning of result.warnings || []) {
+        console.log(chalk.yellow(`   Warning: ${warning}`))
       }
 
       if (result.creditsActive) {
