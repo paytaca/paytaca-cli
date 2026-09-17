@@ -157,8 +157,44 @@ function plansMarkdown(plans: PlanView[]): string {
   return lines.join('\n')
 }
 
+function plansText(plans: PlanView[]): string {
+  const lines: string[] = ['Paytaca AI plans', '']
+  if (plans.length === 0) {
+    lines.push('No plans found.')
+    return lines.join('\n')
+  }
+  const durations = Array.from(
+    new Set(plans.flatMap((model) => model.plans.map((plan) => Number(plan.minutes))))
+  ).sort((a, b) => a - b)
+  const headers = ['Model', ...durations.map(formatDuration)]
+  const rows = plans.map((model) => {
+    const byMinutes = new Map(model.plans.map((plan) => [Number(plan.minutes), plan]))
+    return [
+      `${model.displayName} (${model.id})`,
+      ...durations.map((minutes) => planPriceCell(byMinutes.get(minutes))),
+    ]
+  })
+  const widths = headers.map((header, i) =>
+    Math.max(header.length, ...rows.map((row) => row[i].length))
+  )
+  const render = (cells: string[]) =>
+    cells.map((cell, i) => cell.padEnd(widths[i])).join('  ')
+  lines.push(render(headers))
+  for (const row of rows) {
+    lines.push(render(row))
+  }
+  return lines.join('\n')
+}
+
 function plansResponse(server: McpServer, plans: PlanView[]): ToolResult {
-  if (clientName(server) === 'opencode') {
+  const name = clientName(server)
+  if (name.startsWith('pi-mcp')) {
+    return {
+      content: [{ type: 'text', text: plansText(plans) }],
+      structuredContent: { models: plans },
+    }
+  }
+  if (name === 'opencode') {
     return {
       content: [{ type: 'text', text: plansMarkdown(plans) }],
       structuredContent: { models: plans },

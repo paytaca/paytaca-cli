@@ -468,6 +468,18 @@ describe('MCP tools', () => {
       expect(result.structuredContent).toEqual({ models: plans })
     })
 
+    it('returns an aligned plain-text table for the pi MCP client', async () => {
+      mocks.getConfig.mockResolvedValue({ models: [] })
+      mocks.listPlans.mockReturnValue(plans)
+      const c = await connect(false, 'pi-mcp-paytaca')
+      const result = await c.callTool({ name: 'get_plans', arguments: {} })
+      expect(text(result)).toContain('Paytaca AI plans')
+      expect(text(result)).toContain('GLM 5.3 Flash (z-ai/glm-5.3-flash)')
+      expect(text(result)).toContain('15 min')
+      expect(text(result)).not.toContain('##')
+      expect(result.structuredContent).toEqual({ models: plans })
+    })
+
     it('returns JSON for other MCP clients', async () => {
       mocks.getConfig.mockResolvedValue({ models: [] })
       mocks.listPlans.mockReturnValue(plans)
