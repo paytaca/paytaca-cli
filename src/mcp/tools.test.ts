@@ -80,10 +80,10 @@ import { createServer } from './server.js'
 let server: McpServer | undefined
 let client: Client | undefined
 
-async function connect(defaultChipnet = false): Promise<Client> {
+async function connect(defaultChipnet = false, clientName = 'paytaca-test'): Promise<Client> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
   server = createServer({ defaultChipnet })
-  client = new Client({ name: 'paytaca-test', version: '1.0.0' })
+  client = new Client({ name: clientName, version: '1.0.0' })
   await server.connect(serverTransport)
   await client.connect(clientTransport)
   return client
@@ -320,6 +320,39 @@ describe('MCP tools', () => {
       })
       expect(JSON.parse(text(result))).toEqual({
         sessions: [{ modelId: 'm', active: true }],
+      })
+      expect(result.structuredContent).toBeUndefined()
+    })
+
+    it('returns an aligned plain-text table for the pi MCP client', async () => {
+      mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
+      mocks.getWalletStatus.mockResolvedValue({})
+      mocks.summarizeAllCredits.mockReturnValue([
+        {
+          modelId: 'm',
+          displayName: 'Model M',
+          active: true,
+          timeRemainingSeconds: 60,
+          timeUsedSeconds: 5,
+          tokenLimit: 500000,
+        },
+      ])
+      const c = await connect(false, 'pi-mcp-paytaca')
+      const result = await c.callTool({ name: 'get_credits', arguments: {} })
+      expect(text(result)).toContain('Paytaca AI credits')
+      expect(text(result)).toContain('Model')
+      expect(text(result)).not.toContain('"sessions"')
+      expect(result.structuredContent).toEqual({
+        sessions: [
+          {
+            modelId: 'm',
+            displayName: 'Model M',
+            active: true,
+            timeRemainingSeconds: 60,
+            timeUsedSeconds: 5,
+            tokenLimit: 500000,
+          },
+        ],
       })
     })
 

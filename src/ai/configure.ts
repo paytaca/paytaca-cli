@@ -32,6 +32,7 @@ export interface ConfigureResult {
   harness: McpClient
   path: string | null
   format: 'json' | 'toml'
+  instructions: string
   mcpInstalled: boolean
   providerInstalled: boolean
   providerError?: string
@@ -260,6 +261,7 @@ export async function configureHarness(options: ConfigureOptions): Promise<Confi
     harness,
     path: target,
     format: template.format,
+    instructions: template.instructions,
     mcpInstalled: false,
     providerInstalled: false,
     canSign: wallet.canSign,

@@ -35,7 +35,7 @@ describe('mcp config templates', () => {
     expect(template.format).toBe('json')
     expect(template.path).toBe(join(homedir(), '.pi', 'agent', 'mcp.json'))
     expect(template.json).toEqual({
-      mcpServers: { paytaca: { command: 'paytaca', args: ['mcp'] } },
+      mcpServers: { paytaca: { command: 'paytaca', args: ['mcp'], directTools: true } },
     })
     expect(template.instructions).toMatch(/pi-mcp-adapter/)
   })

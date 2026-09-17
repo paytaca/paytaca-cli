@@ -10,7 +10,6 @@ export interface PriceTier {
 export interface AiModelConfig {
   id: string
   display_name: string
-  tier?: string
   price_tiers: PriceTier[]
 }
 

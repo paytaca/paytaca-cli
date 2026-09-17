@@ -117,25 +117,22 @@ function promptSecret(message: string): Promise<string> {
   })
 }
 
-function printPlanGroups(config: AiConfig, modelQuery?: string): void {
-  const groups = listPlans(config, modelQuery)
-  if (groups.length === 0) {
+function printPlans(config: AiConfig, modelQuery?: string): void {
+  const models = listPlans(config, modelQuery)
+  if (models.length === 0) {
     console.log(chalk.dim('\n   No plans found.\n'))
     return
   }
-  for (const group of groups) {
-    console.log(chalk.bold(`\n   ${group.tier.toUpperCase()}\n`))
-    for (const model of group.models) {
-      console.log(`   ${chalk.bold(model.displayName)} ${chalk.dim(`(${model.id})`)}`)
-      for (const tier of model.plans) {
-        const price = formatPriceUsd(tier.price_usd)
-        const sats = `${formatSats(Number(tier.price_sats) || 0)} sats`
-        console.log(
-          `     ${formatDuration(tier.minutes).padEnd(8)} ${price.padEnd(8)} ${chalk.dim(sats)}`
-        )
-      }
-      console.log()
+  for (const model of models) {
+    console.log(`   ${chalk.bold(model.displayName)} ${chalk.dim(`(${model.id})`)}`)
+    for (const plan of model.plans) {
+      const price = formatPriceUsd(plan.price_usd)
+      const sats = `${formatSats(Number(plan.price_sats) || 0)} sats`
+      console.log(
+        `     ${formatDuration(plan.minutes).padEnd(8)} ${price.padEnd(8)} ${chalk.dim(sats)}`
+      )
     }
+    console.log()
   }
 }
 
@@ -269,7 +266,17 @@ export function registerAiCommands(program: Command): void {
         )
       }
 
-      console.log(chalk.dim('\n   Restart your AI harness to load the new configuration.\n'))
+      if (result.harness === 'pi') {
+        console.log(chalk.yellow.bold('\n   Pi requires the pi-mcp-adapter extension.'))
+        console.log(chalk.yellow('\n   Install it:'))
+        console.log(chalk.cyan.bold('\n      pi install npm:pi-mcp-adapter\n'))
+        console.log(
+          chalk.yellow('   Then restart Pi and verify it loaded with ') +
+            chalk.bold.cyan('pi list')
+        )
+      } else {
+        console.log(chalk.dim('\n   Restart your AI harness to load the new configuration.\n'))
+      }
       if (!result.mcpInstalled) process.exitCode = 1
     })
 
@@ -339,7 +346,6 @@ export function registerAiCommands(program: Command): void {
       const models = (config.models || []).map((m: AiModelConfig) => ({
         id: m.id,
         displayName: m.display_name,
-        tier: m.tier || 'other',
         plans: m.price_tiers || [],
       }))
       if (opts.json) {
@@ -370,16 +376,16 @@ export function registerAiCommands(program: Command): void {
     .action(async (model: string | undefined, opts) => {
       const config = await loadConfigOrExit(opts)
       if (!config) return
-      const groups = listPlans(config, model)
+      const models = listPlans(config, model)
       if (opts.json) {
         outputJson({
           discountPercent: config.lift_payment_discount_percent ?? 0,
-          groups,
+          models,
         })
         return
       }
       console.log(chalk.bold(`\n   AI Plans${model ? ` — ${model}` : ''}\n`))
-      printPlanGroups(config, model)
+      printPlans(config, model)
       const discount = config.lift_payment_discount_percent
       if (discount) {
         console.log(chalk.green(`   Pay with LIFT for a ${discount}% discount.\n`))

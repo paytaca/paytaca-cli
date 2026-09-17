@@ -19,6 +19,8 @@ import {
   summarizeCredits,
   summarizeAllCredits,
   buildPurchaseHint,
+  formatRemaining,
+  type CreditsSummary,
   type PurchaseHint,
 } from '../ai/credits.js'
 import { buyPlan } from '../ai/purchase.js'
@@ -31,6 +33,7 @@ import {
 
 type ToolResult = {
   content: { type: 'text'; text: string }[]
+  structuredContent?: Record<string, unknown>
   isError?: boolean
 }
 
@@ -40,6 +43,59 @@ function text(value: string): ToolResult {
 
 function json(value: unknown): ToolResult {
   return text(JSON.stringify(value, null, 2))
+}
+
+function clientPrefersPlainText(server: McpServer): boolean {
+  const name = server.server.getClientVersion()?.name ?? ''
+  return name.startsWith('pi-mcp')
+}
+
+function creditsResponse(
+  server: McpServer,
+  sessions: CreditsSummary[],
+  hint: PurchaseHint | null,
+  payload: Record<string, unknown>
+): ToolResult {
+  if (clientPrefersPlainText(server)) {
+    return {
+      content: [{ type: 'text', text: creditsText(sessions, hint) }],
+      structuredContent: payload,
+    }
+  }
+  return json(payload)
+}
+
+function creditsText(sessions: CreditsSummary[], hint?: PurchaseHint | null): string {
+  const lines: string[] = ['Paytaca AI credits', '']
+  if (sessions.length === 0) {
+    lines.push('No AI credit sessions found.')
+  } else {
+    const rows = sessions.map((session) => ({
+      name: session.displayName || session.modelId || 'unknown',
+      status: session.active ? 'active' : 'inactive',
+      remaining: formatRemaining(session.timeRemainingSeconds),
+      used: formatRemaining(session.timeUsedSeconds),
+      limit: session.tokenLimit != null ? session.tokenLimit.toLocaleString('en-US') : '-',
+    }))
+    const width = (key: keyof (typeof rows)[number], header: string) =>
+      Math.max(header.length, ...rows.map((row) => row[key].length))
+    const nameWidth = width('name', 'Model')
+    const statusWidth = width('status', 'Status')
+    const remainingWidth = width('remaining', 'Remaining')
+    const usedWidth = width('used', 'Used')
+    const limitWidth = width('limit', 'Token limit')
+    const row = (...cells: string[]) => cells.map((cell, i) => cell.padEnd(
+      [nameWidth, statusWidth, remainingWidth, usedWidth, limitWidth][i]
+    )).join('  ')
+    lines.push(row('Model', 'Status', 'Remaining', 'Used', 'Token limit'))
+    for (const r of rows) {
+      lines.push(row(r.name, r.status, r.remaining, r.used, r.limit))
+    }
+  }
+  if (hint) {
+    lines.push('', hint.message)
+  }
+  return lines.join('\n')
 }
 
 function fail(err: unknown): ToolResult {
@@ -73,7 +129,7 @@ Wallet (spend):
 
 Paytaca AI:
   get_models             List AI models
-  get_plans              Plan pricing grouped by tier
+  get_plans              Plan pricing per AI model
   get_credits            Remaining AI time credits
   buy_plan               Buy an AI plan with BCH or LIFT (spends funds)
   auto_refill            Arm/disarm/inspect automatic plan refills
@@ -297,7 +353,7 @@ export function registerTools(
     {
       title: 'Get AI plan pricing',
       description:
-        'Return plan pricing grouped by tier. Pass model to filter a single model.',
+        'Return plan pricing per model. Pass model to filter a single model.',
       inputSchema: {
         model: z.string().optional(),
         backend: z.string().optional(),
@@ -338,22 +394,24 @@ export function registerTools(
         if (!model) {
           const sessions = summarizeAllCredits(status)
           const payload: Record<string, unknown> = { sessions }
+          let hint: PurchaseHint | null = null
           if (!sessions.some((s) => s.active)) {
-            const hint = await resolvePurchaseHint(
+            hint = await resolvePurchaseHint(
               sessions[0]?.modelId ?? undefined,
               backend
             )
             if (hint) payload.purchaseHint = hint
           }
-          return json(payload)
+          return creditsResponse(server, sessions, hint, payload)
         }
         const summary = summarizeCredits(status, model)
         const payload: Record<string, unknown> = { ...summary }
+        let hint: PurchaseHint | null = null
         if (!summary.active) {
-          const hint = await resolvePurchaseHint(model, backend)
+          hint = await resolvePurchaseHint(model, backend)
           if (hint) payload.purchaseHint = hint
         }
-        return json(payload)
+        return creditsResponse(server, [summary], hint, payload)
       } catch (err) {
         return fail(err)
       }

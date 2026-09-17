@@ -5,7 +5,6 @@ import { selectModel, selectTier, listPlans, listModels } from './models.js'
 const flash: AiModelConfig = {
   id: 'z-ai/glm-5.3-flash',
   display_name: 'GLM 5.3 Flash',
-  tier: 'budget',
   price_tiers: [
     { minutes: 15, price_sats: 4000 },
     { minutes: 30, price_sats: 8000 },
@@ -16,7 +15,6 @@ const flash: AiModelConfig = {
 const pro: AiModelConfig = {
   id: 'deepseek/deepseek-v4-pro',
   display_name: 'DeepSeek V4 Pro',
-  tier: 'premium',
   price_tiers: [
     { minutes: 15, price_sats: 9000 },
     { minutes: 30, price_sats: 17000 },
@@ -68,18 +66,17 @@ describe('listModels', () => {
 })
 
 describe('listPlans', () => {
-  it('groups plans by tier in canonical order', () => {
-    const groups = listPlans(config)
-    expect(groups.map((g) => g.tier)).toEqual(['budget', 'premium'])
-    expect(groups[0].models[0].id).toBe(flash.id)
-    expect(groups[1].models[0].id).toBe(pro.id)
+  it('returns each model with its plans', () => {
+    const models = listPlans(config)
+    expect(models.map((m) => m.id)).toEqual([flash.id, pro.id])
+    expect(models[0].displayName).toBe('GLM 5.3 Flash')
+    expect(models[0].plans).toHaveLength(3)
   })
 
   it('filters to a single model', () => {
-    const groups = listPlans(config, 'pro')
-    expect(groups).toHaveLength(1)
-    expect(groups[0].tier).toBe('premium')
-    expect(groups[0].models).toHaveLength(1)
+    const models = listPlans(config, 'pro')
+    expect(models).toHaveLength(1)
+    expect(models[0].id).toBe(pro.id)
   })
 
   it('returns nothing for an unknown model filter', () => {

@@ -1,17 +1,9 @@
 import type { AiConfig, AiModelConfig, PriceTier } from './client.js'
 
-const TIER_ORDER = ['budget', 'premium', 'frontier', 'cheap', 'other']
-
 export interface PlanView {
   id: string
   displayName: string
-  tier: string
   plans: PriceTier[]
-}
-
-export interface PlanGroup {
-  tier: string
-  models: PlanView[]
 }
 
 export function formatDuration(minutes: number): string {
@@ -64,32 +56,16 @@ export function listModels(config: AiConfig): AiModelConfig[] {
 export function listPlans(
   config: AiConfig,
   modelQuery?: string
-): PlanGroup[] {
+): PlanView[] {
   let models = listModels(config)
   if (modelQuery) {
     const model = selectModel(models, modelQuery)
     models = model ? [model] : []
   }
 
-  const groups = new Map<string, PlanView[]>()
-  for (const model of models) {
-    const tier = String(model.tier || 'other').toLowerCase()
-    const view: PlanView = {
-      id: model.id,
-      displayName: model.display_name,
-      tier,
-      plans: Array.isArray(model.price_tiers) ? model.price_tiers : [],
-    }
-    const list = groups.get(tier) || []
-    list.push(view)
-    groups.set(tier, list)
-  }
-
-  const orderedTiers = [...groups.keys()].sort((a, b) => {
-    const ai = TIER_ORDER.indexOf(a)
-    const bi = TIER_ORDER.indexOf(b)
-    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi)
-  })
-
-  return orderedTiers.map((tier) => ({ tier, models: groups.get(tier)! }))
+  return models.map((model) => ({
+    id: model.id,
+    displayName: model.display_name,
+    plans: Array.isArray(model.price_tiers) ? model.price_tiers : [],
+  }))
 }

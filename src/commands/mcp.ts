@@ -78,7 +78,7 @@ export function buildTemplate(client: McpClient, chipnet: boolean): ClientTempla
     }
     case 'pi': {
       const json = {
-        mcpServers: { paytaca: { command: 'paytaca', args } },
+        mcpServers: { paytaca: { command: 'paytaca', args, directTools: true } },
       }
       return {
         client,
@@ -87,7 +87,7 @@ export function buildTemplate(client: McpClient, chipnet: boolean): ClientTempla
         json,
         snippet: JSON.stringify(json, null, 2),
         instructions:
-          'Requires the pi-mcp-adapter extension: run `pi install npm:pi-mcp-adapter` and restart Pi. Pi reads standard mcpServers config from ~/.pi/agent/mcp.json (or ~/.config/mcp/mcp.json).',
+          'Pi requires the pi-mcp-adapter extension.\nInstall it: pi install npm:pi-mcp-adapter\nThen restart Pi and verify it loaded with: pi list.\nPi reads standard mcpServers config from ~/.pi/agent/mcp.json (or ~/.config/mcp/mcp.json).',
       }
     }
     case 'claude': {
