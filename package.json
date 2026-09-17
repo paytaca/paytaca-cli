@@ -11,6 +11,7 @@
   "files": [
     "bin/",
     "dist/",
+    "!dist/**/*.test.*",
     "LICENSE",
     "README.md"
   ],
