@@ -1,11 +1,11 @@
 /**
- * Harness configuration: writes the MCP server entry and, for opencode, also
- * the Paytaca AI provider (models + API key) so AI models are usable right
- * after `paytaca ai configure`.
+ * Harness configuration: writes the MCP server entry and the Paytaca AI
+ * provider (models + API key) — the opencode provider block or the Pi
+ * models.json — so AI models are usable right after `paytaca ai configure`.
  */
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import { CLIENTS, buildTemplate, type ClientTemplate, type McpClient } from '../commands/mcp.js'
 import { WalletNotConfiguredError } from '../core/context.js'
 import { loadWalletRef } from '../wallet/index.js'
@@ -16,6 +16,7 @@ import { selectModel, selectTier } from './models.js'
 import { provisionApiKey } from './oauth.js'
 
 export const OPENCODE_PROVIDER_ID = 'paytaca-ai'
+export const PI_PROVIDER_ID = 'paytaca-ai'
 export const OPENCODE_PROVIDER_NPM = '@ai-sdk/openai-compatible'
 export const DEFAULT_MODEL_CONTEXT = 128000
 export const DEFAULT_MODEL_OUTPUT = 8192
@@ -109,6 +110,95 @@ export function extractExistingApiKey(
   if (!isPlainObject(options)) return null
   const apiKey = options.apiKey
   return typeof apiKey === 'string' && apiKey.length > 0 ? apiKey : null
+}
+
+export function buildPiProvider(
+  config: AiConfig,
+  backendUrl: string,
+  apiKey: string
+): Record<string, unknown> {
+  const models = (config.models || [])
+    .filter((model) => model?.id)
+    .map((model) => ({
+      id: model.id,
+      name: model.display_name || model.id,
+      contextWindow: DEFAULT_MODEL_CONTEXT,
+      maxTokens: DEFAULT_MODEL_OUTPUT,
+    }))
+  return {
+    baseUrl: `${backendUrl}/v1`,
+    apiKey,
+    api: 'openai-completions',
+    models,
+  }
+}
+
+export function extractPiApiKey(
+  config: Record<string, unknown>,
+  providerId: string = PI_PROVIDER_ID
+): string | null {
+  const providers = config.providers
+  if (!isPlainObject(providers)) return null
+  const entry = providers[providerId]
+  if (!isPlainObject(entry)) return null
+  const apiKey = entry.apiKey
+  if (typeof apiKey !== 'string' || apiKey.length === 0) return null
+  const envName = apiKey.trim().match(/^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/)
+  if (envName) {
+    if (process.env[envName[1]]) return apiKey
+    return null
+  }
+  if (apiKey.trim().startsWith('!')) return null
+  return apiKey
+}
+
+async function resolveApiKey(
+  existingKey: string | null,
+  options: ConfigureOptions,
+  wallet: NonNullable<ReturnType<typeof loadWalletRef>>,
+  backendUrl: string,
+  result: ConfigureResult
+): Promise<string | null> {
+  if (existingKey) {
+    result.apiKeyReused = true
+    return existingKey
+  }
+  if (options.apiKey) {
+    if (isValidApiKey(options.apiKey)) {
+      result.apiKeyProvided = true
+      return options.apiKey.trim()
+    }
+    result.providerError = 'Invalid API key: expected a Paytaca key like sk-pytc-…'
+    return null
+  }
+  if (wallet.canSign && wallet.mnemonic) {
+    try {
+      const created = await provisionApiKey({
+        mnemonic: wallet.mnemonic,
+        walletHash: wallet.walletHash,
+        backendUrl,
+        name: 'paytaca-cli',
+      })
+      result.apiKeyPrefix = created.keyPrefix
+      return created.key
+    } catch (err: any) {
+      result.providerError = err?.message || String(err)
+      return null
+    }
+  }
+  if (options.requestApiKey) {
+    const entered = await options.requestApiKey()
+    if (entered && isValidApiKey(entered)) {
+      result.apiKeyProvided = true
+      return entered.trim()
+    }
+    result.providerError =
+      'No API key provided. A full wallet is required to create one automatically.'
+    return null
+  }
+  result.providerError =
+    'This wallet is read-only. Pass --api-key <key> with a key created from your full wallet.'
+  return null
 }
 
 function stripJsonComments(input: string): string {
@@ -276,42 +366,13 @@ export async function configureHarness(options: ConfigureOptions): Promise<Confi
     const existing = readJson(target)
     const mcpEntry = (template.json as any)?.mcp?.paytaca
 
-    let apiKey = extractExistingApiKey(existing)
-    if (apiKey) {
-      result.apiKeyReused = true
-    } else if (options.apiKey) {
-      if (isValidApiKey(options.apiKey)) {
-        apiKey = options.apiKey.trim()
-        result.apiKeyProvided = true
-      } else {
-        result.providerError = 'Invalid API key: expected a Paytaca key like sk-pytc-…'
-      }
-    } else if (wallet.canSign && wallet.mnemonic) {
-      try {
-        const created = await provisionApiKey({
-          mnemonic: wallet.mnemonic,
-          walletHash: wallet.walletHash,
-          backendUrl,
-          name: 'paytaca-cli',
-        })
-        apiKey = created.key
-        result.apiKeyPrefix = created.keyPrefix
-      } catch (err: any) {
-        result.providerError = err?.message || String(err)
-      }
-    } else if (options.requestApiKey) {
-      const entered = await options.requestApiKey()
-      if (entered && isValidApiKey(entered)) {
-        apiKey = entered.trim()
-        result.apiKeyProvided = true
-      } else {
-        result.providerError =
-          'No API key provided. A full wallet is required to create one automatically.'
-      }
-    } else {
-      result.providerError =
-        'This wallet is read-only. Pass --api-key <key> with a key created from your full wallet.'
-    }
+    const apiKey = await resolveApiKey(
+      extractExistingApiKey(existing),
+      options,
+      wallet,
+      backendUrl,
+      result
+    )
 
     let merged = deepMerge(existing, { mcp: { paytaca: mcpEntry } })
     if (config && apiKey) {
@@ -329,9 +390,38 @@ export async function configureHarness(options: ConfigureOptions): Promise<Confi
     result.mcpInstalled = true
   } else {
     if (!target) throw new Error(`No known config file for harness "${harness}". Use --path.`)
-    const existing = readJson(target)
-    writeJsonFile(target, deepMerge(existing, template.json as Record<string, unknown>))
+    const existingMcp = readJson(target)
+    writeJsonFile(target, deepMerge(existingMcp, template.json as Record<string, unknown>))
     result.mcpInstalled = true
+
+    const modelsPath = join(dirname(target), 'models.json')
+    const existingModels = readJson(modelsPath)
+    const apiKey = await resolveApiKey(
+      extractPiApiKey(existingModels),
+      options,
+      wallet,
+      backendUrl,
+      result
+    )
+
+    if (config && apiKey) {
+      const provider = buildPiProvider(config, backendUrl, apiKey)
+      writeJsonFile(modelsPath, deepMerge(existingModels, { providers: { [PI_PROVIDER_ID]: provider } }))
+      const authPath = join(dirname(target), 'auth.json')
+      const existingAuth = readJson(authPath)
+      const entry = existingAuth[PI_PROVIDER_ID]
+      if (!isPlainObject(entry) || entry.key !== apiKey) {
+        writeJsonFile(authPath, deepMerge(existingAuth, {
+          [PI_PROVIDER_ID]: { type: 'api_key', key: apiKey },
+        }))
+      }
+      result.models = (config.models || [])
+        .filter((m) => m?.id)
+        .map((m) => ({ id: m.id, name: m.display_name || m.id }))
+      result.providerInstalled = true
+    } else if (!result.providerError) {
+      result.providerError = configError || 'Unable to load the AI configuration.'
+    }
   }
 
   if (config) result.planSuggestion = buildPlanSuggestion(config)

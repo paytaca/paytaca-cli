@@ -213,7 +213,7 @@ export function registerAiCommands(program: Command): void {
       console.log(
         `   MCP:      ${result.mcpInstalled ? chalk.green('configured') : chalk.red('failed')}`
       )
-      if (result.harness === 'opencode') {
+      if (result.harness === 'opencode' || result.harness === 'pi') {
         if (result.providerInstalled) {
           const how = result.apiKeyReused
             ? 'existing API key'

@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest'
 import type { AiConfig } from './client.js'
 import {
   buildOpencodeProvider,
+  buildPiProvider,
   deepMerge,
   extractExistingApiKey,
+  extractPiApiKey,
   isValidApiKey,
   OPENCODE_PROVIDER_NPM,
   parseJsonConfig,
@@ -63,6 +65,48 @@ describe('configure', () => {
     expect(
       extractExistingApiKey({ provider: { 'paytaca-ai': { options: {} } } })
     ).toBeNull()
+  })
+
+  it('builds the pi provider with a model per backend model', () => {
+    const provider = buildPiProvider(CONFIG, 'https://api.paytaca.ai', 'sk-pytc-test')
+    expect(provider.baseUrl).toBe('https://api.paytaca.ai/v1')
+    expect(provider.apiKey).toBe('sk-pytc-test')
+    expect(provider.api).toBe('openai-completions')
+    expect(provider.models).toEqual([
+      {
+        id: 'deepseek/deepseek-v4-flash',
+        name: 'DeepSeek V4 Flash',
+        contextWindow: 128000,
+        maxTokens: 8192,
+      },
+      {
+        id: 'z-ai/glm-5.3-flash',
+        name: 'GLM 5.3 Flash',
+        contextWindow: 128000,
+        maxTokens: 8192,
+      },
+    ])
+  })
+
+  it('reads an existing pi provider api key for idempotent re-runs', () => {
+    expect(
+      extractPiApiKey({ providers: { 'paytaca-ai': { apiKey: 'sk-pytc-existing' } } })
+    ).toBe('sk-pytc-existing')
+    expect(extractPiApiKey({ providers: {} })).toBeNull()
+    expect(extractPiApiKey({})).toBeNull()
+    expect(extractPiApiKey({ providers: { 'paytaca-ai': {} } })).toBeNull()
+  })
+
+  it('ignores unresolved environment and command api key references', () => {
+    const withKey = (apiKey: string) =>
+      extractPiApiKey({ providers: { 'paytaca-ai': { apiKey } } })
+    delete process.env.PAYTACA_TEST_KEY
+    expect(withKey('$PAYTACA_TEST_KEY')).toBeNull()
+    expect(withKey('${PAYTACA_TEST_KEY}')).toBeNull()
+    process.env.PAYTACA_TEST_KEY = 'sk-pytc-from-env'
+    expect(withKey('$PAYTACA_TEST_KEY')).toBe('$PAYTACA_TEST_KEY')
+    delete process.env.PAYTACA_TEST_KEY
+    expect(withKey('!paytaca ai api-key show')).toBeNull()
   })
 
   it('validates API keys supplied for read-only wallets', () => {
