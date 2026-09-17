@@ -356,6 +356,22 @@ describe('MCP tools', () => {
       })
     })
 
+    it('returns a markdown table for the opencode MCP client', async () => {
+      mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
+      mocks.getWalletStatus.mockResolvedValue({})
+      mocks.summarizeAllCredits.mockReturnValue([
+        { modelId: 'm', displayName: 'Model M', active: true, timeRemainingSeconds: 60 },
+      ])
+      const c = await connect(false, 'opencode')
+      const result = await c.callTool({ name: 'get_credits', arguments: {} })
+      expect(text(result)).toContain('## Paytaca AI credits')
+      expect(text(result)).toContain('| Model | Status | Remaining | Used | Token limit |')
+      expect(text(result)).toContain('| Model M | active |')
+      expect(result.structuredContent).toEqual({
+        sessions: [{ modelId: 'm', displayName: 'Model M', active: true, timeRemainingSeconds: 60 }],
+      })
+    })
+
     it('adds a purchase hint when every session is inactive', async () => {
       mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
       mocks.getWalletStatus.mockResolvedValue({})
@@ -423,6 +439,42 @@ describe('MCP tools', () => {
         arguments: { model: 'm' },
       })
       expect(JSON.parse(text(result))).toEqual({ modelId: 'm', active: false })
+    })
+  })
+
+  describe('get_plans', () => {
+    const plans = [
+      {
+        id: 'z-ai/glm-5.3-flash',
+        displayName: 'GLM 5.3 Flash',
+        plans: [
+          { minutes: 15, price_usd: 0.4, price_sats: 180711 },
+          { minutes: 30, price_usd: 0.65, price_sats: 291231 },
+          { minutes: 60, price_usd: 1.23, price_sats: 553275 },
+        ],
+      },
+    ]
+
+    it('returns a markdown table for the opencode MCP client', async () => {
+      mocks.getConfig.mockResolvedValue({ models: [] })
+      mocks.listPlans.mockReturnValue(plans)
+      const c = await connect(false, 'opencode')
+      const result = await c.callTool({ name: 'get_plans', arguments: {} })
+      expect(text(result)).toContain('## Paytaca AI plans')
+      expect(text(result)).toContain('| Model | 15 min | 30 min | 1 hr |')
+      expect(text(result)).toContain(
+        '| GLM 5.3 Flash (`z-ai/glm-5.3-flash`) | $0.40 | $0.65 | $1.23 |'
+      )
+      expect(result.structuredContent).toEqual({ models: plans })
+    })
+
+    it('returns JSON for other MCP clients', async () => {
+      mocks.getConfig.mockResolvedValue({ models: [] })
+      mocks.listPlans.mockReturnValue(plans)
+      const c = await connect()
+      const result = await c.callTool({ name: 'get_plans', arguments: {} })
+      expect(JSON.parse(text(result))).toEqual(plans)
+      expect(result.structuredContent).toBeUndefined()
     })
   })
 

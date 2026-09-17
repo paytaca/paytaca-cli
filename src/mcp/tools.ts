@@ -13,7 +13,9 @@ import {
 import { WalletNotConfiguredError } from '../core/context.js'
 import { loadWalletRef } from '../wallet/index.js'
 import { getConfig } from '../ai/client.js'
-import { listModels, listPlans, selectModel } from '../ai/models.js'
+import type { PriceTier } from '../ai/client.js'
+import { listModels, listPlans, selectModel, formatPriceUsd, formatDuration } from '../ai/models.js'
+import type { PlanView } from '../ai/models.js'
 import {
   getWalletStatus,
   summarizeCredits,
@@ -45,9 +47,8 @@ function json(value: unknown): ToolResult {
   return text(JSON.stringify(value, null, 2))
 }
 
-function clientPrefersPlainText(server: McpServer): boolean {
-  const name = server.server.getClientVersion()?.name ?? ''
-  return name.startsWith('pi-mcp')
+function clientName(server: McpServer): string {
+  return server.server.getClientVersion()?.name ?? ''
 }
 
 function creditsResponse(
@@ -56,13 +57,30 @@ function creditsResponse(
   hint: PurchaseHint | null,
   payload: Record<string, unknown>
 ): ToolResult {
-  if (clientPrefersPlainText(server)) {
+  const name = clientName(server)
+  if (name.startsWith('pi-mcp')) {
     return {
       content: [{ type: 'text', text: creditsText(sessions, hint) }],
       structuredContent: payload,
     }
   }
+  if (name === 'opencode') {
+    return {
+      content: [{ type: 'text', text: creditsMarkdown(sessions, hint) }],
+      structuredContent: payload,
+    }
+  }
   return json(payload)
+}
+
+function creditRows(sessions: CreditsSummary[]) {
+  return sessions.map((session) => ({
+    name: session.displayName || session.modelId || 'unknown',
+    status: session.active ? 'active' : 'inactive',
+    remaining: formatRemaining(session.timeRemainingSeconds),
+    used: formatRemaining(session.timeUsedSeconds),
+    limit: session.tokenLimit != null ? session.tokenLimit.toLocaleString('en-US') : '-',
+  }))
 }
 
 function creditsText(sessions: CreditsSummary[], hint?: PurchaseHint | null): string {
@@ -70,13 +88,7 @@ function creditsText(sessions: CreditsSummary[], hint?: PurchaseHint | null): st
   if (sessions.length === 0) {
     lines.push('No AI credit sessions found.')
   } else {
-    const rows = sessions.map((session) => ({
-      name: session.displayName || session.modelId || 'unknown',
-      status: session.active ? 'active' : 'inactive',
-      remaining: formatRemaining(session.timeRemainingSeconds),
-      used: formatRemaining(session.timeUsedSeconds),
-      limit: session.tokenLimit != null ? session.tokenLimit.toLocaleString('en-US') : '-',
-    }))
+    const rows = creditRows(sessions)
     const width = (key: keyof (typeof rows)[number], header: string) =>
       Math.max(header.length, ...rows.map((row) => row[key].length))
     const nameWidth = width('name', 'Model')
@@ -96,6 +108,63 @@ function creditsText(sessions: CreditsSummary[], hint?: PurchaseHint | null): st
     lines.push('', hint.message)
   }
   return lines.join('\n')
+}
+
+function creditsMarkdown(sessions: CreditsSummary[], hint?: PurchaseHint | null): string {
+  const lines: string[] = ['## Paytaca AI credits', '']
+  if (sessions.length === 0) {
+    lines.push('No AI credit sessions found.')
+  } else {
+    lines.push('| Model | Status | Remaining | Used | Token limit |')
+    lines.push('| --- | --- | --- | --- | --- |')
+    for (const r of creditRows(sessions)) {
+      lines.push(`| ${r.name} | ${r.status} | ${r.remaining} | ${r.used} | ${r.limit} |`)
+    }
+  }
+  if (hint) {
+    lines.push('', hint.message)
+  }
+  return lines.join('\n')
+}
+
+function planPriceCell(tier: PriceTier | undefined): string {
+  if (!tier) return '—'
+  return formatPriceUsd(tier.price_usd)
+}
+
+function plansMarkdown(plans: PlanView[]): string {
+  const lines: string[] = ['## Paytaca AI plans', '']
+  if (plans.length === 0) {
+    lines.push('No plans found.')
+    return lines.join('\n')
+  }
+  const durations = Array.from(
+    new Set(plans.flatMap((model) => model.plans.map((plan) => Number(plan.minutes))))
+  ).sort((a, b) => a - b)
+  const header = ['Model', ...durations.map(formatDuration)]
+  lines.push(`| ${header.join(' | ')} |`)
+  lines.push(`| ${header.map(() => '---').join(' | ')} |`)
+  for (const model of plans) {
+    const byMinutes = new Map(
+      model.plans.map((plan) => [Number(plan.minutes), plan])
+    )
+    const cells = [
+      `${model.displayName} (\`${model.id}\`)`,
+      ...durations.map((minutes) => planPriceCell(byMinutes.get(minutes))),
+    ]
+    lines.push(`| ${cells.join(' | ')} |`)
+  }
+  return lines.join('\n')
+}
+
+function plansResponse(server: McpServer, plans: PlanView[]): ToolResult {
+  if (clientName(server) === 'opencode') {
+    return {
+      content: [{ type: 'text', text: plansMarkdown(plans) }],
+      structuredContent: { models: plans },
+    }
+  }
+  return json(plans)
 }
 
 function fail(err: unknown): ToolResult {
@@ -363,7 +432,7 @@ export function registerTools(
     async ({ model, backend }) => {
       try {
         const config = await getConfig({ backendUrl: backend })
-        return json(listPlans(config, model))
+        return plansResponse(server, listPlans(config, model))
       } catch (err) {
         return fail(err)
       }
