@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   buyPlan: vi.fn(),
   generateImage: vi.fn(),
   getImageHistory: vi.fn(),
+  getImageOrderStatus: vi.fn(),
+  isStillProcessing: vi.fn(),
   listImageModels: vi.fn(),
   armAutoRefill: vi.fn(),
   disarmAutoRefill: vi.fn(),
@@ -74,6 +76,8 @@ vi.mock('../ai/purchase.js', () => ({
 vi.mock('../ai/images.js', () => ({
   generateImage: mocks.generateImage,
   getImageHistory: mocks.getImageHistory,
+  getImageOrderStatus: mocks.getImageOrderStatus,
+  isStillProcessing: mocks.isStillProcessing,
   listImageModels: mocks.listImageModels,
 }))
 
@@ -126,6 +130,7 @@ describe('MCP tools', () => {
       expect(result.isError).toBeFalsy()
       expect(text(result)).toMatch(/get_balance/)
       expect(text(result)).toMatch(/generate_image/)
+      expect(text(result)).toMatch(/get_image_status/)
       expect(text(result)).toMatch(/SPENDS REAL FUNDS|spend real funds/i)
     })
   })
@@ -206,6 +211,7 @@ describe('MCP tools', () => {
         txid: 'txid-1',
         error: 'Payment was broadcast (txid txid-1) but the backend could not confirm it yet.',
       })
+      mocks.isStillProcessing.mockReturnValue(false)
       const c = await connect()
       const result = await c.callTool({
         name: 'generate_image',
@@ -214,6 +220,34 @@ describe('MCP tools', () => {
       expect(result.isError).toBe(true)
       expect(text(result)).toMatch(/could not confirm/)
       expect(text(result)).toMatch(/txid-1/)
+    })
+
+    it('returns processing status when generation times out', async () => {
+      mocks.generateImage.mockResolvedValue({
+        success: false,
+        paid: true,
+        orderId: 'order-1',
+        model: 'nano-banana',
+        txid: 'txid-1',
+        amountSats: 1500,
+        amountUsd: 0.01,
+        error: 'Timed out waiting for image generation (order order-1 is "processing").',
+      })
+      mocks.isStillProcessing.mockReturnValue(true)
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'generate_image',
+        arguments: { prompt: 'a cat' },
+      })
+      expect(result.isError).toBeFalsy()
+      expect(text(result)).toMatch(/still processing/)
+      expect(text(result)).toMatch(/order-1/)
+      expect(text(result)).toMatch(/get_image_status/)
+      expect(result.structuredContent).toMatchObject({
+        orderId: 'order-1',
+        status: 'processing',
+        txid: 'txid-1',
+      })
     })
 
     it('returns an error result when the flow throws', async () => {
@@ -225,6 +259,71 @@ describe('MCP tools', () => {
       })
       expect(result.isError).toBe(true)
       expect(text(result)).toBe('backend down')
+    })
+
+    it('returns image on get_image_status when generation is complete', async () => {
+      mocks.getImageOrderStatus.mockResolvedValue({
+        success: true,
+        paid: true,
+        orderId: 'order-1',
+        model: 'nano-banana',
+        amountSats: 1500,
+        amountUsd: 0.01,
+        txid: 'txid-1',
+        status: 'generation_complete',
+        path: '/tmp/order-1.png',
+        mediaType: 'image/png',
+        base64: 'aGk=',
+      })
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'get_image_status',
+        arguments: { order_id: 'order-1' },
+      })
+      expect(result.isError).toBeFalsy()
+      const image = (result.content as any[]).find(
+        (block) => block.type === 'image'
+      )
+      expect(image).toEqual({ type: 'image', data: 'aGk=', mimeType: 'image/png' })
+      expect(result.structuredContent).toMatchObject({
+        orderId: 'order-1',
+        path: '/tmp/order-1.png',
+      })
+    })
+
+    it('returns processing status when still generating', async () => {
+      mocks.getImageOrderStatus.mockResolvedValue({
+        success: false,
+        paid: true,
+        orderId: 'order-1',
+        error: 'Timed out waiting for image generation',
+      })
+      mocks.isStillProcessing.mockReturnValue(true)
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'get_image_status',
+        arguments: { order_id: 'order-1' },
+      })
+      expect(result.isError).toBeFalsy()
+      expect(text(result)).toMatch(/still processing/)
+      expect(text(result)).toMatch(/order-1/)
+    })
+
+    it('returns error when get_image_status fails', async () => {
+      mocks.getImageOrderStatus.mockResolvedValue({
+        success: false,
+        paid: true,
+        orderId: 'order-1',
+        error: 'Image generation failed: boom',
+      })
+      mocks.isStillProcessing.mockReturnValue(false)
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'get_image_status',
+        arguments: { order_id: 'order-1' },
+      })
+      expect(result.isError).toBe(true)
+      expect(text(result)).toMatch(/boom/)
     })
   })
 

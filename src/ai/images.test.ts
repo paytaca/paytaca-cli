@@ -5,6 +5,8 @@ import {
   createImageOrder,
   fulfillImageOrder,
   generateImage,
+  isStillProcessing,
+  getImageOrderStatus,
   type ImageOrderQuote,
 } from './images.js'
 
@@ -442,5 +444,113 @@ describe('generateImage', () => {
     expect(result.success).toBe(false)
     expect(result.paid).toBe(false)
     expect(result.error).toMatch(/nope/)
+  })
+})
+
+describe('isStillProcessing', () => {
+  it('returns true for a paid timeout result', () => {
+    expect(
+      isStillProcessing({
+        success: false,
+        paid: true,
+        orderId: 'o1',
+        error: 'Timed out waiting for image generation',
+      })
+    ).toBe(true)
+  })
+
+  it('returns false for an unpaid failure', () => {
+    expect(
+      isStillProcessing({
+        success: false,
+        paid: false,
+        orderId: 'o1',
+        error: 'Timed out waiting',
+      })
+    ).toBe(false)
+  })
+
+  it('returns false for a non-timeout error', () => {
+    expect(
+      isStillProcessing({
+        success: false,
+        paid: true,
+        orderId: 'o1',
+        error: 'Image generation failed: boom',
+      })
+    ).toBe(false)
+  })
+
+  it('returns false for a successful result', () => {
+    expect(
+      isStillProcessing({
+        success: true,
+        paid: true,
+        orderId: 'o1',
+        path: '/x.png',
+      })
+    ).toBe(false)
+  })
+})
+
+describe('getImageOrderStatus', () => {
+  const timing = { pollIntervalMs: 1, pollTimeoutMs: 200 }
+
+  function pollRoute(statusBody: unknown) {
+    route((url) => {
+      if (url.includes('/status')) return { body: statusBody }
+      if (url.endsWith('/confirm')) return { body: { ok: true } }
+    })
+  }
+
+  it('polls until complete and saves the image', async () => {
+    mocks.requireWallet.mockReturnValue(ctxFixture())
+    pollRoute({
+      status: 'generation_complete',
+      image: 'aGk=',
+      media_type: 'image/png',
+    })
+
+    const result = await getImageOrderStatus('order-1', timing)
+    expect(result.success).toBe(true)
+    expect(result.orderId).toBe('order-1')
+    expect(result.path).toContain('order-1.png')
+    expect(result.base64).toBe('aGk=')
+    expect(mocks.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining('order-1.png'),
+      Buffer.from('aGk=', 'base64')
+    )
+  })
+
+  it('returns paid + error on timeout', async () => {
+    mocks.requireWallet.mockReturnValue(ctxFixture())
+    pollRoute({ status: 'processing' })
+
+    const result = await getImageOrderStatus('order-1', { ...timing, pollTimeoutMs: 10 })
+    expect(result.success).toBe(false)
+    expect(result.paid).toBe(true)
+    expect(result.orderId).toBe('order-1')
+    expect(result.error).toMatch(/Timed out/)
+  })
+
+  it('returns an error for failed generations', async () => {
+    mocks.requireWallet.mockReturnValue(ctxFixture())
+    pollRoute({ status: 'failed', error: 'boom' })
+
+    const result = await getImageOrderStatus('order-1', timing)
+    expect(result.success).toBe(false)
+    expect(result.paid).toBe(true)
+    expect(result.error).toMatch(/failed: boom/)
+  })
+
+  it('returns an error when wallet is missing', async () => {
+    mocks.requireWallet.mockImplementation(() => {
+      throw new Error('No wallet')
+    })
+
+    const result = await getImageOrderStatus('order-1', timing)
+    expect(result.success).toBe(false)
+    expect(result.paid).toBe(true)
+    expect(result.error).toMatch(/No wallet/)
   })
 })

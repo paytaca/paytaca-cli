@@ -29,6 +29,8 @@ import { buyPlan } from '../ai/purchase.js'
 import {
   generateImage,
   getImageHistory,
+  getImageOrderStatus,
+  isStillProcessing,
   listImageModels,
 } from '../ai/images.js'
 import {
@@ -250,6 +252,7 @@ Paytaca AI:
 
 Image generation:
   generate_image         Generate an image from a prompt (spends funds)
+  get_image_status       Poll/resume a pending image generation order
   get_image_models       List image generation models
   get_image_history      Image generation order history
 
@@ -674,6 +677,85 @@ export function registerTools(
   )
 
   server.registerTool(
+    'get_image_status',
+    {
+      title: 'Poll image generation status',
+      description:
+        'Poll an existing image generation order by ID. If generation is complete, returns the image inline plus the saved file path. If still processing, returns the current status so you can retry later. Use this to resume after generate_image returns a "processing" status.',
+      inputSchema: {
+        order_id: z.string().min(1),
+        chipnet: z.boolean().optional(),
+        backend: z.string().optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ order_id, chipnet, backend }) => {
+      try {
+        const result = await getImageOrderStatus(order_id, {
+          isChipnet: cn(chipnet),
+          backendUrl: backend,
+        })
+
+        if (result.success && result.base64) {
+          const mediaType = result.mediaType || 'image/png'
+          return {
+            content: [
+              { type: 'image' as const, data: result.base64, mimeType: mediaType },
+              {
+                type: 'text' as const,
+                text: [
+                  `Image ready (order ${result.orderId}).`,
+                  `Saved to: ${result.path}`,
+                  `Model: ${result.model}`,
+                  `Cost: ${result.amountSats} sats`,
+                  `txid: ${result.txid}`,
+                ].join('\n'),
+              },
+            ],
+            structuredContent: {
+              orderId: result.orderId,
+              model: result.model,
+              status: result.status,
+              path: result.path,
+              mediaType: result.mediaType,
+              amountSats: result.amountSats,
+              amountUsd: result.amountUsd,
+              txid: result.txid,
+            },
+          }
+        }
+
+        if (isStillProcessing(result)) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: [
+                  `Image generation is still processing (order ${result.orderId}).`,
+                  `Try again in a few seconds with get_image_status.`,
+                ].join('\n'),
+              },
+            ],
+            structuredContent: {
+              orderId: result.orderId,
+              status: 'processing',
+            },
+          }
+        }
+
+        return fail(new Error(result.error || 'Image generation failed.'))
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
     'generate_image',
     {
       title: 'Generate an image',
@@ -706,6 +788,31 @@ export function registerTools(
           isChipnet: cn(chipnet),
           backendUrl: backend,
         })
+
+        if (isStillProcessing(result)) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: [
+                  `Image generation is still processing (order ${result.orderId}).`,
+                  `The generation is running server-side — call get_image_status with order_id "${result.orderId}" to retrieve the result.`,
+                  `Model: ${result.model}`,
+                  `Paid: ${result.amountSats} sats (txid: ${result.txid})`,
+                ].join('\n'),
+              },
+            ],
+            structuredContent: {
+              orderId: result.orderId,
+              model: result.model,
+              status: 'processing',
+              amountSats: result.amountSats,
+              amountUsd: result.amountUsd,
+              txid: result.txid,
+            },
+          }
+        }
+
         if (!result.success || !result.base64) {
           return fail(new Error(result.error || 'Image generation failed.'))
         }

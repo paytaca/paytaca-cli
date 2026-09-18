@@ -536,3 +536,94 @@ export async function generateImage(
   }
   return fulfillImageOrder(quote, opts)
 }
+
+/** True when the tool should return a "processing" status instead of an error. */
+export function isStillProcessing(result: GenerateImageResult): boolean {
+  return (
+    !result.success &&
+    result.paid &&
+    !!result.orderId &&
+    !!result.error &&
+    /timed out/i.test(result.error)
+  )
+}
+
+export interface PollStatusOptions {
+  isChipnet?: boolean
+  backendUrl?: string
+  pollIntervalMs?: number
+  pollTimeoutMs?: number
+}
+
+/**
+ * Poll an existing image order by ID until the image is ready or the
+ * deadline is reached. Mints a fresh OAuth token and saves the image
+ * to ~/.paytaca/images when generation is complete.
+ */
+export async function getImageOrderStatus(
+  orderId: string,
+  opts: PollStatusOptions = {}
+): Promise<GenerateImageResult> {
+  const isChipnet = Boolean(opts.isChipnet)
+  const baseUrl = resolveBackendUrl(opts.backendUrl)
+  const base: GenerateImageResult = {
+    success: false,
+    paid: true,
+    orderId,
+  }
+
+  let ctx: WalletContext
+  let token: string
+  try {
+    ctx = requireWallet(isChipnet)
+    token = await mintAccessToken(ctx, baseUrl)
+  } catch (err: any) {
+    return { ...base, error: err?.message || String(err) }
+  }
+
+  let status: ImageOrderStatus
+  try {
+    status = await pollOrderStatus(
+      baseUrl,
+      token,
+      orderId,
+      opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+      opts.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS
+    )
+  } catch (err: any) {
+    return { ...base, error: err?.message || String(err) }
+  }
+
+  let filePath: string
+  try {
+    filePath = saveImage(orderId, status.media_type ?? '', status.image ?? '')
+  } catch (err: any) {
+    return {
+      ...base,
+      status: status.status,
+      mediaType: status.media_type,
+      base64: status.image ?? undefined,
+      error: `${err?.message || err} The image was generated but could not be saved.`,
+    }
+  }
+
+  try {
+    await authedRequest(
+      baseUrl,
+      `/v1/images/${encodeURIComponent(orderId)}/confirm`,
+      token,
+      { method: 'POST' }
+    )
+  } catch {
+    // Non-critical.
+  }
+
+  return {
+    ...base,
+    success: true,
+    status: status.status,
+    path: filePath,
+    mediaType: status.media_type,
+    base64: status.image ?? undefined,
+  }
+}

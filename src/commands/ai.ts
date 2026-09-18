@@ -38,6 +38,7 @@ import { buyPlan, type PaymentMethod } from '../ai/purchase.js'
 import {
   listImageModels,
   getImageHistory,
+  getImageOrderStatus,
   createImageOrder,
   fulfillImageOrder,
   type ImageOrderQuote,
@@ -896,6 +897,41 @@ export function registerAiCommands(program: Command): void {
         }
         if (history.count !== undefined) {
           console.log(chalk.dim(`   ${history.count} total orders\n`))
+        }
+      } catch (err: any) {
+        if (opts.json) outputJson({ error: err.message })
+        else console.log(chalk.red(`\nError: ${err.message}\n`))
+        process.exitCode = 1
+      }
+    })
+
+  image.command('status')
+    .description('Poll a pending image generation order')
+    .argument('<order-id>', 'Image order ID to check')
+    .option('--chipnet', 'Use chipnet')
+    .option('--backend <url>', 'Override backend URL')
+    .option('--json', 'Output as JSON')
+    .action(async (orderId: string, opts) => {
+      try {
+        const result = await getImageOrderStatus(orderId, {
+          isChipnet: Boolean(opts.chipnet),
+          backendUrl: opts.backend,
+        })
+        if (opts.json) {
+          outputJson(result)
+          return
+        }
+        if (result.success && result.path) {
+          console.log(chalk.green(`\n   Image ready (order ${result.orderId}).`))
+          console.log(`   Saved to: ${result.path}`)
+          console.log(chalk.dim(`   Model: ${result.model}`))
+          console.log(chalk.dim(`   Cost: ${result.amountSats} sats`))
+          console.log(chalk.dim(`   txid: ${result.txid}\n`))
+        } else if (result.paid && !result.success) {
+          console.log(chalk.yellow(`\n   Image generation is still processing (order ${result.orderId}).`))
+          console.log(chalk.dim('   Try again in a few seconds.\n'))
+        } else {
+          console.log(chalk.red(`\n   Error: ${result.error}\n`))
         }
       } catch (err: any) {
         if (opts.json) outputJson({ error: err.message })

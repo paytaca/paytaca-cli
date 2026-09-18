@@ -43,6 +43,7 @@ describe('paytaca MCP server', () => {
         'get_tokens',
         'get_transactions',
         'generate_image',
+        'get_image_status',
         'send',
       ].sort()
     )
