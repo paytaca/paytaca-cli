@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
+.DS_Store
 
 # AI agent skill installations (local only)
 .agents/
