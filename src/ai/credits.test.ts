@@ -30,6 +30,14 @@ const expired: WalletStatus = {
   time_remaining_seconds: 0,
 } as unknown as WalletStatus
 
+const modelEnabledNoCredits: WalletStatus = {
+  model_id: 'z-ai/glm-5.3',
+  display_name: 'GLM 5.3',
+  model_active: true,
+  session_active: false,
+  time_remaining_seconds: 0,
+} as unknown as WalletStatus
+
 describe('getSessions', () => {
   it('returns the sessions array when present', () => {
     expect(getSessions(status([active, expired]))).toHaveLength(2)
@@ -66,6 +74,17 @@ describe('hasActiveCredits', () => {
   it('scopes the check to the requested model', () => {
     expect(hasActiveCredits(status([active]), 'deepseek-v4-pro')).toBe(false)
     expect(hasActiveCredits(status([active]), 'glm-5.3-flash')).toBe(true)
+  })
+
+  it('does not match sibling models by prefix', () => {
+    expect(hasActiveCredits(status([active]), 'z-ai/glm-5.3')).toBe(false)
+    expect(hasActiveCredits(status([active]), 'glm-5.3')).toBe(false)
+    expect(hasActiveCredits(status([active]), 'GLM 5.3')).toBe(false)
+  })
+
+  it('ignores the model_active availability flag', () => {
+    expect(hasActiveCredits(status([modelEnabledNoCredits]))).toBe(false)
+    expect(hasActiveCredits(status([modelEnabledNoCredits]), 'z-ai/glm-5.3')).toBe(false)
   })
 
   it('is false for null status', () => {

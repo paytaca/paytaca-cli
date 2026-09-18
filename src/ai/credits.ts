@@ -52,11 +52,24 @@ export function getSessions(status: WalletStatus): WalletSession[] {
   return [status]
 }
 
+function normalizeModelId(value: string): string {
+  return value.trim().toLowerCase().replace(/^paytaca-ai\//, '')
+}
+
+function modelIdsMatch(candidate: string, query: string): boolean {
+  if (!candidate || !query) return false
+  if (candidate === query) return true
+  const candidateTail = candidate.slice(candidate.lastIndexOf('/') + 1)
+  const queryTail = query.slice(query.lastIndexOf('/') + 1)
+  return candidateTail.length > 0 && candidateTail === queryTail
+}
+
 function sessionMatches(session: WalletSession, modelId: string): boolean {
-  const q = modelId.toLowerCase()
-  const id = String(session.model_id || session.ai_model || '').toLowerCase()
-  const name = String(session.display_name || '').toLowerCase()
-  return id === q || id.includes(q) || name.includes(q)
+  const q = normalizeModelId(modelId)
+  const id = normalizeModelId(String(session.model_id || session.ai_model || ''))
+  if (modelIdsMatch(id, q)) return true
+  const name = normalizeModelId(String(session.display_name || ''))
+  return name !== '' && name === q
 }
 
 export function findSession(
@@ -71,21 +84,11 @@ export function findSession(
     if (match) return match
   }
 
-  return (
-    sessions.find(
-      (s) =>
-        s.model_active === true ||
-        s.session_active === true ||
-        (s.time_remaining_seconds ?? 0) > 0
-    ) ||
-    sessions[0] ||
-    null
-  )
+  return sessions.find(sessionActive) || sessions[0] || null
 }
 
 function sessionActive(session: WalletSession): boolean {
   return (
-    session.model_active === true ||
     session.session_active === true ||
     (session.time_remaining_seconds ?? 0) > 0
   )
