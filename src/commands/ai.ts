@@ -35,6 +35,13 @@ import {
   formatRemaining,
 } from '../ai/credits.js'
 import { buyPlan, type PaymentMethod } from '../ai/purchase.js'
+import {
+  listImageModels,
+  getImageHistory,
+  createImageOrder,
+  fulfillImageOrder,
+  type ImageOrderQuote,
+} from '../ai/images.js'
 import { provisionApiKey } from '../ai/oauth.js'
 import { configureHarness, type ConfigureResult } from '../ai/configure.js'
 import { CLIENTS, type McpClient } from './mcp.js'
@@ -729,5 +736,171 @@ export function registerAiCommands(program: Command): void {
       const budget = remainingBudget(state)
       console.log(`   Budget:   ${budget === null ? '(unlimited)' : `${budget} min remaining`}`)
       console.log()
+    })
+
+  // ── ai image ────────────────────────────────────────────────────────
+  const image = ai.command('image').description('Paytaca AI image generation')
+
+  image.command('models')
+    .description('List available image generation models')
+    .option('--backend <url>', 'Override backend URL')
+    .option('--json', 'Output as JSON')
+    .action(async (opts) => {
+      try {
+        const models = await listImageModels({ backendUrl: opts.backend })
+        if (opts.json) {
+          outputJson({ models })
+          return
+        }
+        console.log(chalk.bold('\n   Image Models\n'))
+        if (models.length === 0) {
+          console.log(chalk.dim('   No image models found.\n'))
+          return
+        }
+        const unitLabel: Record<string, string> = {
+          image: 'per image',
+          megapixel: 'per megapixel',
+          token: 'per token',
+        }
+        for (const m of models) {
+          console.log(`   ${chalk.bold(m.display_name || m.id)} ${chalk.dim(`(${m.id})`)}`)
+          const unit = unitLabel[m.pricing_unit ?? ''] ?? `per ${m.pricing_unit ?? 'image'}`
+          const price = m.cost_per_unit_usd !== undefined ? `$${m.cost_per_unit_usd.toFixed(6)}` : ''
+          console.log(chalk.dim(`     ${price} ${unit}`))
+        }
+        console.log()
+      } catch (err: any) {
+        if (opts.json) outputJson({ error: err.message })
+        else console.log(chalk.red(`\nError: ${err.message}\n`))
+        process.exitCode = 1
+      }
+    })
+
+  image.command('generate')
+    .description('Generate an image from a prompt (BCH payment)')
+    .argument('<prompt>', 'Image prompt')
+    .option('--model <model>', 'Image model id (defaults to the cheapest)')
+    .option('--aspect-ratio <ratio>', 'Aspect ratio, e.g. 1:1, 16:9', '1:1')
+    .option('--quality <quality>', 'Image quality: low, medium, high, auto', 'auto')
+    .option('--resolution <resolution>', 'Resolution: 512, 1K, 2K, 4K', '1K')
+    .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
+    .option('--backend <url>', 'Override backend URL')
+    .option('-y, --yes', 'Skip confirmation prompt')
+    .option('--json', 'Output as JSON')
+    .action(async (prompt: string, opts) => {
+      const json = Boolean(opts.json)
+      const orderOpts = {
+        prompt,
+        model: opts.model,
+        aspectRatio: opts.aspectRatio,
+        quality: opts.quality,
+        resolution: opts.resolution,
+        isChipnet: Boolean(opts.chipnet),
+        backendUrl: opts.backend,
+      }
+
+      let quote: ImageOrderQuote
+      try {
+        quote = await createImageOrder(orderOpts)
+      } catch (err: any) {
+        if (json) outputJson({ error: err.message })
+        else console.log(chalk.red(`\nError: ${err.message}\n`))
+        process.exitCode = 1
+        return
+      }
+
+      if (!opts.yes) {
+        if (json) {
+          outputJson({
+            error: 'Payment not confirmed. Re-run with --yes to execute.',
+            orderId: quote.orderId,
+            model: quote.model,
+            amountSats: quote.amountSats,
+            amountUsd: quote.amountUsd,
+          })
+          process.exitCode = 1
+          return
+        }
+        const proceed = await promptConfirmation(
+          `Generate an image with ${quote.model || 'the default model'} for ${quote.amountSats} sats${
+            quote.amountUsd !== undefined ? ` (~$${quote.amountUsd})` : ''
+          }?`
+        )
+        if (!proceed) {
+          console.log(chalk.dim('\n   Cancelled.\n'))
+          process.exitCode = 1
+          return
+        }
+      }
+
+      const result = await fulfillImageOrder(quote, orderOpts)
+
+      if (json) {
+        outputJson({ ...result, base64: undefined })
+        if (!result.success) process.exitCode = 1
+        return
+      }
+
+      if (!result.success) {
+        console.log(chalk.red(`\n   Error: ${result.error || 'Generation failed.'}\n`))
+        process.exitCode = 1
+        return
+      }
+      console.log(chalk.green(`\n   Image generated — ${result.path}`))
+      console.log(`   Order:  ${result.orderId}`)
+      console.log(`   Model:  ${result.model}`)
+      console.log(`   Cost:   ${result.amountSats} sats${result.amountUsd !== undefined ? ` (~$${result.amountUsd})` : ''}`)
+      if (result.txid) console.log(chalk.dim(`   txid:   ${result.txid}`))
+      console.log()
+    })
+
+  image.command('history')
+    .description('Show image generation order history')
+    .option('--page <page>', 'Page number', '1')
+    .option('--backend <url>', 'Override backend URL')
+    .option('--json', 'Output as JSON')
+    .action(async (opts) => {
+      const page = Number(opts.page)
+      if (!Number.isFinite(page) || page < 1) {
+        const message = 'Page must be a positive number.'
+        if (opts.json) outputJson({ error: message })
+        else console.log(chalk.red(`\nError: ${message}\n`))
+        process.exitCode = 1
+        return
+      }
+      try {
+        const history = await getImageHistory({
+          page,
+          backendUrl: opts.backend,
+        })
+        if (opts.json) {
+          outputJson(history)
+          return
+        }
+        console.log(chalk.bold('\n   Image Order History\n'))
+        const rows = history.data ?? []
+        if (rows.length === 0) {
+          console.log(chalk.dim('   No orders found.\n'))
+          return
+        }
+        for (const row of rows) {
+          const date = row.created_at ? new Date(row.created_at).toLocaleString() : ''
+          console.log(`   ${chalk.bold(row.id)}`)
+          console.log(
+            chalk.dim(
+              `     ${row.status ?? 'unknown'} · ${row.model_display_name || row.model || ''} · ${row.price_sats ?? 0} sats${date ? ` · ${date}` : ''}`
+            )
+          )
+          if (row.prompt) console.log(chalk.dim(`     "${row.prompt}"`))
+          console.log()
+        }
+        if (history.count !== undefined) {
+          console.log(chalk.dim(`   ${history.count} total orders\n`))
+        }
+      } catch (err: any) {
+        if (opts.json) outputJson({ error: err.message })
+        else console.log(chalk.red(`\nError: ${err.message}\n`))
+        process.exitCode = 1
+      }
     })
 }

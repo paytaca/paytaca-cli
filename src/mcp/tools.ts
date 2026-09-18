@@ -27,14 +27,23 @@ import {
 } from '../ai/credits.js'
 import { buyPlan } from '../ai/purchase.js'
 import {
+  generateImage,
+  getImageHistory,
+  listImageModels,
+} from '../ai/images.js'
+import {
   armAutoRefill,
   disarmAutoRefill,
   readAutoRefillState,
   remainingBudget,
 } from '../ai/autoRefill.js'
 
+type ToolResultContent =
+  | { type: 'text'; text: string }
+  | { type: 'image'; data: string; mimeType: string }
+
 type ToolResult = {
-  content: { type: 'text'; text: string }[]
+  content: ToolResultContent[]
   structuredContent?: Record<string, unknown>
   isError?: boolean
 }
@@ -239,10 +248,16 @@ Paytaca AI:
   buy_plan               Buy an AI plan with BCH or LIFT (spends funds)
   auto_refill            Arm/disarm/inspect automatic plan refills
 
+Image generation:
+  generate_image         Generate an image from a prompt (spends funds)
+  get_image_models       List image generation models
+  get_image_history      Image generation order history
+
 Notes:
   - All tools accept an optional "chipnet" flag (default mainnet).
-  - send and buy_plan spend real funds from the active wallet; the MCP host
-    is responsible for asking the user for approval before invoking them.
+  - send, buy_plan, and generate_image spend real funds from the active
+    wallet; the MCP host is responsible for asking the user for approval
+    before invoking them.
   - When get_credits reports an inactive session it includes a purchaseHint.
     Relay purchaseHint.message (it contains the exact copy-paste command to
     buy more time); do not replace it with upsell or "what next" questions.
@@ -611,6 +626,115 @@ export function registerTools(
           remainingMinutes: remainingBudget(state),
           state,
         })
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'get_image_models',
+    {
+      title: 'List image models',
+      description:
+        'List the image generation models available through Paytaca AI.',
+      inputSchema: { backend: z.string().optional() },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ backend }) => {
+      try {
+        return json(await listImageModels({ backendUrl: backend }))
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'get_image_history',
+    {
+      title: 'Get image order history',
+      description: 'Return paginated Paytaca image generation order history.',
+      inputSchema: {
+        page: z.number().int().positive().optional(),
+        page_size: z.number().int().positive().optional(),
+        backend: z.string().optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ page, page_size, backend }) => {
+      try {
+        return json(
+          await getImageHistory({ page, pageSize: page_size, backendUrl: backend })
+        )
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'generate_image',
+    {
+      title: 'Generate an image',
+      description:
+        'Generate an image from a text prompt with a Paytaca AI image model. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). Returns the image inline plus the file path where it was saved. The MCP host must obtain user approval before calling this.',
+      inputSchema: {
+        prompt: z.string().min(1),
+        model: z.string().optional(),
+        aspect_ratio: z.string().optional(),
+        quality: z.string().optional(),
+        resolution: z.string().optional(),
+        chipnet: z.boolean().optional(),
+        backend: z.string().optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({ prompt, model, aspect_ratio, quality, resolution, chipnet, backend }) => {
+      try {
+        const result = await generateImage({
+          prompt,
+          model,
+          aspectRatio: aspect_ratio,
+          quality,
+          resolution,
+          isChipnet: cn(chipnet),
+          backendUrl: backend,
+        })
+        if (!result.success || !result.base64) {
+          return fail(new Error(result.error || 'Image generation failed.'))
+        }
+        const mediaType = result.mediaType || 'image/png'
+        return {
+          content: [
+            { type: 'image' as const, data: result.base64, mimeType: mediaType },
+            {
+              type: 'text' as const,
+              text: [
+                `Image generated (order ${result.orderId}).`,
+                `Saved to: ${result.path}`,
+                `Model: ${result.model}`,
+                `Cost: ${result.amountSats} sats`,
+                `txid: ${result.txid}`,
+              ].join('\n'),
+            },
+          ],
+          structuredContent: {
+            orderId: result.orderId,
+            model: result.model,
+            status: result.status,
+            path: result.path,
+            mediaType: result.mediaType,
+            amountSats: result.amountSats,
+            amountUsd: result.amountUsd,
+            txid: result.txid,
+          },
+        }
       } catch (err) {
         return fail(err)
       }

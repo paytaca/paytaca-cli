@@ -20,6 +20,9 @@ const mocks = vi.hoisted(() => ({
   summarizeCredits: vi.fn(),
   summarizeAllCredits: vi.fn(),
   buyPlan: vi.fn(),
+  generateImage: vi.fn(),
+  getImageHistory: vi.fn(),
+  listImageModels: vi.fn(),
   armAutoRefill: vi.fn(),
   disarmAutoRefill: vi.fn(),
   readAutoRefillState: vi.fn(),
@@ -66,6 +69,12 @@ vi.mock('../ai/credits.js', async (importOriginal) => {
 
 vi.mock('../ai/purchase.js', () => ({
   buyPlan: mocks.buyPlan,
+}))
+
+vi.mock('../ai/images.js', () => ({
+  generateImage: mocks.generateImage,
+  getImageHistory: mocks.getImageHistory,
+  listImageModels: mocks.listImageModels,
 }))
 
 vi.mock('../ai/autoRefill.js', () => ({
@@ -116,7 +125,106 @@ describe('MCP tools', () => {
       const result = await c.callTool({ name: 'get_help', arguments: {} })
       expect(result.isError).toBeFalsy()
       expect(text(result)).toMatch(/get_balance/)
+      expect(text(result)).toMatch(/generate_image/)
       expect(text(result)).toMatch(/SPENDS REAL FUNDS|spend real funds/i)
+    })
+  })
+
+  describe('image tools', () => {
+    it('lists image models', async () => {
+      mocks.listImageModels.mockResolvedValue([
+        { id: 'nano-banana', display_name: 'Nano Banana' },
+      ])
+      const c = await connect()
+      const result = await c.callTool({ name: 'get_image_models', arguments: {} })
+      expect(result.isError).toBeFalsy()
+      expect(mocks.listImageModels).toHaveBeenCalledWith({ backendUrl: undefined })
+      expect(JSON.parse(text(result))).toEqual([
+        { id: 'nano-banana', display_name: 'Nano Banana' },
+      ])
+    })
+
+    it('passes pagination to get_image_history', async () => {
+      mocks.getImageHistory.mockResolvedValue({ count: 0, data: [] })
+      const c = await connect()
+      await c.callTool({
+        name: 'get_image_history',
+        arguments: { page: 2, page_size: 5 },
+      })
+      expect(mocks.getImageHistory).toHaveBeenCalledWith({
+        page: 2,
+        pageSize: 5,
+        backendUrl: undefined,
+      })
+    })
+
+    it('returns an inline image with a saved path on success', async () => {
+      mocks.generateImage.mockResolvedValue({
+        success: true,
+        paid: true,
+        orderId: 'order-1',
+        model: 'nano-banana',
+        amountSats: 1500,
+        amountUsd: 0.01,
+        txid: 'txid-1',
+        status: 'generation_complete',
+        path: '/tmp/order-1.png',
+        mediaType: 'image/png',
+        base64: 'aGk=',
+      })
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'generate_image',
+        arguments: { prompt: 'a cat', model: 'nano-banana', chipnet: false },
+      })
+      expect(result.isError).toBeFalsy()
+      expect(mocks.generateImage).toHaveBeenCalledWith({
+        prompt: 'a cat',
+        model: 'nano-banana',
+        aspectRatio: undefined,
+        quality: undefined,
+        resolution: undefined,
+        isChipnet: false,
+        backendUrl: undefined,
+      })
+      const image = (result.content as any[]).find(
+        (block) => block.type === 'image'
+      ) as { type: string; data: string; mimeType: string }
+      expect(image).toEqual({ type: 'image', data: 'aGk=', mimeType: 'image/png' })
+      expect(result.structuredContent).toMatchObject({
+        orderId: 'order-1',
+        path: '/tmp/order-1.png',
+        txid: 'txid-1',
+      })
+    })
+
+    it('returns an error result when generation fails', async () => {
+      mocks.generateImage.mockResolvedValue({
+        success: false,
+        paid: true,
+        orderId: 'order-1',
+        txid: 'txid-1',
+        error: 'Payment was broadcast (txid txid-1) but the backend could not confirm it yet.',
+      })
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'generate_image',
+        arguments: { prompt: 'a cat' },
+      })
+      expect(result.isError).toBe(true)
+      expect(text(result)).toMatch(/could not confirm/)
+      expect(text(result)).toMatch(/txid-1/)
+    })
+
+    it('returns an error result when the flow throws', async () => {
+      mocks.generateImage.mockRejectedValue(new Error('backend down'))
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'generate_image',
+        arguments: { prompt: 'a cat' },
+      })
+      expect(result.isError).toBe(true)
+      expect(text(result)).toBe('backend down')
     })
   })
 
