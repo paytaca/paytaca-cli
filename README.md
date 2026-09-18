@@ -155,6 +155,16 @@ paytaca pay https://api.example.com/v1/complete --method POST --body '{"prompt":
 # → Handles 402 → pays → returns response
 ```
 
+### Update
+
+```bash
+paytaca update                  # Update paytaca-cli to the latest version on npm
+paytaca update --check          # Only check for updates; do not install
+paytaca update --registry <url> # Override the npm registry URL
+```
+
+Compares the installed version against the latest published version on npm and, when behind, runs `npm install -g paytaca-cli@latest`. Pass `--check` to see available updates without installing.
+
 ### Paytaca AI
 
 Paytaca AI is a pay-as-you-go model gateway paid with BCH or LIFT via x402. Manage it from the CLI:
@@ -174,6 +184,25 @@ paytaca ai auto-refill --status     # Inspect; also --disable
 ```
 
 `ai configure` accepts `--backend`, `--path`, `--api-key`, `--chipnet`, and `-y/--yes`. `ai purchase` and `ai auto-refill` accept `--lift` to pay with LIFT tokens at a discount. Add `--json` to any `ai` subcommand for machine-readable output.
+
+### Image Generation
+
+Generate images with AI models, paid in BCH on-chain:
+
+```bash
+paytaca ai image models                             # List available image models
+paytaca ai image generate "a green phoenix"         # Generate an image from a prompt
+paytaca ai image generate "prompt" --model <id>     # Specify model (defaults to cheapest)
+paytaca ai image generate "prompt" --aspect-ratio 16:9  # Aspect ratio (default: 1:1)
+paytaca ai image generate "prompt" --quality high   # Quality: low, medium, high, auto
+paytaca ai image generate "prompt" --resolution 2K  # Resolution: 512, 1K, 2K, 4K
+paytaca ai image generate "prompt" --yes            # Skip confirmation prompt
+paytaca ai image history                            # Show order history
+paytaca ai image history --page 2                   # Paginate history
+paytaca ai image status <order-id>                  # Poll a pending generation order
+```
+
+Image generation uses a two-phase flow: an order is created (returning a CashScript contract address and sats price), BCH is paid on-chain, the backend confirms payment via Watchtower, generation runs server-side, and the finished image is saved under `~/.paytaca/images/`. Use `image status` to resume if a generation is still processing when the initial request returns.
 
 ### MCP Server
 
@@ -201,9 +230,9 @@ paytaca ai configure opencode --api-key sk-pytc-…  # read-only wallet
 
 Read-only wallets report credits from the shared wallet hash but can't buy plans — fund credits from the full wallet.
 
-**MCP tools:** wallet reads (`get_balance`, `get_transactions`, `get_receiving_address`, `get_tokens`, `send`) plus Paytaca AI (`get_models`, `get_plans`, `get_credits`, `buy_plan`, `auto_refill`, `get_help`).
+**MCP tools:** wallet reads (`get_balance`, `get_transactions`, `get_receiving_address`, `get_tokens`, `send`) plus Paytaca AI (`get_models`, `get_plans`, `get_credits`, `buy_plan`, `auto_refill`, `get_help`, `generate_image`, `get_image_status`, `get_image_models`, `get_image_history`).
 
-Spending tools (`send`, `buy_plan`, `auto_refill`) require host-level approval. By default MCP operates on your **main wallet** and can spend real funds.
+Spending tools (`send`, `buy_plan`, `auto_refill`, `generate_image`) require host-level approval. By default MCP operates on your **main wallet** and can spend real funds.
 
 When `get_credits` finds a model with no active session (e.g. after a `402` from the Paytaca AI provider), the result includes a `purchaseHint`. Relay `purchaseHint.message` as-is — it carries the exact copy-paste top-up command (no upsell or follow-up questions needed):
 
@@ -277,9 +306,10 @@ src/
     swap.ts          Cauldron DEX swaps (sell/buy with --action)
     pay.ts           x402 BCH payment handler for HTTP requests
     check.ts         Check if URL requires x402 payment
-    ai.ts            Paytaca AI (configure, api-key, models, plans, credits, purchase, auto-refill)
+    ai.ts            Paytaca AI (configure, api-key, models, plans, credits, purchase, auto-refill, image)
     chat.ts          Nostr chat (contacts, conversations, identity, listen)
     mcp.ts           `paytaca mcp` stdio entry + per-harness config templates
+    update.ts        Self-update from npm registry
   core/
     context.ts       Wallet context resolution (keychain + network), embed-safe
     wallet.ts        Render-agnostic wallet ops shared by CLI and MCP tools
@@ -312,6 +342,7 @@ src/
     oauth.ts         BCH OAuth challenge -> access token -> API key
     models.ts        Model catalogue, plan tiers, price/duration helpers
     credits.ts       Credit session lookup and summaries
+    images.ts        Image generation client, order orchestration, polling
     purchase.ts      Plan purchase via x402 (BCH or LIFT)
     autoRefill.ts    Auto-refill state and orchestration
     configure.ts     Harness setup (MCP + Paytaca AI provider + credits offer)
