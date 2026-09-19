@@ -53,6 +53,7 @@ import {
   remainingBudget,
 } from '../ai/autoRefill.js'
 
+
 function outputJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2))
 }

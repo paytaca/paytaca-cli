@@ -24,6 +24,7 @@
 - **Secret storage:** OS-native keychain via `@napi-rs/keyring` (prebuilt Rust binaries, no node-gyp).
 - **Testing:** Vitest (`npm test` → `vitest run`). There is **no lint script** — run `npm run build` (tsc) to type-check.
 - **Dev scripts:** `npm run build` (tsc), `npm run dev` (tsc --watch), `npm test` (vitest run).
+- **Web UI:** `paytaca web` serves a local wallet UI at `http://127.0.0.1:7474`. The HTML page is self-contained: Alpine.js (v3, ~56KB) is vendored inline from `node_modules/alpinejs/dist/cdn.min.js` at module load time (`src/web/page.ts`). No frontend build step. The page uses Alpine directives (`x-data`, `x-for`, `x-show`, `@click`) for reactivity — avoid adding separate frontend frameworks or build tools.
 
 ## Conventions
 
