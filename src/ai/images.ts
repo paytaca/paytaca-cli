@@ -64,6 +64,7 @@ export interface ImageHistoryEntry {
   prompt_tokens?: number
   created_at?: string
   completed_at?: string
+  filepath?: string
 }
 
 export interface ImageHistoryResult {
@@ -137,7 +138,7 @@ const ALLOWED_MEDIA_TYPES = new Set([
   'image/gif',
 ])
 
-const MEDIA_TYPE_EXTENSIONS: Record<string, string> = {
+export const MEDIA_TYPE_EXTENSIONS: Record<string, string> = {
   'image/png': 'png',
   'image/jpeg': 'jpg',
   'image/webp': 'webp',

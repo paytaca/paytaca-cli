@@ -189,6 +189,46 @@ export async function estimateSwap(
 }
 
 /**
+ * Estimate how many base units of a token must be sold (token -> BCH)
+ * to receive at least `bchDemandSats` satoshis out of the Cauldron pools.
+ * Used to preview the token cost of a BCH-denominated payment.
+ */
+export async function estimateTokenNeededForBch(opts: {
+  tokenId: string
+  /** BCH amount to receive, in satoshis. */
+  bchDemandSats: bigint
+  isChipnet?: boolean
+}): Promise<{ tokenAmount: bigint; decimals: number; symbol: string }> {
+  const { tokenId, bchDemandSats } = opts
+  const isChipnet = opts.isChipnet ?? false
+
+  const [tokenData, apiPools] = await Promise.all([
+    fetchTokenData(tokenId),
+    fetchPoolsForToken(tokenId),
+  ])
+  if (!tokenData) {
+    throw new Error(`No cauldron token data found for ${tokenId}`)
+  }
+  if (apiPools.length === 0) {
+    throw new Error(`No active cauldron pools for token ${tokenId}`)
+  }
+
+  const pools = apiPools.map(apiPoolToMicroPool).map(microPoolToPoolV0)
+  const tradeResult = attemptTrade({
+    pools,
+    isBuyingToken: false,
+    supply: undefined,
+    demand: bchDemandSats,
+  })
+
+  return {
+    tokenAmount: tradeResult.summary.supply,
+    decimals: tokenData.bcmr.token.decimals,
+    symbol: tokenData.bcmr.token.symbol || tokenData.display_symbol,
+  }
+}
+
+/**
  * Format a SwapQuote for human display.
  */
 export function formatQuote(quote: SwapQuote): string {

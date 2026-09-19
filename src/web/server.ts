@@ -27,9 +27,9 @@ import {
   listPlans,
   selectModel,
   selectTier,
+  formatDuration,
 } from '../ai/models.js'
 import {
-  summarizeAllCredits,
   formatRemaining,
   getSessions,
 } from '../ai/credits.js'
@@ -50,6 +50,7 @@ import {
   fulfillImageOrder,
   getImageHistory,
   IMAGE_DIR,
+  MEDIA_TYPE_EXTENSIONS,
   type ImageModel,
   type ImageOrderQuote,
   type GenerateImageResult,
@@ -59,9 +60,11 @@ import {
   estimateSwap,
   executeSwap,
   formatQuote,
+  estimateTokenNeededForBch,
   type SwapDirection,
 } from '../wallet/cauldron/swap.js'
 import { fetchTokenData } from '../wallet/cauldron/api.js'
+import { formatTokenAmount } from '../utils/format.js'
 
 export interface WebDeps {
   getWalletState(): Promise<object>
@@ -97,6 +100,7 @@ export interface WebDeps {
     minutes: number
     method: string
   }): Promise<object>
+  quoteLiftNeeded(opts: { sats: number }): Promise<object>
   setAutoRefill(opts: {
     enabled: boolean
     model?: string
@@ -115,14 +119,7 @@ export interface WebDeps {
   }): Promise<ImageOrderQuote>
   fulfillImage(orderId: string): Promise<GenerateImageResult>
   serveImageFile(id: string): Promise<{ filePath: string; mediaType: string } | null>
-}
-
-const ALLOWED_MEDIA_TYPES: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  webp: 'image/webp',
-  gif: 'image/gif',
+  deleteImageFile(id: string): Promise<boolean>
 }
 
 function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
@@ -140,7 +137,6 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
       ])
 
       const lift = tokens.tokens.find((t: { category: string }) => t.category === LIFT_TOKEN_ID)
-      const credits = summarizeAllCredits(status)
       const sessions = getSessions(status).map((s) => ({
         model: s.model_id || s.ai_model || null,
         displayName: s.display_name || null,
@@ -150,7 +146,16 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
         creditsSeconds: s.time_credits_seconds ?? 0,
       }))
 
-      const plans = listPlans(config)
+      const plans = listPlans(config).map((p) => ({
+        modelId: p.id,
+        displayName: p.displayName,
+        tiers: (p.plans || []).map((t) => ({
+          minutes: t.minutes,
+          durationDisplay: formatDuration(t.minutes),
+          priceUsd: t.price_usd,
+          priceSats: t.price_sats,
+        })),
+      }))
       const autoRefill = readAutoRefillState()
 
       let imageModels: ImageModel[] = []
@@ -159,7 +164,10 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
       let imageHistory: ImageHistoryEntry[] = []
       try {
         const hist = await getImageHistory({ backendUrl, page: 1, pageSize: 20 })
-        imageHistory = hist.data || []
+        imageHistory = (hist.data || []).map((e) => ({
+          ...e,
+          filepath: localImageFile(e.id) ?? undefined,
+        }))
       } catch {}
 
       return {
@@ -172,7 +180,6 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
         lift: lift
           ? { category: lift.category, symbol: lift.symbol, displayBalance: lift.displayBalance, rawBalance: lift.rawBalance }
           : null,
-        credits,
         usage: sessions,
         plans,
         liftDiscountPercent: config.lift_payment_discount_percent ?? 0,
@@ -285,6 +292,26 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
       })
     },
 
+    async quoteLiftNeeded(opts) {
+      if (isChipnet) throw new Error('LIFT swaps are not supported on chipnet')
+      const sats = Number(opts.sats)
+      if (!Number.isFinite(sats) || !Number.isInteger(sats) || sats <= 0) {
+        throw new Error('Invalid sats amount')
+      }
+      const est = await estimateTokenNeededForBch({
+        tokenId: LIFT_TOKEN_ID,
+        bchDemandSats: BigInt(sats),
+        isChipnet,
+      })
+      return {
+        sats,
+        rawAmount: Number(est.tokenAmount).toString(),
+        display: formatTokenAmount(Number(est.tokenAmount), est.decimals),
+        symbol: est.symbol,
+        decimals: est.decimals,
+      }
+    },
+
     async setAutoRefill(opts) {
       if (opts.enabled) {
         return armAutoRefill({
@@ -322,18 +349,42 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
     },
 
     async serveImageFile(id) {
-      const safeId = id.replace(/[^a-zA-Z0-9_-]/g, '')
-      if (!safeId) return null
-      const files = fs.readdirSync(IMAGE_DIR).filter((f) => f.startsWith(safeId + '.'))
-      if (!files.length) return null
-      const ext = files[0].split('.').pop() || ''
+      const filePath = localImageFile(id)
+      if (!filePath) return null
+      const ext = filePath.split('.').pop() || ''
       return {
-        filePath: path.join(IMAGE_DIR, files[0]),
-        mediaType: ALLOWED_MEDIA_TYPES[ext] || 'application/octet-stream',
+        filePath,
+        mediaType: IMAGE_EXT_TO_MEDIA[ext] || 'application/octet-stream',
+      }
+    },
+
+    async deleteImageFile(id) {
+      const filePath = localImageFile(id)
+      if (!filePath) return false
+      try {
+        fs.unlinkSync(filePath)
+        return true
+      } catch {
+        return false
       }
     },
   }
 }
+
+function localImageFile(id: string): string | null {
+  const safeId = id.replace(/[^a-zA-Z0-9_-]/g, '')
+  if (!safeId) return null
+  try {
+    const files = fs.readdirSync(IMAGE_DIR).filter((f) => f.startsWith(safeId + '.'))
+    return files.length ? path.join(IMAGE_DIR, files[0]) : null
+  } catch {
+    return null
+  }
+}
+
+const IMAGE_EXT_TO_MEDIA: Record<string, string> = Object.fromEntries(
+  Object.entries(MEDIA_TYPE_EXTENSIONS).map(([mediaType, ext]) => [ext, mediaType])
+)
 
 function createDefaultDepsWithQuotes(isChipnet: boolean, backendUrl?: string): WebDeps {
   const base = defaultDeps(isChipnet, backendUrl)
@@ -359,7 +410,16 @@ function createDefaultDepsWithQuotes(isChipnet: boolean, backendUrl?: string): W
         backendUrl,
       })
       quoteStore.set(quote.orderId, quote)
-      return quote
+      let amountUsd: number | undefined
+      try {
+        const usdPerBch = await getBchUsdPrice(isChipnet)
+        if (usdPerBch !== null) {
+          amountUsd = Number(((quote.amountSats / 1e8) * usdPerBch).toFixed(2))
+        }
+      } catch {
+        amountUsd = undefined
+      }
+      return { ...quote, amountUsd }
     },
   }
 }
@@ -410,8 +470,9 @@ export async function startWebServer(
   const deps = options.deps || createDefaultDepsWithQuotes(isChipnet, backendUrl)
   const pageHtml = renderPage()
 
-  function checkAuth(req: http.IncomingMessage): boolean {
-    return req.headers['x-paytaca-token'] === token
+  function checkAuth(req: http.IncomingMessage, url?: URL): boolean {
+    if (req.headers['x-paytaca-token'] === token) return true
+    return url != null && url.searchParams.get('token') === token
   }
 
   function checkHost(req: http.IncomingMessage): boolean {
@@ -543,6 +604,16 @@ export async function startWebServer(
         return json(res, 200, state)
       }
 
+      if (pathname === '/api/ai/lift-quote' && req.method === 'GET') {
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
+        const sats = Number(url.searchParams.get('sats'))
+        if (!Number.isFinite(sats) || !Number.isInteger(sats) || sats <= 0) {
+          return json(res, 400, { error: 'Invalid sats amount' })
+        }
+        const quote = await deps.quoteLiftNeeded({ sats })
+        return json(res, 200, quote)
+      }
+
       if (pathname === '/api/ai/purchase' && req.method === 'POST') {
         if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
         if (req.headers['content-type'] !== 'application/json') {
@@ -621,7 +692,7 @@ export async function startWebServer(
 
       const imageFileMatch = pathname.match(/^\/api\/ai\/images\/([^/]+)\/file$/)
       if (imageFileMatch && req.method === 'GET') {
-        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
+        if (!checkAuth(req, url)) return json(res, 401, { error: 'Unauthorized' })
         const id = decodeURIComponent(imageFileMatch[1])
         const file = await deps.serveImageFile(id)
         if (!file) return json(res, 404, { error: 'Image not found' })
@@ -633,6 +704,14 @@ export async function startWebServer(
         })
         res.end(data)
         return
+      }
+
+      const imageDeleteMatch = pathname.match(/^\/api\/ai\/images\/([^/]+)$/)
+      if (imageDeleteMatch && req.method === 'DELETE') {
+        if (!checkAuth(req, url)) return json(res, 401, { error: 'Unauthorized' })
+        const id = decodeURIComponent(imageDeleteMatch[1])
+        const deleted = await deps.deleteImageFile(id)
+        return json(res, 200, { deleted })
       }
 
       json(res, 404, { error: 'Not found' })

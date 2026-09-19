@@ -44,7 +44,6 @@ function fakeDeps(): WebDeps {
       network: 'mainnet',
       balance: { spendableSats: 100000, spendableBch: 0.001, usd: 0.5 },
       lift: null,
-      credits: { totalSeconds: 3600, usedSeconds: 600, remainingSeconds: 3000, formattedRemaining: '50m', totalDisplay: '1h', usedDisplay: '10m' },
       usage: [],
       plans: [{ modelId: 'm1', displayName: 'Test Model', tiers: [{ minutes: 30, priceUsd: 1.5, durationDisplay: '30m' }] }],
       liftDiscountPercent: 0,
@@ -66,6 +65,9 @@ function fakeDeps(): WebDeps {
     }),
     swapExecute: async () => ({ success: true, txid: 'swap123' }),
     purchasePlan: async () => ({ success: true, paid: true, txid: 'pay123' }),
+    quoteLiftNeeded: async (opts) => ({
+      sats: opts.sats, rawAmount: '6409000', display: '6.409', symbol: 'LIFT', decimals: 6,
+    }),
     setAutoRefill: async () => okRefill,
     getImageModels: async () => okImageModels,
     getImageHistory: async () => ({ data: [] }),
@@ -75,6 +77,7 @@ function fakeDeps(): WebDeps {
       if (id === 'exist') return { filePath: '/dev/null', mediaType: 'image/png' }
       return null
     },
+    deleteImageFile: async (id) => id === 'exist',
   }
 }
 

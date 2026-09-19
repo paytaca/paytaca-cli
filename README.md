@@ -185,6 +185,8 @@ paytaca ai auto-refill --status     # Inspect; also --disable
 
 `ai configure` accepts `--backend`, `--path`, `--api-key`, `--chipnet`, and `-y/--yes`. `ai purchase` and `ai auto-refill` accept `--lift` to pay with LIFT tokens at a discount. Add `--json` to any `ai` subcommand for machine-readable output.
 
+Armed auto-refill state lives at `~/.paytaca/auto-refill.json` and is executed by the `paytaca mcp` server: while an MCP session is running it checks the armed model's credits and silently buys the configured plan when they run out, up to `--max-minutes`. It disarms when the budget is spent, funds are short, the plan is no longer offered, or 24 hours pass without a refill.
+
 ### Image Generation
 
 Generate images with AI models, paid in BCH on-chain:

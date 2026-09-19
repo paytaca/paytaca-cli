@@ -99,3 +99,125 @@ export function autoRefillCanBuy(
   }
   return { canBuy: true }
 }
+
+export const AUTO_REFILL_STALE_MS = 24 * 60 * 60 * 1000
+
+export interface RefillBuyOptions {
+  model: string
+  minutes: number
+  paymentMethod: PaymentMethod
+}
+
+export interface RefillBuyResult {
+  success: boolean
+  paid?: boolean
+  error?: string
+}
+
+export interface RefillTickDeps {
+  hasActiveCredits: (model: string) => Promise<boolean>
+  buy: (opts: RefillBuyOptions) => Promise<RefillBuyResult>
+  readState?: () => AutoRefillState | null
+  writeState?: (state: AutoRefillState) => void
+  now?: () => number
+}
+
+export type RefillTickResult =
+  | { action: 'idle' }
+  | { action: 'skipped'; reason: string }
+  | { action: 'refilled'; state: AutoRefillState }
+  | { action: 'disarmed'; reason: string; state: AutoRefillState }
+
+export async function autoRefillTick(
+  deps: RefillTickDeps
+): Promise<RefillTickResult> {
+  const read = deps.readState ?? readAutoRefillState
+  const write = deps.writeState ?? writeAutoRefillState
+  const now = deps.now ? deps.now() : Date.now()
+
+  const state = read()
+  if (!state || !state.enabled) return { action: 'idle' }
+
+  const disarm = (reason: string): RefillTickResult => {
+    const next: AutoRefillState = { ...state, enabled: false }
+    write(next)
+    return { action: 'disarmed', reason, state: next }
+  }
+
+  const anchor = state.lastRefillAt || state.startedAt
+  if (anchor) {
+    const anchorMs = Date.parse(anchor)
+    if (Number.isFinite(anchorMs) && now - anchorMs > AUTO_REFILL_STALE_MS) {
+      return disarm('no refill in 24h')
+    }
+  }
+
+  const model = state.model
+  const minutes = state.minutes
+  if (!model || !minutes || minutes <= 0) {
+    return disarm('incomplete config')
+  }
+
+  const budget = remainingBudget(state)
+  if (budget !== null && budget < minutes) {
+    return disarm('budget exhausted')
+  }
+
+  let active: boolean
+  try {
+    active = await deps.hasActiveCredits(model)
+  } catch (err: any) {
+    return { action: 'skipped', reason: `credit check failed: ${err?.message || err}` }
+  }
+  if (active) return { action: 'idle' }
+
+  let result: RefillBuyResult
+  try {
+    result = await deps.buy({
+      model,
+      minutes,
+      paymentMethod: state.paymentMethod || 'bch',
+    })
+  } catch (err: any) {
+    return { action: 'skipped', reason: `purchase failed: ${err?.message || err}` }
+  }
+  if (!result.success || !result.paid) {
+    return disarm(result.error || 'purchase failed')
+  }
+
+  const next: AutoRefillState = {
+    ...state,
+    spentMinutes: (state.spentMinutes ?? 0) + minutes,
+    lastRefillAt: new Date(now).toISOString(),
+  }
+  const nextBudget = remainingBudget(next)
+  if (nextBudget !== null && nextBudget < minutes) next.enabled = false
+  write(next)
+  return { action: 'refilled', state: next }
+}
+
+export interface RefillLoopOptions extends RefillTickDeps {
+  intervalMs?: number
+  onEvent?: (result: RefillTickResult) => void
+}
+
+export function startAutoRefillLoop(opts: RefillLoopOptions): () => void {
+  const intervalMs = opts.intervalMs && opts.intervalMs > 0 ? opts.intervalMs : 60_000
+  let running = false
+  const tick = async (): Promise<void> => {
+    if (running) return
+    running = true
+    try {
+      const result = await autoRefillTick(opts)
+      if (result.action !== 'idle') opts.onEvent?.(result)
+    } catch (err: any) {
+      opts.onEvent?.({ action: 'skipped', reason: err?.message || String(err) })
+    } finally {
+      running = false
+    }
+  }
+  const timer = setInterval(() => void tick(), intervalMs)
+  if (typeof timer.unref === 'function') timer.unref()
+  void tick()
+  return () => clearInterval(timer)
+}
