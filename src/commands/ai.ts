@@ -706,7 +706,10 @@ export function registerAiCommands(program: Command): void {
     .option('--status', 'Show auto-refill status (default)')
     .option('--model <id>', 'Model id or display name to auto-refill')
     .option('--minutes <minutes>', 'Plan size in minutes per refill')
-    .option('--max-minutes <minutes>', 'Maximum total minutes to auto-buy')
+    .option(
+      '--max-minutes <minutes>',
+      'Maximum total minutes to auto-buy (>= 2x --minutes, multiple of --minutes)'
+    )
     .option('--lift', 'Pay refills with LIFT tokens')
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .option('--json', 'Output as JSON')
@@ -729,6 +732,25 @@ export function registerAiCommands(program: Command): void {
           const message = '--minutes and --max-minutes must be positive numbers.'
           if (opts.json) outputJson({ error: message })
           else console.log(chalk.red(`\nError: ${message}\n`))
+          process.exitCode = 1
+          return
+        }
+        const existing = readAutoRefillState()
+        const effMinutes = minutes ?? existing?.minutes
+        const effMaxMinutes = maxMinutes ?? existing?.maxMinutes
+        let capError: string | null = null
+        if (effMaxMinutes !== undefined) {
+          if (effMinutes === undefined) {
+            capError = '--max-minutes requires --minutes (a top-up size).'
+          } else if (effMaxMinutes < effMinutes * 2) {
+            capError = `--max-minutes must be at least twice --minutes (${effMinutes * 2}).`
+          } else if (effMaxMinutes % effMinutes !== 0) {
+            capError = `--max-minutes must be a multiple of --minutes (${effMinutes}).`
+          }
+        }
+        if (capError) {
+          if (opts.json) outputJson({ error: capError })
+          else console.log(chalk.red(`\nError: ${capError}\n`))
           process.exitCode = 1
           return
         }
