@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
+import { PAYTACA_LOGO, PAYTACA_AI_LOGO } from './assets.js'
 
 const require = createRequire(new URL('.', import.meta.url).href)
 const ALPINE_JS = fs.readFileSync(
@@ -15,111 +16,123 @@ export function renderPage(): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Paytaca</title>
+<link rel="icon" type="image/png" href="${PAYTACA_LOGO}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
 :root{
-  --sans:'Space Grotesk',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --sans:'Rubik',system-ui,-apple-system,'Segoe UI',sans-serif;
   --mono:'JetBrains Mono',ui-monospace,'SF Mono','Cascadia Code',monospace;
-  --bg:oklch(98.4% 0.003 250);
-  --surface:oklch(100% 0 0);
-  --surface-2:oklch(97.2% 0.004 250);
-  --ink:oklch(22% 0.02 258);
-  --ink-2:oklch(46% 0.016 258);
-  --ink-3:oklch(60% 0.012 258);
-  --line:oklch(89.5% 0.006 258);
-  --line-2:oklch(93.5% 0.005 258);
-  --accent:oklch(58% 0.16 152);
-  --accent-strong:oklch(47% 0.14 152);
-  --accent-soft:oklch(95% 0.05 152);
-  --ok:oklch(55% 0.14 150);
-  --ok-soft:oklch(95% 0.04 150);
-  --warn:oklch(54% 0.13 70);
-  --warn-soft:oklch(95.5% 0.06 82);
-  --err:oklch(55% 0.2 25);
-  --err-soft:oklch(95.5% 0.045 25);
-  --grid:oklch(88% 0.006 258 / 0.65);
-  --r:5px;--r-sm:4px;
-  --shadow:0 1px 2px oklch(25% 0.02 258 / 0.04);
+  --bg:#ecf3f3;
+  --surface:rgba(255,255,255,0.72);
+  --surface-2:#f0f4f5;
+  --surface-3:rgba(255,255,255,0.85);
+  --ink:#1c2833;
+  --ink-2:#4c4f4f;
+  --ink-3:#9e9e9e;
+  --line:rgba(0,0,0,0.08);
+  --line-2:rgba(0,0,0,0.05);
+  --accent:#3C64F6;
+  --accent-strong:#2b4fd8;
+  --accent-soft:rgba(60,100,246,0.12);
+  --ok:#28a745;
+  --ok-soft:rgba(40,167,69,0.12);
+  --warn:#d4a017;
+  --warn-soft:rgba(255,193,7,0.12);
+  --err:#e5484d;
+  --err-soft:rgba(229,72,77,0.1);
+  --r:16px;--r-sm:10px;
+  --shadow:0 2px 8px rgba(0,0,0,0.05);
+  --glass-hi:inset 0 1px 0 rgba(255,255,255,0.6);
+  --grad:linear-gradient(to right bottom,rgba(59,123,246,0.9),rgba(54,129,232,0.9),rgba(49,139,218,0.9),rgba(44,149,204,0.9),rgba(39,159,190,0.9));
+  --on-ink:#fff;
 }
 [data-theme="dark"]{
-  --bg:oklch(15% 0.012 258);
-  --surface:oklch(18% 0.012 258);
-  --surface-2:oklch(21% 0.014 258);
-  --ink:oklch(93% 0.005 250);
-  --ink-2:oklch(78% 0.01 250);
-  --ink-3:oklch(58% 0.01 250);
-  --line:oklch(27% 0.012 258);
-  --line-2:oklch(23% 0.01 258);
-  --accent:oklch(65% 0.16 152);
-  --accent-strong:oklch(72% 0.14 152);
-  --accent-soft:oklch(28% 0.06 152);
-  --ok:oklch(65% 0.14 150);
-  --ok-soft:oklch(26% 0.05 150);
-  --warn:oklch(72% 0.13 70);
-  --warn-soft:oklch(28% 0.06 70);
-  --err:oklch(65% 0.2 25);
-  --err-soft:oklch(28% 0.06 25);
-  --grid:oklch(22% 0.01 258 / 0.45);
-  --shadow:0 1px 3px oklch(5% 0.02 258 / 0.3);
+  --bg:#273746;
+  --surface:rgba(28,40,51,0.7);
+  --surface-2:#1c2833;
+  --surface-3:rgba(39,55,70,0.85);
+  --ink:#eef2f5;
+  --ink-2:#c8c8c8;
+  --ink-3:#8a949e;
+  --line:rgba(255,255,255,0.1);
+  --line-2:rgba(255,255,255,0.07);
+  --accent:#5b82f8;
+  --accent-strong:#7ea0fa;
+  --accent-soft:rgba(91,130,248,0.16);
+  --ok:#4ade80;
+  --ok-soft:rgba(74,222,128,0.15);
+  --warn:#fbbf24;
+  --warn-soft:rgba(255,193,7,0.15);
+  --err:#f05253;
+  --err-soft:rgba(240,82,83,0.15);
+  --shadow:0 8px 32px rgba(0,0,0,0.35);
+  --glass-hi:inset 0 1px 0 rgba(255,255,255,0.1);
+  --on-ink:#eef2f5;
 }
 [x-cloak]{display:none!important}
-body{font-family:var(--sans);background-color:var(--bg);background-image:radial-gradient(var(--grid) 1px,transparent 1px);background-size:22px 22px;color:var(--ink);font-size:14px;line-height:1.55;min-height:100dvh;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+body{font-family:var(--sans);background:var(--bg);color:var(--ink);font-size:14px;font-weight:300;line-height:1.55;min-height:100dvh;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 ::selection{background:var(--accent);color:#fff}
 .mono-break{font-family:var(--mono);font-size:11.5px;word-break:break-all}
 .shell{display:flex;align-items:stretch;min-height:100dvh}
-.sidebar{position:sticky;top:0;flex:none;width:236px;height:100dvh;display:flex;flex-direction:column;background:var(--surface);border-right:1px solid var(--line);z-index:40}
-.brand{display:flex;align-items:center;gap:10px;padding:20px 18px;border-bottom:1px solid var(--line-2)}
-.brand-mark{position:relative;width:22px;height:22px;flex:none;border:1.5px solid var(--ink);border-radius:3px}
-.brand-mark::after{content:'';position:absolute;inset:5px;background:var(--accent);border-radius:1px}
-.brand-name{font-size:16px;font-weight:700;letter-spacing:-0.02em}
-.nav{flex:1;display:flex;flex-direction:column;gap:2px;padding:14px 12px}
+.sidebar{position:sticky;top:0;flex:none;width:236px;height:100dvh;display:flex;flex-direction:column;background:var(--surface);backdrop-filter:blur(16px) saturate(180%);-webkit-backdrop-filter:blur(16px) saturate(180%);border-right:1px solid var(--line);z-index:40}
+.brand{display:flex;align-items:center;gap:11px;padding:20px 18px;border-bottom:1px solid var(--line-2)}
+.brand-logo{width:30px;height:auto;flex:none;border-radius:8px;display:block}
+.brand-name{font-size:16px;font-weight:500;letter-spacing:-0.02em;color:var(--ink)}
+.nav{flex:1;display:flex;flex-direction:column;gap:3px;padding:14px 12px}
 .nav-label{font-family:var(--mono);font-size:9.5px;font-weight:500;letter-spacing:0.16em;text-transform:uppercase;color:var(--ink-3);padding:6px 10px 8px}
-.nav-item{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:var(--r-sm);font-size:13.5px;font-weight:500;color:var(--ink-2);cursor:pointer;user-select:none;transition:background .12s ease-out,color .12s ease-out}
-.nav-item:hover{background:var(--surface-2);color:var(--ink)}
-.nav-item.active{background:var(--ink);color:var(--surface)}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:var(--r-sm);font-size:13.5px;font-weight:400;color:var(--ink-2);cursor:pointer;user-select:none;transition:background .12s ease-out,color .12s ease-out}
+.nav-item:hover{background:var(--surface-3);color:var(--ink)}
+.nav-item.active{background:var(--accent);color:#fff;box-shadow:0 4px 20px rgba(31,38,135,0.18)}
 .nav-item .idx{font-family:var(--mono);font-size:10px;color:var(--ink-3)}
-.nav-item.active .idx{color:oklch(75% 0.01 250)}
+.nav-item.active .idx{color:rgba(255,255,255,0.7)}
+.nav-ico{width:20px;height:20px;flex:none;border-radius:5px;display:block}
 .sidebar-foot{display:flex;flex-direction:column;gap:10px;padding:16px 18px;border-top:1px solid var(--line-2)}
 .net{display:flex;align-items:center;gap:9px;font-family:var(--mono);font-size:10.5px;font-weight:500;letter-spacing:0.1em;color:var(--ink-2)}
 .dot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .dot.chipnet{background:var(--warn);box-shadow:0 0 0 3px var(--warn-soft)}
 .main{flex:1;min-width:0;display:flex;flex-direction:column}
-.topbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:15px 30px;background:color-mix(in oklch,var(--bg) 86%,transparent);backdrop-filter:blur(12px) saturate(1.4);-webkit-backdrop-filter:blur(12px) saturate(1.4);border-bottom:1px solid var(--line)}
-.page-title{display:flex;align-items:baseline;gap:12px;font-size:15px;font-weight:600;letter-spacing:-0.01em}
-.page-title .path{font-family:var(--mono);font-size:11px;font-weight:400;color:var(--ink-3)}
+.topbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:15px 30px;background:var(--surface);backdrop-filter:blur(12px) saturate(1.4);-webkit-backdrop-filter:blur(12px) saturate(1.4);border-bottom:1px solid var(--line)}
+.page-title{font-size:15px;font-weight:500;letter-spacing:-0.01em;color:var(--ink)}
 .topbar-actions{display:flex;align-items:center;gap:10px}
-.live-pill{display:flex;align-items:center;gap:7px;padding:6px 11px;border:1px solid var(--line);border-radius:999px;font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:0.12em;text-transform:uppercase;color:var(--ink-3)}
+.live-pill{display:flex;align-items:center;gap:7px;padding:6px 11px;border:1px solid var(--line);border-radius:999px;background:var(--surface-3);font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:0.12em;text-transform:uppercase;color:var(--ink-3)}
 .live-pill .live-dot{width:6px;height:6px;border-radius:50%;background:var(--ink-3)}
 .live-pill.ws-live{color:var(--ink-2)}
 .live-pill.ws-live .live-dot{background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
-.tx-toast{position:fixed;top:74px;right:30px;z-index:150;display:flex;flex-direction:column;gap:4px;min-width:240px;max-width:320px;padding:14px 16px;background:var(--ink);color:oklch(98% 0.005 250);border-radius:var(--r);box-shadow:0 10px 32px oklch(20% 0.03 258 / .28);animation:modalIn .2s cubic-bezier(.16,1,.3,1)}
-[data-theme="dark"] .tx-toast{background:oklch(22% 0.015 258)}
-.tx-toast .t{font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:oklch(74% 0.012 250)}
-.tx-toast .a{font-size:17px;font-weight:700;letter-spacing:-0.02em;font-variant-numeric:tabular-nums}
-.tx-toast a{font-family:var(--mono);font-size:10.5px;color:oklch(74% 0.012 250);text-decoration:underline;text-underline-offset:2px}
-.tx-toast a:hover{color:oklch(92% 0.01 250)}
+.tx-toast{position:fixed;top:74px;right:30px;z-index:150;display:flex;flex-direction:column;gap:4px;min-width:240px;max-width:320px;padding:14px 16px;background:var(--surface-3);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid var(--line);color:var(--ink);border-radius:var(--r);box-shadow:0 10px 32px rgba(0,0,0,0.28);animation:modalIn .2s cubic-bezier(.16,1,.3,1)}
+.tx-toast .t{font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:var(--ink-3)}
+.tx-toast .a{font-size:17px;font-weight:500;letter-spacing:-0.02em;font-variant-numeric:tabular-nums}
+.tx-toast a{font-family:var(--mono);font-size:10.5px;color:var(--accent);text-decoration:underline;text-underline-offset:2px}
+.tx-toast a:hover{color:var(--accent-strong)}
 .content{width:100%;max-width:1400px;margin:0 auto;padding:26px 30px 56px}
 .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
 .span-4{grid-column:span 4}.span-5{grid-column:span 5}.span-6{grid-column:span 6}.span-7{grid-column:span 7}.span-8{grid-column:span 8}.span-12{grid-column:span 12}
 .grid>div{display:flex;flex-direction:column}.grid>div>.card{flex:1}
-.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:20px;box-shadow:var(--shadow)}
+.card{background:var(--surface);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid var(--line);border-radius:var(--r);padding:20px;box-shadow:var(--shadow),var(--glass-hi)}
 .card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}
 .card-title{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:0.13em;text-transform:uppercase;color:var(--ink-2)}
-.balance-card{position:relative;overflow:hidden;background:var(--ink);border-color:var(--ink);color:oklch(98% 0.005 250)}
-[data-theme="dark"] .balance-card{background:oklch(22% 0.015 258);border-color:oklch(22% 0.015 258)}
-.balance-card::after{content:'';position:absolute;top:-70px;right:-70px;width:200px;height:200px;border-radius:50%;background:radial-gradient(circle,color-mix(in oklch,var(--accent) 55%,transparent),transparent 68%);opacity:.55;pointer-events:none}
-.balance-card .label{font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:0.16em;text-transform:uppercase;color:oklch(74% 0.012 250);margin-bottom:14px}
-.balance-card .value{display:flex;align-items:baseline;gap:9px;font-size:clamp(30px,3.4vw,42px);font-weight:700;letter-spacing:-0.035em;line-height:1;font-variant-numeric:tabular-nums}
-.balance-card .value .unit{font-size:14px;font-weight:500;letter-spacing:0;color:oklch(74% 0.012 250)}
-.balance-card .sub{font-family:var(--mono);font-size:11.5px;color:oklch(72% 0.012 250);margin-top:12px;min-height:18px}
-.lift-card .value{font-size:26px;font-weight:700;letter-spacing:-0.03em;line-height:1.1;font-variant-numeric:tabular-nums}
-.lift-card .sub{font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:0.14em;text-transform:uppercase;color:var(--ink-3);margin-top:8px}
+.action-bar{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0 4px}
+.action-btn{display:inline-flex;align-items:center;gap:8px;padding:10px 18px;border:1px solid var(--line);border-radius:999px;background:var(--surface);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:var(--ink-2);font-family:var(--sans);font-size:13px;font-weight:400;cursor:pointer;user-select:none;transition:all .25s cubic-bezier(0.4,0,0.2,1)}
+.action-btn:hover{color:var(--ink);border-color:var(--ink-3);transform:translateY(-1px)}
+.action-btn.active{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 4px 20px rgba(31,38,135,0.18)}
+.action-btn svg{flex:none}
+.btn-close{margin-left:auto;flex:none;width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:50%;background:transparent;color:var(--ink-3);font-size:12px;cursor:pointer;transition:color .12s,border-color .12s}
+.btn-close:hover{color:var(--ink);border-color:var(--ink-3)}
+.ai-head{display:flex;align-items:center;gap:14px;margin:6px 0 20px}
+.ai-logo{width:44px;height:44px;border-radius:12px;flex:none;box-shadow:0 4px 20px rgba(31,38,135,0.12)}
+.ai-title{font-size:18px;font-weight:500;letter-spacing:-0.01em;color:var(--ink)}
+.ai-sub{font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:0.12em;text-transform:uppercase;color:var(--ink-3);margin-top:3px}
+.balance-card{position:relative;overflow:hidden;background:var(--grad);border:1px solid rgba(255,255,255,0.2);color:#fff;box-shadow:0 8px 32px rgba(31,38,135,0.15);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
+.balance-card .label{font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:0.16em;text-transform:uppercase;color:rgba(255,255,255,0.75);margin-bottom:14px}
+.balance-card .value{display:flex;align-items:baseline;gap:9px;font-size:clamp(30px,3.4vw,42px);font-weight:600;letter-spacing:-0.035em;line-height:1;font-variant-numeric:tabular-nums}
+.balance-card .value .unit{font-size:14px;font-weight:400;letter-spacing:0;color:rgba(255,255,255,0.75)}
+.balance-card .sub{font-family:var(--mono);font-size:11.5px;color:rgba(255,255,255,0.75);margin-top:12px;min-height:18px}
 .metric{padding:8px 0 2px}
-.metric-value{font-size:clamp(30px,3vw,38px);font-weight:700;letter-spacing:-0.035em;line-height:1;color:var(--accent-strong);font-variant-numeric:tabular-nums}
+.metric-value{font-size:clamp(30px,3vw,38px);font-weight:600;letter-spacing:-0.035em;line-height:1;color:var(--accent);font-variant-numeric:tabular-nums}
 .metric-label{font-family:var(--mono);font-size:10.5px;letter-spacing:0.04em;color:var(--ink-3);margin-top:12px}
+.refill-line{display:flex;align-items:center;gap:9px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line-2);font-size:12px;color:var(--ink-3);flex-wrap:wrap}
 .field{margin-bottom:14px}.field:last-child{margin-bottom:0}
 .field-label{display:block;font-family:var(--mono);font-size:9.5px;font-weight:500;letter-spacing:0.12em;text-transform:uppercase;color:var(--ink-3);margin-bottom:7px}
 .field-input{width:100%;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-sm);color:var(--ink);font-size:13.5px;font-family:var(--sans);outline:none;transition:border-color .12s ease-out,box-shadow .12s ease-out,background .12s ease-out}
@@ -132,18 +145,19 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
 .field-error{font-family:var(--mono);font-size:11.5px;color:var(--err);margin-top:8px}
 .field-success{font-family:var(--mono);font-size:11.5px;color:var(--ok);margin-top:8px}
 .segmented{display:flex;gap:2px;padding:2px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-sm)}
-.segmented-opt{flex:1;padding:7px 8px;text-align:center;font-size:12.5px;font-weight:500;color:var(--ink-3);border-radius:3px;cursor:pointer;user-select:none;transition:background .12s ease-out,color .12s ease-out}
+.segmented-opt{flex:1;padding:7px 8px;text-align:center;font-size:12.5px;font-weight:400;color:var(--ink-3);border-radius:8px;cursor:pointer;user-select:none;transition:background .12s ease-out,color .12s ease-out}
 .segmented-opt:hover{color:var(--ink-2)}
-.segmented-opt.active{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px oklch(25% 0.02 258 / 0.07)}
+.segmented-opt.active{background:var(--surface-3);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,0.08)}
 .inline-row{display:flex;gap:8px}
 .inline-row>*{flex:1;min-width:0}
 .inline-row .shrink{flex:none}
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:10px 16px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);color:var(--ink);font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;transition:background .12s ease-out,border-color .12s ease-out,transform .06s ease-out}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:10px 16px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface-3);color:var(--ink);font-family:var(--sans);font-size:13px;font-weight:400;cursor:pointer;white-space:nowrap;transition:background .12s ease-out,border-color .12s ease-out,transform .06s ease-out}
 .btn:hover{border-color:var(--ink-3);background:var(--surface-2)}
 .btn:active{transform:translateY(1px)}
 .btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
-.btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
-.btn-primary:hover{background:var(--accent-strong);border-color:var(--accent-strong)}
+.btn-primary{background:var(--grad);border:1px solid rgba(255,255,255,0.2);color:#fff;box-shadow:0 4px 20px rgba(31,38,135,0.12);transition:all .3s cubic-bezier(0.4,0,0.2,1)}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(31,38,135,0.18)}
+.btn-primary:active{transform:translateY(1px)}
 .btn-danger{background:transparent;border-color:var(--line);color:var(--err)}
 .btn-danger:hover{border-color:var(--err);background:var(--err-soft)}
 .btn-sm{padding:6px 11px;font-size:11.5px}
@@ -164,13 +178,12 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
 .tbl tr:last-child td{border-bottom:none}
 .tbl-num{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:12px}
 .hist-date a{color:var(--ink-2);text-decoration:none;border-bottom:1px dotted var(--line-2);font-family:var(--mono);font-size:11px}
-.hist-date a:hover{color:var(--accent-strong);border-bottom-color:var(--accent)}
-.hist-addr{max-width:210px}
+.hist-date a:hover{color:var(--accent-strong);border-bottom-color:var(--accent)}.hist-addr{max-width:210px}
 .hist-sub{font-family:var(--mono);font-size:10px;color:var(--ink-3);margin-top:2px}
 .hist-amt{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}
 .hist-in{color:var(--accent-strong)}
 .hist-out{color:var(--ink)}
-.pill{display:inline-flex;align-items:center;padding:2px 7px;border-radius:2px;font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:0.06em}
+.pill{display:inline-flex;align-items:center;padding:3px 9px;border-radius:999px;font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:0.06em}
 .pill-in,.pill-active{background:var(--accent-soft);color:var(--accent-strong)}
 .pill-out{background:var(--err-soft);color:var(--err)}
 .pill-idle{background:var(--surface-2);color:var(--ink-3)}
@@ -188,61 +201,51 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
 .token-item:last-child{border-bottom:none}
 .token-name{font-size:13.5px;font-weight:600}
 .token-balance{font-family:var(--mono);font-size:12.5px;color:var(--ink-2);font-variant-numeric:tabular-nums}
-.subnav{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:18px}
-.subnav button{appearance:none;background:none;border:0;border-bottom:2px solid transparent;margin-bottom:-1px;padding:10px 16px 12px;font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:0.12em;color:var(--ink-3);cursor:pointer}
-.subnav button:hover{color:var(--ink-2)}
-.subnav button.active{color:var(--ink);border-bottom-color:var(--accent)}
-.subnav .idx{margin-right:8px;color:var(--ink-3)}
-.subnav button.active .idx{color:var(--accent)}
 .plan-group{padding:16px 0;border-bottom:1px solid var(--line)}
 .plan-group:first-child{padding-top:2px}
 .plan-group:last-child{border-bottom:0;padding-bottom:2px}
 .plan-model{font-size:13.5px;font-weight:600;margin-bottom:12px}
 .plan-tiers{display:flex;gap:10px;flex-wrap:wrap}
-.plan-tier{display:flex;align-items:center;gap:14px;border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 14px}
-.plan-tier:hover{border-color:var(--line-2)}
+.plan-tier{display:flex;align-items:center;gap:14px;border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 14px;background:var(--surface-3)}
+.plan-tier:hover{border-color:var(--accent);transform:translateY(-1px);transition:all .2s ease}
 .plan-duration{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--ink-2)}
 .plan-price{font-size:13px;font-weight:600}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden}
-.seg button{appearance:none;background:var(--surface);border:0;padding:8px 20px;font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:0.08em;color:var(--ink-3);cursor:pointer}
+.seg button{appearance:none;background:var(--surface-3);border:0;padding:8px 20px;font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:0.08em;color:var(--ink-3);cursor:pointer}
 .seg button+.seg button{border-left:1px solid var(--line)}
-.seg button.active{background:var(--ink);color:oklch(98% 0.003 250)}
+.seg button.active{background:var(--accent);color:#fff}
 .seg button .off{margin-left:6px;color:var(--accent)}
-.seg button.active .off{color:var(--accent-soft)}
+.seg button.active .off{color:rgba(255,255,255,0.75)}
 .gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:16px}
 .gallery-item{margin:0;cursor:pointer}
 .gallery-item img{display:block;width:100%;aspect-ratio:1;object-fit:cover;border:1px solid var(--line);border-radius:var(--r-sm);transition:border-color .15s ease,opacity .15s ease;background:var(--surface-2)}
 .gallery-item:hover img{border-color:var(--accent)}
 .gallery-item figcaption{display:flex;justify-content:space-between;gap:8px;margin-top:7px;font-family:var(--mono);font-size:10px;color:var(--ink-3)}
 .gallery-item .cap{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.lightbox{display:none;position:fixed;inset:0;z-index:120;align-items:center;justify-content:center;padding:24px;background:oklch(18% 0.02 258 / 0.85);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
+.lightbox{display:none;position:fixed;inset:0;z-index:120;align-items:center;justify-content:center;padding:24px;background:rgba(15,25,35,0.7);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
 .lightbox.open{display:flex}
 .lightbox-inner{width:100%;max-width:880px;animation:modalIn .2s cubic-bezier(.16,1,.3,1)}
-.lightbox img{display:block;max-width:100%;max-height:74vh;margin:0 auto;border:1px solid oklch(100% 0 0 / 0.14);border-radius:var(--r);background:var(--surface)}
+.lightbox img{display:block;max-width:100%;max-height:74vh;margin:0 auto;border:1px solid rgba(255,255,255,0.14);border-radius:var(--r);background:var(--surface-3)}
 .lightbox-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px}
-.lightbox-path{font-family:var(--mono);font-size:10.5px;color:oklch(93% 0.004 250);opacity:.75;word-break:break-all}
+.lightbox-path{font-family:var(--mono);font-size:10.5px;color:rgba(255,255,255,0.75);opacity:.9;word-break:break-all}
 .lightbox-actions{display:flex;gap:8px;flex-shrink:0}
-.lightbox .btn{background:oklch(100% 0 0 / 0.1);border-color:oklch(100% 0 0 / 0.18);color:oklch(97% 0.003 250)}
-.lightbox .btn:hover{background:oklch(100% 0 0 / 0.18)}
+.lightbox .btn{background:rgba(255,255,255,0.1);border-color:rgba(255,255,255,0.18);color:#fff}
+.lightbox .btn:hover{background:rgba(255,255,255,0.18)}
 .quote-box{margin-top:14px;padding:14px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-sm);font-family:var(--mono);font-size:12px;line-height:1.9;white-space:pre-line}
 .warning-bar{display:flex;align-items:center;gap:8px;padding:9px 12px;margin-bottom:14px;background:var(--warn-soft);color:var(--warn);border:1px solid color-mix(in oklch,var(--warn) 28%,transparent);border-radius:var(--r-sm);font-size:12px;font-weight:500}
-.steps{list-style:none;display:flex;flex-direction:column;gap:12px}
-.steps li{display:flex;align-items:baseline;gap:12px;font-size:13px;color:var(--ink-2)}
-.steps li span{font-family:var(--mono);font-size:10.5px;font-weight:600;color:var(--accent-strong);letter-spacing:0.06em}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:7px 18px;font-size:12.5px}
 .kv dt{font-family:var(--mono);font-size:9.5px;font-weight:500;letter-spacing:0.1em;text-transform:uppercase;color:var(--ink-3);align-self:center}
 .kv dd{font-weight:500;color:var(--ink)}
-.net-line{display:flex;align-items:center;gap:9px;margin-top:18px;padding-top:16px;border-top:1px solid var(--line-2);font-family:var(--mono);font-size:10.5px;letter-spacing:0.06em;color:var(--ink-3)}
-.modal-backdrop{display:none;position:fixed;inset:0;z-index:100;align-items:center;justify-content:center;padding:20px;background:oklch(20% 0.02 258 / 0.45);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
+.modal-backdrop{display:none;position:fixed;inset:0;z-index:100;align-items:center;justify-content:center;padding:20px;background:rgba(15,25,35,0.45);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
 .modal-backdrop.open{display:flex}
-.modal{width:100%;max-width:440px;padding:24px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 24px 60px -14px oklch(20% 0.02 258 / 0.3);animation:modalIn .2s cubic-bezier(.16,1,.3,1)}
+.modal{width:100%;max-width:440px;padding:24px;background:var(--surface-3);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 24px 60px -14px rgba(0,0,0,0.3),var(--glass-hi);animation:modalIn .2s cubic-bezier(.16,1,.3,1)}
 .modal-title{font-family:var(--mono);font-size:12px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:16px}
 .modal-body{font-size:13.5px;line-height:1.75;color:var(--ink-2)}
 .modal-body strong{color:var(--ink);font-weight:600}
 .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:22px}
 @keyframes modalIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:200;display:flex;align-items:center;padding:10px 16px;border-radius:var(--r-sm);font-family:var(--mono);font-size:12px;font-weight:500;box-shadow:0 10px 30px -10px oklch(20% 0.02 258 / 0.35);animation:toastIn .2s cubic-bezier(.16,1,.3,1)}
-.toast-ok{background:var(--ink);color:var(--surface)}
+.toast-ok{background:var(--ink);color:var(--bg)}
 .toast-err{background:var(--err);color:#fff}
 @keyframes toastIn{from{opacity:0;transform:translateX(-50%) translateY(10px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
@@ -250,6 +253,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
   .shell{flex-direction:column}
   .sidebar{position:static;width:auto;height:auto;flex-direction:row;align-items:center;gap:12px;padding:11px 14px;border-right:none;border-bottom:1px solid var(--line)}
   .brand{padding:0;border-bottom:none;gap:8px}
+  .brand-logo{width:24px}
   .brand-name{display:none}
   .nav{flex-direction:row;gap:3px;padding:0;flex:1;justify-content:center}
   .nav-label{display:none}
@@ -260,10 +264,12 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
   .content{padding:18px 16px 44px}
   .grid{gap:12px}
   .span-4,.span-5,.span-6,.span-7,.span-8{grid-column:span 12}
+  .action-btn{padding:9px 14px;font-size:12.5px}
 }
 @media(max-width:560px){
   .inline-row{flex-direction:column}
   .balance-card .value{font-size:30px}
+  .action-bar{gap:8px}
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 </style>
@@ -272,14 +278,13 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
 <div class="shell" x-data="app()" x-init="init()" x-cloak>
   <aside class="sidebar">
     <div class="brand">
-      <div class="brand-mark"></div>
+      <img class="brand-logo" src="${PAYTACA_LOGO}" alt="Paytaca">
       <div class="brand-name">Paytaca</div>
     </div>
     <nav class="nav">
       <div class="nav-label">Navigate</div>
-      <div class="nav-item" :class="{active: tab==='wallet'}" @click="tab='wallet'"><span class="idx">01</span>Wallet</div>
-      <div class="nav-item" :class="{active: tab==='swap'}" @click="tab='swap'"><span class="idx">02</span>Swap</div>
-      <div class="nav-item" :class="{active: tab==='ai'}" @click="tab='ai'"><span class="idx">03</span>AI</div>
+      <div class="nav-item" :class="{active: tab==='wallet'}" @click="tab='wallet'"><svg class="nav-ico" viewBox="0 0 24 24" fill="currentColor"><path d="M21 18v1c0 1.1-.9 2-2 2H5c-1.11 0-2-.9-2-2V5c0-1.1.89-2 2-2h14c1.1 0 2 .9 2 2v1h-9c-1.11 0-2 .9-2 2v8c0 1.1.89 2 2 2h9zm-9-2h10V8H12v8zm4-2.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg><span class="idx">01</span>Wallet</div>
+      <div class="nav-item" :class="{active: tab==='ai'}" @click="tab='ai'"><img class="nav-ico" src="${PAYTACA_AI_LOGO}" alt=""><span class="idx">02</span>AI</div>
     </nav>
     <div class="sidebar-foot">
       <div class="net"><span class="dot" :class="{chipnet: state?.network==='chipnet'}"></span><span x-text="state?.network==='chipnet' ? 'CHIPNET' : 'MAINNET'">MAINNET</span></div>
@@ -291,7 +296,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
   </aside>
   <div class="main">
     <header class="topbar">
-      <div class="page-title"><span x-text="tab==='wallet' ? 'Wallet' : tab==='swap' ? 'Swap' : 'AI'"></span><span class="path" x-text="'~/paytaca/' + tab + (tab==='ai' ? '/' + aiSub : '')"></span></div>
+      <div class="page-title"><span x-text="tab==='wallet' ? 'Wallet' : 'Paytaca AI'"></span></div>
       <div class="topbar-actions">
         <div class="live-pill" :class="wsStatus==='live' ? 'ws-live' : ''" :title="'Watchtower live feed: ' + wsStatus">
           <span class="live-dot"></span>
@@ -306,56 +311,77 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
     <main class="content">
       <div x-show="tab==='wallet'">
         <div class="grid">
-          <div class="span-8">
+          <div class="span-12">
             <div class="card balance-card">
               <div class="label">Available Balance</div>
               <div class="value"><span x-text="state ? state.balance.spendableBch : '—'"></span><span class="unit">BCH</span></div>
               <div class="sub" x-text="state?.balance?.usd ? '$' + Number(state.balance.usd).toFixed(2) + ' USD' : ''"></div>
             </div>
           </div>
-          <div class="span-4">
-            <div class="card lift-card">
-              <div class="card-head"><div class="card-title">LIFT Balance</div></div>
-              <div class="value" x-text="state?.lift?.displayBalance || '—'"></div>
-              <div class="sub">Tokens</div>
-            </div>
-          </div>
-          <div class="span-5">
+        </div>
+        <div class="action-bar">
+          <button class="action-btn" :class="{active: walletAction==='send'}" @click="walletAction = walletAction==='send' ? null : 'send'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg>Send</button>
+          <button class="action-btn" :class="{active: walletAction==='receive'}" @click="walletAction = walletAction==='receive' ? null : 'receive'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 7 7 17"/><path d="M16 17H7V8"/></svg>Receive</button>
+          <button class="action-btn" :class="{active: walletAction==='swap'}" @click="walletAction = walletAction==='swap' ? null : 'swap'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></svg>Swap</button>
+        </div>
+        <div class="grid" x-show="walletAction">
+          <div class="span-12">
             <div class="card">
-              <div class="card-head"><div class="card-title">Receive</div></div>
-              <div class="segmented" style="margin-bottom:14px">
-                <div class="segmented-opt" :class="{active: rcvType==='bch'}" @click="rcvType='bch'; onRcvChange()">BCH</div>
-                <div class="segmented-opt" :class="{active: rcvType==='token'}" @click="rcvType='token'; onRcvChange()">CashToken</div>
-              </div>
-              <div x-show="rcvType==='token'" class="field"><label class="field-label">Token Category ID</label><input class="field-input" type="text" x-model="rcvCategory" @input="onRcvChange()" placeholder="64-character hex category ID"></div>
-              <div class="field"><label class="field-label">Amount (optional)</label><input class="field-input" type="number" x-model="rcvAmount" @input="onRcvChange()" placeholder="0.0" step="any" min="0"></div>
-              <div class="addr-display"><div class="addr-row"><span class="addr-label">Address</span><button class="btn-copy" @click="copyText(rcvView?.address)">COPY</button></div><div x-text="rcvView?.address || 'Loading…'"></div></div>
-              <template x-if="rcvView?.paymentUri"><div class="addr-display" style="margin-top:8px"><div class="addr-row"><span class="addr-label">Payment URI</span><button class="btn-copy" @click="copyText(rcvView?.paymentUri)">COPY</button></div><div style="font-size:10.5px;color:var(--ink-3)" x-text="rcvView?.paymentUri"></div></div></template>
-              <div class="qr-wrap" x-html="rcvQrSvg"></div>
+              <div class="card-head"><div class="card-title" x-text="walletAction==='send' ? 'Send' : walletAction==='receive' ? 'Receive' : 'Cauldron Swap'"></div><button class="btn-close" @click="walletAction=null" title="Close">✕</button></div>
+              <template x-if="walletAction==='receive'"><div>
+                <div class="segmented" style="margin-bottom:14px">
+                  <div class="segmented-opt" :class="{active: rcvType==='bch'}" @click="rcvType='bch'; onRcvChange()">BCH</div>
+                  <div class="segmented-opt" :class="{active: rcvType==='token'}" @click="rcvType='token'; onRcvChange()">CashToken</div>
+                </div>
+                <div class="inline-row">
+                  <div style="flex:1;min-width:0">
+                    <div x-show="rcvType==='token'" class="field"><label class="field-label">Token Category ID</label><input class="field-input" type="text" x-model="rcvCategory" @input="onRcvChange()" placeholder="64-character hex category ID"></div>
+                    <div class="field"><label class="field-label">Amount (optional)</label><input class="field-input" type="number" x-model="rcvAmount" @input="onRcvChange()" placeholder="0.0" step="any" min="0"></div>
+                    <div class="addr-display"><div class="addr-row"><span class="addr-label">Address</span><button class="btn-copy" @click="copyText(rcvView?.address)">COPY</button></div><div x-text="rcvView?.address || 'Loading…'"></div></div>
+                    <template x-if="rcvView?.paymentUri"><div class="addr-display" style="margin-top:8px"><div class="addr-row"><span class="addr-label">Payment URI</span><button class="btn-copy" @click="copyText(rcvView?.paymentUri)">COPY</button></div><div style="font-size:10.5px;color:var(--ink-3)" x-text="rcvView?.paymentUri"></div></div></template>
+                  </div>
+                  <div class="qr-wrap" style="flex:none;width:220px;margin-top:0" x-html="rcvQrSvg"></div>
+                </div>
+              </div></template>
+              <template x-if="walletAction==='send'"><div>
+                <div class="segmented" style="margin-bottom:14px">
+                  <div class="segmented-opt" :class="{active: sendType==='bch'}" @click="sendType='bch'; sendError=''; sendSuccess=''">BCH</div>
+                  <div class="segmented-opt" :class="{active: sendType==='token'}" @click="sendType='token'; sendError=''; sendSuccess=''">CashToken</div>
+                </div>
+                <div x-show="sendType==='token'">
+                  <div class="field"><label class="field-label">Token Category ID</label><select class="field-input" x-model="sendTokenPreset" @change="if(sendTokenPreset==='__custom__')sendCategory='';else sendCategory=sendTokenPreset"><option value="__custom__">Enter token category</option><option value="5932b2fd4915d6a75d3ec53282cd49118149a2176ee67ed68b1111ff0786f7fc">LIFT</option><option value="2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544">PUSD</option></select></div>
+                  <div class="field" x-show="sendTokenPreset === '__custom__'"><input class="field-input" type="text" x-model="sendCategory" placeholder="Paste 64-char hex category ID"></div>
+                  <div class="field"><label class="field-label">Token Amount (base units)</label><input class="field-input" type="text" x-model="sendTokenAmount" placeholder="e.g. 1000"></div>
+                </div>
+                <div x-show="sendType==='bch'">
+                  <div class="field"><label class="field-label">Amount</label><div class="inline-row"><input class="field-input" type="number" x-model="sendAmount" placeholder="0.0" step="any" min="0"><select class="field-input shrink" x-model="sendCurrency" style="width:104px"><option value="bch">BCH</option><option value="sats">sats</option><option value="usd">USD</option></select></div></div>
+                </div>
+                <div class="field"><label class="field-label">Recipient Address</label><input class="field-input" type="text" x-model="sendAddress" placeholder="bitcoincash:q..."></div>
+                <template x-if="sendType==='token' && sendAddress && !isTokenAddr(sendAddress)"><div class="warning-bar">Address is not token-aware (z-prefix). Tokens may be lost.</div></template>
+                <div x-show="sendError" class="field-error" x-text="sendError"></div>
+                <div x-show="sendSuccess" class="field-success" x-text="sendSuccess"></div>
+                <button class="btn btn-primary" style="margin-top:14px;min-width:180px" @click="doSend()">Send</button>
+              </div></template>
+              <template x-if="walletAction==='swap'"><div>
+                <template x-if="state?.network === 'chipnet'"><div class="warning-bar">Cauldron swaps are only available on mainnet.</div></template>
+                <div class="field"><label class="field-label">Token</label><select class="field-input" x-model="swapToken"><option value="__custom__">Enter token category</option><template x-for="t in swapTokens" :key="t.category"><option :value="t.category" x-text="t.symbol + '  ·  ' + t.category.slice(0,10) + '…' + t.category.slice(-6)"></option></template></select></div>
+                <div class="field" x-show="swapToken === '__custom__'"><input class="field-input" type="text" x-model="swapCustomCategory" placeholder="Paste 64-char hex category ID"></div>
+                <div class="segmented" style="margin-bottom:14px">
+                  <div class="segmented-opt" :class="{active: swapDir==='sell'}" @click="swapDir='sell'; swapQuoteText=''; pendingSwap=null">Sell Token → BCH</div>
+                  <div class="segmented-opt" :class="{active: swapDir==='buy'}" @click="swapDir='buy'; swapQuoteText=''; pendingSwap=null">Buy Token ← BCH</div>
+                </div>
+                <div class="field"><label class="field-label" x-text="swapDir==='sell' ? 'Token Amount' : 'BCH Amount'"></label><input class="field-input" type="number" x-model="swapAmount" placeholder="0.0" step="any" min="0"></div>
+                <div x-show="swapError" class="field-error" x-text="swapError"></div>
+                <button class="btn btn-primary" style="margin-top:14px;min-width:180px" @click="doSwapQuote()" :disabled="swapBusy" x-text="swapBusy ? 'Fetching quote…' : 'Get Quote'"></button>
+                <template x-if="swapQuoteText"><div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--line-2)">
+                  <div class="quote-box" style="margin-top:0" x-text="swapQuoteText"></div>
+                  <div class="btn-group"><button class="btn" @click="swapQuoteText=''; pendingSwap=null">Cancel</button><button class="btn btn-primary" @click="doSwapExecute()" :disabled="swapExecBusy" x-text="swapExecBusy ? 'Executing…' : 'Confirm Swap'"></button></div>
+                </div></template>
+              </div></template>
             </div>
           </div>
-          <div class="span-7">
-            <div class="card">
-              <div class="card-head"><div class="card-title">Send</div></div>
-              <div class="segmented" style="margin-bottom:14px">
-                <div class="segmented-opt" :class="{active: sendType==='bch'}" @click="sendType='bch'; sendError=''; sendSuccess=''">BCH</div>
-                <div class="segmented-opt" :class="{active: sendType==='token'}" @click="sendType='token'; sendError=''; sendSuccess=''">CashToken</div>
-              </div>
-              <div x-show="sendType==='token'">
-                <div class="field"><label class="field-label">Token Category ID</label><select class="field-input" x-model="sendTokenPreset" @change="if(sendTokenPreset==='__custom__')sendCategory='';else sendCategory=sendTokenPreset"><option value="__custom__">Enter token category</option><option value="5932b2fd4915d6a75d3ec53282cd49118149a2176ee67ed68b1111ff0786f7fc">LIFT</option><option value="2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544">PUSD</option></select></div>
-              <div class="field" x-show="sendTokenPreset === '__custom__'"><input class="field-input" type="text" x-model="sendCategory" placeholder="Paste 64-char hex category ID"></div>
-                <div class="field"><label class="field-label">Token Amount (base units)</label><input class="field-input" type="text" x-model="sendTokenAmount" placeholder="e.g. 1000"></div>
-              </div>
-              <div x-show="sendType==='bch'">
-                <div class="field"><label class="field-label">Amount</label><div class="inline-row"><input class="field-input" type="number" x-model="sendAmount" placeholder="0.0" step="any" min="0"><select class="field-input shrink" x-model="sendCurrency" style="width:104px"><option value="bch">BCH</option><option value="sats">sats</option><option value="usd">USD</option></select></div></div>
-              </div>
-              <div class="field"><label class="field-label">Recipient Address</label><input class="field-input" type="text" x-model="sendAddress" placeholder="bitcoincash:q..."></div>
-              <template x-if="sendType==='token' && sendAddress && !isTokenAddr(sendAddress)"><div class="warning-bar">Address is not token-aware (z-prefix). Tokens may be lost.</div></template>
-              <div x-show="sendError" class="field-error" x-text="sendError"></div>
-              <div x-show="sendSuccess" class="field-success" x-text="sendSuccess"></div>
-              <button class="btn btn-primary" style="margin-top:14px;width:100%" @click="doSend()">Send</button>
-            </div>
-          </div>
+        </div>
+        <div class="grid" style="margin-top:20px">
           <div class="span-4">
             <div class="card">
               <div class="card-head"><div class="card-title">Tokens</div></div>
@@ -375,52 +401,43 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
           </div>
         </div>
       </div>
-      <div x-show="tab==='swap'">
+      <div x-show="tab==='ai'">
+        <div class="ai-head">
+          <img class="ai-logo" src="${PAYTACA_AI_LOGO}" alt="">
+          <div><div class="ai-title">Paytaca AI</div><div class="ai-sub">Chat credits · Image generation</div></div>
+        </div>
         <div class="grid">
-          <div class="span-6">
+          <div class="span-4">
             <div class="card">
-              <div class="card-head"><div class="card-title">Cauldron Swap</div></div>
-              <template x-if="state?.network === 'chipnet'"><div class="warning-bar">Cauldron swaps are only available on mainnet.</div></template>
-              <div class="field"><label class="field-label">Token</label><select class="field-input" x-model="swapToken"><option value="__custom__">Enter token category</option><template x-for="t in swapTokens" :key="t.category"><option :value="t.category" x-text="t.symbol + '  ·  ' + t.category.slice(0,10) + '…' + t.category.slice(-6)"></option></template></select></div>
-              <div class="field" x-show="swapToken === '__custom__'"><input class="field-input" type="text" x-model="swapCustomCategory" placeholder="Paste 64-char hex category ID"></div>
-              <div class="segmented" style="margin-bottom:14px">
-                <div class="segmented-opt" :class="{active: swapDir==='sell'}" @click="swapDir='sell'; swapQuoteText=''; pendingSwap=null">Sell Token → BCH</div>
-                <div class="segmented-opt" :class="{active: swapDir==='buy'}" @click="swapDir='buy'; swapQuoteText=''; pendingSwap=null">Buy Token ← BCH</div>
-              </div>
-              <div class="field"><label class="field-label" x-text="swapDir==='sell' ? 'Token Amount' : 'BCH Amount'"></label><input class="field-input" type="number" x-model="swapAmount" placeholder="0.0" step="any" min="0"></div>
-              <div x-show="swapError" class="field-error" x-text="swapError"></div>
-              <button class="btn btn-primary" style="margin-top:14px;width:100%" @click="doSwapQuote()" :disabled="swapBusy" x-text="swapBusy ? 'Fetching quote…' : 'Get Quote'"></button>
+              <div class="card-head"><div class="card-title">Credits</div></div>
+              <template x-if="state?.usage?.length"><div class="metric"><div class="metric-value" x-text="activeCreditsTotal(state) > 0 ? fmtDuration(activeCreditsTotal(state)) : '0m'"></div><div class="metric-label">remaining · <span x-text="activeCreditsCount(state)"></span> active session(s)</div></div></template>
+              <template x-if="state && !state?.usage?.length"><div class="empty">No active sessions</div></template>
+              <template x-if="!state"><div class="empty">Loading…</div></template>
+              <div class="refill-line" x-show="state?.autoRefill"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg><span x-text="'Auto-refill ' + (state.autoRefill?.enabled ? 'ON' : 'PAUSED') + ' · ' + state.autoRefill?.minutes + 'm top-up'"></span></div>
             </div>
           </div>
-          <div class="span-6">
-            <template x-if="swapQuoteText"><div class="card">
-              <div class="card-head"><div class="card-title">Quote</div></div>
-              <div class="quote-box" x-text="swapQuoteText"></div>
-              <div class="btn-group"><button class="btn" @click="swapQuoteText=''; pendingSwap=null">Cancel</button><button class="btn btn-primary" @click="doSwapExecute()" :disabled="swapExecBusy" x-text="swapExecBusy ? 'Executing…' : 'Confirm Swap'"></button></div>
-            </div></template>
-            <template x-if="!swapQuoteText"><div class="card">
-              <div class="card-head"><div class="card-title">Protocol</div></div>
-              <ol class="steps">
-                <li><span>01</span>Pick a token from the list</li>
-                <li><span>02</span>Choose sell or buy direction</li>
-                <li><span>03</span>Enter an amount and fetch a quote</li>
-                <li><span>04</span>Review fees and confirm on-chain</li>
-              </ol>
-              <div class="net-line"><span class="dot" :class="{chipnet: state?.network==='chipnet'}"></span><span x-text="state?.network==='chipnet' ? 'CHIPNET · SWAPS DISABLED' : 'MAINNET · CAULDRON DEX'"></span></div>
-            </div></template>
+          <div class="span-8">
+            <div class="card">
+              <div class="card-head"><div class="card-title">Usage</div></div>
+              <template x-if="state?.usage?.length"><table class="tbl"><thead><tr><th>Model</th><th>Status</th><th>Remaining</th><th>Used</th></tr></thead><tbody>
+                <template x-for="(s, i) in state?.usage || []" :key="i"><tr><td style="font-size:12.5px" x-text="s.displayName || s.model || 'Unknown'"></td><td><span class="pill pill-active" x-show="s.active">ACTIVE</span><span class="pill pill-idle" x-show="!s.active">IDLE</span></td><td class="tbl-num" x-text="fmtDuration(s.remainingSeconds)"></td><td class="tbl-num" x-text="fmtDuration(s.usedSeconds)"></td></tr></template>
+              </tbody></table></template>
+              <template x-if="state && !state?.usage?.length"><div class="empty">No usage data</div></template>
+              <template x-if="!state"><div class="empty">Loading…</div></template>
+            </div>
           </div>
         </div>
-      </div>
-            <div x-show="tab==='ai'">
-        <div class="subnav" role="tablist">
-          <button :class="{active: aiSub==='plans'}" @click="aiSub='plans'"><span class="idx">01</span>PLANS</button>
-          <button :class="{active: aiSub==='credits'}" @click="aiSub='credits'"><span class="idx">02</span>CREDITS</button>
-          <button :class="{active: aiSub==='images'}" @click="aiSub='images'"><span class="idx">03</span>IMAGES</button>
+        <div class="action-bar">
+          <button class="action-btn" :class="{active: aiAction==='buy'}" @click="aiAction = aiAction==='buy' ? null : 'buy'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>Buy Credits</button>
+          <button class="action-btn" :class="{active: aiAction==='refill'}" @click="aiAction = aiAction==='refill' ? null : 'refill'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>Auto-Refill</button>
+          <button class="action-btn" :class="{active: aiAction==='images'}" @click="aiAction = aiAction==='images' ? null : 'images'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>Generate Images</button>
         </div>
-        <div x-show="aiSub==='plans'" class="grid">
+        <div class="grid" x-show="aiAction==='buy' || aiAction==='refill'">
           <div class="span-12">
             <div class="card">
-              <div class="card-head"><div class="card-title">Plans</div><span class="pill pill-idle" x-show="state?.liftDiscountPercent" x-text="state.liftDiscountPercent + '% OFF WITH LIFT'"></span></div>
+              <div class="card-head"><div class="card-title" x-text="aiAction==='buy' ? 'Buy Credits' : 'Auto-Refill'"></div><button class="btn-close" @click="aiAction=null" title="Close">✕</button></div>
+              <template x-if="aiAction==='buy'"><div>
+                <span class="pill pill-idle" x-show="state?.liftDiscountPercent" x-text="state.liftDiscountPercent + '% OFF WITH LIFT'"></span>
               <template x-if="state?.plans?.length"><div>
                 <template x-for="plan in state?.plans || []" :key="plan.modelId">
                   <div class="plan-group">
@@ -439,31 +456,8 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
               </div></template>
               <template x-if="state && !state?.plans?.length"><div class="empty">No plans available</div></template>
               <template x-if="!state"><div class="empty">Loading…</div></template>
-            </div>
-          </div>
-        </div>
-        <div x-show="aiSub==='credits'" class="grid">
-          <div class="span-4">
-            <div class="card">
-              <div class="card-head"><div class="card-title">Credits</div></div>
-              <template x-if="state?.usage?.length"><div class="metric"><div class="metric-value" x-text="activeCreditsTotal(state) > 0 ? fmtDuration(activeCreditsTotal(state)) : '0m'"></div><div class="metric-label">remaining · <span x-text="activeCreditsCount(state)"></span> active session(s)</div></div></template>
-              <template x-if="state && !state?.usage?.length"><div class="empty">No active sessions</div></template>
-              <template x-if="!state"><div class="empty">Loading…</div></template>
-            </div>
-          </div>
-          <div class="span-8">
-            <div class="card">
-              <div class="card-head"><div class="card-title">Usage</div></div>
-              <template x-if="state?.usage?.length"><table class="tbl"><thead><tr><th>Model</th><th>Status</th><th>Remaining</th><th>Used</th></tr></thead><tbody>
-                <template x-for="(s, i) in state?.usage || []" :key="i"><tr><td style="font-size:12.5px" x-text="s.displayName || s.model || 'Unknown'"></td><td><span class="pill pill-active" x-show="s.active">ACTIVE</span><span class="pill pill-idle" x-show="!s.active">IDLE</span></td><td class="tbl-num" x-text="fmtDuration(s.remainingSeconds)"></td><td class="tbl-num" x-text="fmtDuration(s.usedSeconds)"></td></tr></template>
-              </tbody></table></template>
-              <template x-if="state && !state?.usage?.length"><div class="empty">No usage data</div></template>
-              <template x-if="!state"><div class="empty">Loading…</div></template>
-            </div>
-          </div>
-          <div class="span-12">
-            <div class="card">
-              <div class="card-head"><div class="card-title">Auto-Refill</div></div>
+              </div></template>
+              <template x-if="aiAction==='refill'"><div>
               <template x-if="state && (!state.autoRefill || refillEditing)"><div>
                 <div style="font-size:12.5px;color:var(--ink-3);margin-bottom:12px">Auto-refill buys a new plan when credits run out. It tops up immediately if this model has no active credits.</div>
                 <div class="inline-row">
@@ -502,10 +496,11 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
                 </div>
               </div></template>
               <template x-if="!state"><div class="empty">Loading…</div></template>
+              </div></template>
             </div>
           </div>
         </div>
-        <div x-show="aiSub==='images'" class="grid">
+        <div x-show="aiAction==='images'" class="grid">
           <div class="span-5">
             <div class="card">
               <div class="card-head"><div class="card-title">Image Generation</div></div>
@@ -525,7 +520,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
                   </div>
                   <div style="text-align:right;flex-shrink:0;font-family:var(--mono);font-size:10.5px;color:var(--ink-3)">
                     <div x-text="(h.created_at || '').slice(0,10)"></div>
-                    <div x-show="h.actual_cost_usd != null" x-text="h.actual_cost_usd != null ? '$' + h.actual_cost_usd.toFixed(2) : ''"></div>
+                    <div x-show="h.price_usd != null || h.actual_cost_usd != null" x-text="'$' + (h.price_usd != null ? h.price_usd : h.actual_cost_usd).toFixed(2)"></div>
                   </div>
                   <template x-if="h.status==='completed' && h.filepath"><button class="btn btn-sm btn-ghost" style="flex-shrink:0;padding:4px 6px" @click.stop="openImage(h)" title="View image"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></button></template>
                 </div>
@@ -555,7 +550,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
   </div>
 <div class="modal-backdrop" :class="{open: showPurchaseModal}" @click.self="showPurchaseModal=false"><div class="modal" role="dialog" aria-modal="true"><div class="modal-title">Confirm Purchase</div><div class="modal-body"><strong x-text="pendingPurchase?.displayName"></strong><br>Duration: <span x-text="pendingPurchase?.durationDisplay"></span></div><div class="seg" style="margin-top:16px" role="tablist"><button :class="{active: purchaseMethod==='bch'}" @click="purchaseMethod='bch'">BCH</button><button :class="{active: purchaseMethod==='lift'}" @click="purchaseMethod='lift'; loadLiftQuote()">LIFT<span class="off" x-show="state?.liftDiscountPercent" x-text="'-' + state.liftDiscountPercent + '%'"></span></button></div><div class="modal-body" style="margin-top:14px"><template x-if="purchaseMethod==='bch'"><div>Price: <strong x-text="bchPriceLabel(pendingPurchase)"></strong><br><span style="font-size:11.5px;color:var(--ink-3)" x-text="state?.balance ? 'BCH balance: ' + state.balance.spendableBch + ' BCH' : 'BCH balance unavailable'"></span><template x-if="bchInsufficient()"><div style="font-size:11.5px;color:var(--err);margin-top:4px">Insufficient BCH balance — top up or pay with LIFT</div></template></div></template><template x-if="purchaseMethod==='lift'"><div><s style="color:var(--ink-3);font-size:12px" x-text="bchPriceLabel(pendingPurchase)"></s> <strong x-text="liftPriceLabel(pendingPurchase)"></strong> <span class="pill pill-active" x-show="state?.liftDiscountPercent" x-text="state.liftDiscountPercent + '% OFF'"></span><br><span style="font-size:11.5px;color:var(--ink-3)" x-text="state?.lift ? 'LIFT balance: ' + state.lift.displayBalance : 'No LIFT tokens in this wallet'"></span><template x-if="liftQuoteBusy"><div style="font-size:11.5px;color:var(--ink-3);margin-top:6px">Estimating LIFT needed…</div></template><template x-if="liftQuoteError"><div style="font-size:11.5px;color:var(--err);margin-top:6px" x-text="liftQuoteError"></div></template><template x-if="liftQuote && !liftQuoteBusy && !liftQuoteError"><div style="font-size:11.5px;margin-top:6px">LIFT needed: <strong x-text="'≈ ' + liftQuote.display + ' ' + liftQuote.symbol"></strong></div></template><template x-if="liftInsufficient()"><div style="font-size:11.5px;color:var(--err);margin-top:4px">Insufficient LIFT balance — pay with BCH or top up LIFT</div></template></div></template></div><template x-if="purchaseError"><div style="font-size:12px;color:var(--err);margin-top:10px" x-text="purchaseError"></div></template><div class="modal-actions"><button class="btn" @click="showPurchaseModal=false">Cancel</button><button class="btn btn-primary" @click="confirmPurchase()" :disabled="purchaseBusy || (purchaseMethod==='bch' && bchInsufficient()) || (purchaseMethod==='lift' && (!state?.lift || liftQuoteBusy || liftInsufficient()))" x-text="purchaseBusy ? 'Processing…' : (purchaseMethod==='lift' ? 'Pay with LIFT' : 'Pay with BCH')"></button></div></div></div>
 <div class="modal-backdrop" :class="{open: showSendModal}" @click.self="showSendModal=false"><div class="modal" role="dialog" aria-modal="true"><div class="modal-title">Confirm Send</div><template x-if="pendingSend?.type === 'bch'"><div class="modal-body"><strong>Send BCH</strong><br>Address: <span class="mono-break" x-text="pendingSend?.address"></span><br>Amount: <strong><span x-text="pendingSend?.amount"></span> <span x-text="pendingSend?.currency?.toUpperCase()"></span></strong></div></template><template x-if="pendingSend?.type === 'token'"><div class="modal-body"><strong>Send Token</strong><br>Category: <span class="mono-break" x-text="pendingSend?.category?.slice(0,16) + '…'"></span><br>Amount: <strong x-text="pendingSend?.tokenAmount"></strong><br>Address: <span class="mono-break" x-text="pendingSend?.address"></span></div></template><div class="modal-actions"><button class="btn" @click="showSendModal=false">Cancel</button><button class="btn btn-primary" @click="confirmSend()" :disabled="sendConfirmBusy" x-text="sendConfirmBusy ? 'Sending…' : 'Confirm & Send'"></button></div></div></div>
-<div class="modal-backdrop" :class="{open: showImageQuoteModal}" @click.self="showImageQuoteModal=false"><div class="modal" role="dialog" aria-modal="true"><div class="modal-title">Image Generation</div><div class="modal-body">Model: <strong x-text="pendingImageQuote?.model || 'default'"></strong><br>Cost: <span class="tbl-num" x-text="pendingImageQuote?.amountSats ? (pendingImageQuote.amountSats / 1e8).toFixed(8) + ' BCH' : 'calculating...'"></span><span x-show="pendingImageQuote?.amountUsd != null" x-text="pendingImageQuote?.amountUsd != null ? ' · ≈ $' + pendingImageQuote.amountUsd.toFixed(2) + ' USD' : ''"></span><br>Order: <span class="mono-break" style="color:var(--ink-3)" x-text="pendingImageQuote?.orderId || 'pending'"></span></div><div class="modal-actions"><button class="btn" @click="showImageQuoteModal=false">Cancel</button><button class="btn btn-primary" @click="confirmImageGen()" :disabled="imgGenBusy" x-text="imgGenBusy ? 'Generating…' : 'Pay & Generate'"></button></div></div></div>
+<div class="modal-backdrop" :class="{open: showImageQuoteModal}" @click.self="showImageQuoteModal=false"><div class="modal" role="dialog" aria-modal="true"><div class="modal-title">Image Generation</div><div class="modal-body">Model: <strong x-text="pendingImageQuote?.model || 'default'"></strong><br>Cost: <span class="tbl-num" x-text="pendingImageQuote?.amountSats ? (pendingImageQuote.amountSats / 1e8).toFixed(8) + ' BCH' : 'calculating...'"></span><span x-show="pendingImageQuote?.amountUsd != null" x-text="pendingImageQuote?.amountUsd != null ? ' · $' + pendingImageQuote.amountUsd.toFixed(2) + ' USD' : ''"></span><br>Order: <span class="mono-break" style="color:var(--ink-3)" x-text="pendingImageQuote?.orderId || 'pending'"></span></div><div class="modal-actions"><button class="btn" @click="showImageQuoteModal=false">Cancel</button><button class="btn btn-primary" @click="confirmImageGen()" :disabled="imgGenBusy" x-text="imgGenBusy ? 'Generating…' : 'Pay & Generate'"></button></div></div></div>
 <div class="lightbox" :class="{open: lightbox}" @click.self="lightbox=null" @keydown.escape.window="lightbox=null" role="dialog" aria-modal="true">
   <div class="lightbox-inner">
     <img :src="lightbox ? '/api/ai/images/' + lightbox.id + '/file?token=' + token : ''" :alt="lightbox?.path || 'Generated image'">
@@ -591,7 +586,7 @@ sendType:'bch',sendAmount:'',sendCurrency:'bch',sendAddress:'',sendCategory:'',s
 histType:'all',histRecords:[],histPage:1,histNumPages:1,histHasNext:false,histLoading:false,histNetwork:'mainnet',
 swapTokens:[{symbol:'LIFT',category:'5932b2fd4915d6a75d3ec53282cd49118149a2176ee67ed68b1111ff0786f7fc'},{symbol:'PUSD',category:'2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544'}],swapToken:'5932b2fd4915d6a75d3ec53282cd49118149a2176ee67ed68b1111ff0786f7fc',swapCustomCategory:'',swapDir:'sell',swapAmount:'',swapError:'',swapQuoteText:'',swapBusy:false,swapExecBusy:false,pendingSwap:null,
 pendingPurchase:null,purchaseBusy:false,purchaseMethod:'bch',purchaseError:'',liftQuote:null,liftQuoteBusy:false,liftQuoteError:'',showPurchaseModal:false,showSendModal:false,sendConfirmBusy:false,
-pendingImageQuote:null,showImageQuoteModal:false,imgGenBusy:false,imgQuoteBusy:false,aiSub:'plans',lightbox:null,lightboxConfirmDelete:false,
+pendingImageQuote:null,showImageQuoteModal:false,imgGenBusy:false,imgQuoteBusy:false,walletAction:null,aiAction:null,lightbox:null,lightboxConfirmDelete:false,
 refillModel:'',refillMinutes:'30',refillMax:'',refillPayMethod:'bch',refillEditing:false,refillNotice:'',
 imgPrompt:'',imgModel:'bytedance-seed/seedream-5-0-pro',imgAspect:'1:1',imgQuality:'auto',
 toastVisible:false,toastMsg:'',toastOk:true,
@@ -633,7 +628,7 @@ cancelRefillEdit(){this.refillEditing=false;this.refillNotice=''},
 refillNoticeText(tick){if(!tick)return '';if(tick.action==='refilled'){var m=(tick.state&&tick.state.minutes)||'';var tx=tick.state&&tick.state.lastRefillTxid;return 'Topped up '+m+' min now'+(tx?' (tx '+String(tx).slice(0,10)+'…)':'')+'.'}if(tick.action==='skipped')return 'Refill skipped: '+tick.reason+'.';if(tick.action==='disarmed')return 'Auto-refill stopped: '+tick.reason+'.';return 'Credits still active — no refill needed.'},
 async deleteRefill(){if(!confirm('Delete auto-refill configuration?'))return;try{await this.api('POST','/api/ai/auto-refill',{delete:true});this.refillEditing=false;this.refillNotice='';this.toast('Auto-refill deleted');this.load()}catch(e){this.toast(e.message,true)}},
 async doImageQuote(){var prompt=(this.imgPrompt||'').trim();if(!prompt){this.toast('Enter a prompt',true);return}this.imgQuoteBusy=true;try{var quote=await this.api('POST','/api/ai/images/quote',{prompt:prompt,model:this.imgModel||undefined,aspectRatio:this.imgAspect,quality:this.imgQuality});this.pendingImageQuote=quote;this.showImageQuoteModal=true}catch(e){this.toast(e.message,true)}this.imgQuoteBusy=false},
-async confirmImageGen(){if(!this.pendingImageQuote)return;this.imgGenBusy=true;try{var orderId=this.pendingImageQuote.orderId;var result=await this.api('POST','/api/ai/images/fulfill',{orderId:orderId});this.showImageQuoteModal=false;this.aiSub='images';if(result&&result.path){this.lightbox={id:orderId,path:result.path};this.toast('Image saved to ~/.paytaca/images')}else{this.toast((result&&result.error)||(result&&result.paid?'Payment received — image will appear in your gallery':'Image generation failed'),true)}this.load()}catch(e){this.toast(e.message,true)}this.imgGenBusy=false;this.pendingImageQuote=null},
+async confirmImageGen(){if(!this.pendingImageQuote)return;this.imgGenBusy=true;try{var orderId=this.pendingImageQuote.orderId;var result=await this.api('POST','/api/ai/images/fulfill',{orderId:orderId});this.showImageQuoteModal=false;this.aiAction='images';if(result&&result.path){this.lightbox={id:orderId,path:result.path};this.toast('Image saved to ~/.paytaca/images')}else{this.toast((result&&result.error)||(result&&result.paid?'Payment received — image will appear in your gallery':'Image generation failed'),true)}this.load()}catch(e){this.toast(e.message,true)}this.imgGenBusy=false;this.pendingImageQuote=null},
 openImage(h){this.lightbox={id:h.id,path:h.filepath||('~/paytaca/images/'+h.id)};this.lightboxConfirmDelete=false},
 async deleteImage(){if(!this.lightbox)return;var id=this.lightbox.id;try{await this.api('DELETE','/api/ai/images/'+id);this.lightbox=null;this.lightboxConfirmDelete=false;this.toast('Image deleted');this.load()}catch(e){this.toast(e.message,true);this.lightboxConfirmDelete=false}},
 imgCaption(h){var t=h.prompt||h.model_display_name||h.model||h.id||'';return t.length>48?t.slice(0,48)+'…':t}

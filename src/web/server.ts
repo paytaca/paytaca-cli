@@ -433,14 +433,16 @@ function createDefaultDepsWithQuotes(isChipnet: boolean, backendUrl?: string): W
         backendUrl,
       })
       quoteStore.set(quote.orderId, quote)
-      let amountUsd: number | undefined
-      try {
-        const usdPerBch = await getBchUsdPrice(isChipnet)
-        if (usdPerBch !== null) {
-          amountUsd = Number(((quote.amountSats / 1e8) * usdPerBch).toFixed(2))
+      let amountUsd: number | undefined = quote.amountUsd
+      if (amountUsd === undefined) {
+        try {
+          const usdPerBch = await getBchUsdPrice(isChipnet)
+          if (usdPerBch !== null) {
+            amountUsd = Number(((quote.amountSats / 1e8) * usdPerBch).toFixed(2))
+          }
+        } catch {
+          amountUsd = undefined
         }
-      } catch {
-        amountUsd = undefined
       }
       return { ...quote, amountUsd }
     },
