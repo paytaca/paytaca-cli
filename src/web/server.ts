@@ -182,6 +182,7 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
           spendableBch: balance.spendableBch,
           usd: balance.usd,
         },
+        tokens: tokens.tokens,
         lift: lift
           ? { category: lift.category, symbol: lift.symbol, displayBalance: lift.displayBalance, rawBalance: lift.rawBalance }
           : null,
