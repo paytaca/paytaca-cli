@@ -136,6 +136,9 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
         getWalletStatus(walletHash, { backendUrl }),
       ])
 
+      let bchPriceUsd: number | null = null
+      try { bchPriceUsd = await getBchUsdPrice(isChipnet) } catch {}
+
       const lift = tokens.tokens.find((t: { category: string }) => t.category === LIFT_TOKEN_ID)
       const sessions = getSessions(status).map((s) => ({
         model: s.model_id || s.ai_model || null,
@@ -171,6 +174,8 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
       } catch {}
 
       return {
+        walletHash,
+        bchPriceUsd,
         network: balance.network,
         balance: {
           spendableSats: balance.spendableSats,
