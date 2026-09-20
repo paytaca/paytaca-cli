@@ -285,4 +285,9 @@ describe('web server misc', () => {
     const res = await req(`http://127.0.0.1:${srv.port}/api/nonexistent`, srv.token)
     expect(res.status).toBe(404)
   })
+
+  it('rejects token passed as query parameter', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/wallet/state?token=${srv.token}`, '')
+    expect(res.status).toBe(401)
+  })
 })

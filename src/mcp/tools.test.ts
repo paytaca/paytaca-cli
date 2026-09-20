@@ -654,7 +654,7 @@ describe('MCP tools', () => {
       expect(JSON.parse(text(result))).toEqual({ modelId: 'm', active: false })
     })
 
-    it('runs an inline refill when armed and the model is inactive', async () => {
+    it('never buys from get_credits, even when armed and the model is inactive', async () => {
       mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
       mocks.getWalletStatus.mockResolvedValue({})
       mocks.summarizeAllCredits.mockReturnValue([{ modelId: 'm', active: false }])
@@ -668,15 +668,11 @@ describe('MCP tools', () => {
         paymentMethod: 'bch',
       })
       mocks.hasActiveCredits.mockReturnValue(false)
-      mocks.autoRefillTick.mockResolvedValue({
-        action: 'refilled',
-        state: { enabled: true, refillCount: 1 },
-      })
       const c = await connect()
       const result = await c.callTool({ name: 'get_credits', arguments: {} })
-      expect(mocks.autoRefillTick).toHaveBeenCalled()
+      expect(mocks.autoRefillTick).not.toHaveBeenCalled()
       const body = JSON.parse(text(result))
-      expect(body.refillTick).toMatchObject({ action: 'refilled' })
+      expect(body.refillTick).toBeUndefined()
       expect(body.autoRefill).toMatchObject({ armed: true, model: 'm' })
     })
 

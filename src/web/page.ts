@@ -534,7 +534,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
               <template x-if="(state?.imageHistory || []).filter(h => h.status === 'completed' && h.filepath).length"><div class="gallery">
                 <template x-for="h in (state?.imageHistory || []).filter(h => h.status === 'completed' && h.filepath)" :key="h.id">
                   <figure class="gallery-item" @click="openImage(h)">
-                    <img :src="'/api/ai/images/' + h.id + '/file?token=' + token" :alt="h.prompt || 'Generated image'" loading="lazy">
+                    <img :src="imgUrls[h.id] || ''" :alt="h.prompt || 'Generated image'" loading="lazy" x-show="imgUrls[h.id]">
                     <figcaption><span class="cap" x-text="imgCaption(h)"></span><span x-text="(h.completed_at || '').slice(0,10)"></span></figcaption>
                   </figure>
                 </template>
@@ -553,12 +553,12 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
 <div class="modal-backdrop" :class="{open: showImageQuoteModal}" @click.self="showImageQuoteModal=false"><div class="modal" role="dialog" aria-modal="true"><div class="modal-title">Image Generation</div><div class="modal-body">Model: <strong x-text="pendingImageQuote?.model || 'default'"></strong><br>Cost: <span class="tbl-num" x-text="pendingImageQuote?.amountSats ? (pendingImageQuote.amountSats / 1e8).toFixed(8) + ' BCH' : 'calculating...'"></span><span x-show="pendingImageQuote?.amountUsd != null" x-text="pendingImageQuote?.amountUsd != null ? ' · $' + pendingImageQuote.amountUsd.toFixed(2) + ' USD' : ''"></span><br>Order: <span class="mono-break" style="color:var(--ink-3)" x-text="pendingImageQuote?.orderId || 'pending'"></span></div><div class="modal-actions"><button class="btn" @click="showImageQuoteModal=false">Cancel</button><button class="btn btn-primary" @click="confirmImageGen()" :disabled="imgGenBusy" x-text="imgGenBusy ? 'Generating…' : 'Pay & Generate'"></button></div></div></div>
 <div class="lightbox" :class="{open: lightbox}" @click.self="lightbox=null" @keydown.escape.window="lightbox=null" role="dialog" aria-modal="true">
   <div class="lightbox-inner">
-    <img :src="lightbox ? '/api/ai/images/' + lightbox.id + '/file?token=' + token : ''" :alt="lightbox?.path || 'Generated image'">
+    <img :src="lightbox && imgUrls[lightbox.id] ? imgUrls[lightbox.id] : ''" :alt="lightbox?.path || 'Generated image'" x-show="lightbox && imgUrls[lightbox.id]">
     <div class="lightbox-bar">
       <span class="lightbox-path" x-text="lightbox?.path || lightbox?.id || ''"></span>
       <div class="lightbox-actions">
         <button class="btn btn-sm" @click="copyText(lightbox?.path)">Copy Path</button>
-        <a class="btn btn-sm" :href="lightbox ? '/api/ai/images/' + lightbox.id + '/file?token=' + token : '#'" target="_blank" rel="noopener">Open ↗</a>
+        <a class="btn btn-sm" :href="lightbox && imgUrls[lightbox.id] ? imgUrls[lightbox.id] : '#'" target="_blank" rel="noopener" x-show="lightbox && imgUrls[lightbox.id]">Open ↗</a>
         <template x-if="!lightboxConfirmDelete"><button class="btn btn-sm" style="color:var(--err)" @click="lightboxConfirmDelete=true">Delete</button></template>
         <template x-if="lightboxConfirmDelete"><span style="display:flex;gap:6px;align-items:center;font-size:11.5px;color:var(--err)">Delete?<button class="btn btn-sm btn-primary" style="background:var(--err);border-color:var(--err)" @click="deleteImage()">Yes</button><button class="btn btn-sm" @click="lightboxConfirmDelete=false">No</button></span></template>
         <button class="btn btn-sm" @click="lightboxConfirmDelete=false;lightbox=null">Close</button>
@@ -580,19 +580,20 @@ var QR=(()=>{var EC_PARAMS=[[],[26,7,1],[44,10,1],[70,15,1],[100,20,1],[134,26,1
 </script>
 <script>
 document.addEventListener('alpine:init',function(){Alpine.data('app',function(){return{
-token:new URLSearchParams(window.location.search).get('token')||'',theme:localStorage.getItem('pt-theme')||'light',tab:'wallet',state:null,
+token:(function(){var t=new URLSearchParams(window.location.search).get('token')||'';if(t)history.replaceState(null,'',window.location.pathname);return t})(),theme:localStorage.getItem('pt-theme')||'light',tab:'wallet',state:null,
 rcvType:'bch',rcvCategory:'',rcvAmount:'',rcvView:null,rcvQrSvg:'',
 sendType:'bch',sendAmount:'',sendCurrency:'bch',sendAddress:'',sendCategory:'',sendTokenPreset:'__custom__',sendTokenAmount:'',sendError:'',sendSuccess:'',pendingSend:null,
 histType:'all',histRecords:[],histPage:1,histNumPages:1,histHasNext:false,histLoading:false,histNetwork:'mainnet',
 swapTokens:[{symbol:'LIFT',category:'5932b2fd4915d6a75d3ec53282cd49118149a2176ee67ed68b1111ff0786f7fc'},{symbol:'PUSD',category:'2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544'}],swapToken:'5932b2fd4915d6a75d3ec53282cd49118149a2176ee67ed68b1111ff0786f7fc',swapCustomCategory:'',swapDir:'sell',swapAmount:'',swapError:'',swapQuoteText:'',swapBusy:false,swapExecBusy:false,pendingSwap:null,
 pendingPurchase:null,purchaseBusy:false,purchaseMethod:'bch',purchaseError:'',liftQuote:null,liftQuoteBusy:false,liftQuoteError:'',showPurchaseModal:false,showSendModal:false,sendConfirmBusy:false,
-pendingImageQuote:null,showImageQuoteModal:false,imgGenBusy:false,imgQuoteBusy:false,walletAction:null,aiAction:null,lightbox:null,lightboxConfirmDelete:false,
+pendingImageQuote:null,showImageQuoteModal:false,imgGenBusy:false,imgQuoteBusy:false,walletAction:null,aiAction:null,lightbox:null,lightboxConfirmDelete:false,imgUrls:{},
 refillModel:'',refillMinutes:'30',refillMax:'',refillPayMethod:'bch',refillEditing:false,refillNotice:'',
 imgPrompt:'',imgModel:'bytedance-seed/seedream-5-0-pro',imgAspect:'1:1',imgQuality:'auto',
 toastVisible:false,toastMsg:'',toastOk:true,
 ws:null,wsStatus:'connecting',wsAddress:null,wsSeen:{},wsReconnectTimer:null,wsPingTimer:null,wsRefreshTimer:null,wsLateTimer:null,notify:null,_ntid:0,
 async init(){document.documentElement.setAttribute('data-theme',this.theme);try{this.state=await this.api('GET','/api/wallet/state');this.loadHistory(1);await this.onRcvChange();this.connectWatch()}catch(e){this.toast(e.message,true)}var self=this;document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible'&&self.state){if(!self.ws||self.ws.readyState!==1){if(self.wsReconnectTimer)clearTimeout(self.wsReconnectTimer);self.connectWatch()}}});window.addEventListener('online',function(){if(self.state){if(self.wsReconnectTimer)clearTimeout(self.wsReconnectTimer);self.connectWatch()}})},
-async load(){try{this.state=await this.api('GET','/api/wallet/state');this.onRcvChange();this.loadHistory(this.histPage)}catch(e){this.toast(e.message,true)}},
+async load(){try{this.state=await this.api('GET','/api/wallet/state');this.onRcvChange();this.loadHistory(this.histPage);(this.state.imageHistory||[]).forEach(h=>{if(h.status==='completed'&&h.filepath)this.loadImage(h.id)})}catch(e){this.toast(e.message,true)}},
+async loadImage(id){if(!id||this.imgUrls[id])return;try{var res=await fetch('/api/ai/images/'+id+'/file',{headers:{'X-Paytaca-Token':this.token}});if(!res.ok)return;var blob=await res.blob();this.imgUrls[id]=URL.createObjectURL(blob)}catch(e){}},
 async api(method,apipath,body){var opts={method:method,headers:{'X-Paytaca-Token':this.token,'Accept':'application/json'}};if(body!==undefined){opts.headers['Content-Type']='application/json';opts.body=JSON.stringify(body)}var res=await fetch(apipath,opts);if(!res.ok){var msg='Request failed ('+res.status+')';try{var j=await res.json();if(j.error)msg=j.error}catch(ex){}throw new Error(msg)}return res.json()},
 fmtDuration(s){if(!s||s<=0)return '0m';var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h?h+'h '+m+'m':m+'m'},
 bchPriceLabel(p){if(!p)return '';return p.priceUsd!=null?'$'+p.priceUsd.toFixed(2)+' USD':((p.priceSats||0)/1e8).toFixed(8)+' BCH'},
@@ -629,7 +630,7 @@ refillNoticeText(tick){if(!tick)return '';if(tick.action==='refilled'){var m=(ti
 async deleteRefill(){if(!confirm('Delete auto-refill configuration?'))return;try{await this.api('POST','/api/ai/auto-refill',{delete:true});this.refillEditing=false;this.refillNotice='';this.toast('Auto-refill deleted');this.load()}catch(e){this.toast(e.message,true)}},
 async doImageQuote(){var prompt=(this.imgPrompt||'').trim();if(!prompt){this.toast('Enter a prompt',true);return}this.imgQuoteBusy=true;try{var quote=await this.api('POST','/api/ai/images/quote',{prompt:prompt,model:this.imgModel||undefined,aspectRatio:this.imgAspect,quality:this.imgQuality});this.pendingImageQuote=quote;this.showImageQuoteModal=true}catch(e){this.toast(e.message,true)}this.imgQuoteBusy=false},
 async confirmImageGen(){if(!this.pendingImageQuote)return;this.imgGenBusy=true;try{var orderId=this.pendingImageQuote.orderId;var result=await this.api('POST','/api/ai/images/fulfill',{orderId:orderId});this.showImageQuoteModal=false;this.aiAction='images';if(result&&result.path){this.lightbox={id:orderId,path:result.path};this.toast('Image saved to ~/.paytaca/images')}else{this.toast((result&&result.error)||(result&&result.paid?'Payment received — image will appear in your gallery':'Image generation failed'),true)}this.load()}catch(e){this.toast(e.message,true)}this.imgGenBusy=false;this.pendingImageQuote=null},
-openImage(h){this.lightbox={id:h.id,path:h.filepath||('~/paytaca/images/'+h.id)};this.lightboxConfirmDelete=false},
+openImage(h){this.lightbox={id:h.id,path:h.filepath||('~/paytaca/images/'+h.id)};this.lightboxConfirmDelete=false;this.loadImage(h.id)},
 async deleteImage(){if(!this.lightbox)return;var id=this.lightbox.id;try{await this.api('DELETE','/api/ai/images/'+id);this.lightbox=null;this.lightboxConfirmDelete=false;this.toast('Image deleted');this.load()}catch(e){this.toast(e.message,true);this.lightboxConfirmDelete=false}},
 imgCaption(h){var t=h.prompt||h.model_display_name||h.model||h.id||'';return t.length>48?t.slice(0,48)+'…':t}
 }})});

@@ -49,7 +49,9 @@ export function registerWebCommand(program: Command): void {
 
       console.log(chalk.bold('\n   Paytaca Web\n'))
       console.log(chalk.dim(`   Network: ${opts.chipnet ? 'chipnet' : 'mainnet'}`))
-      console.log(`   URL: ${chalk.cyan(webServer.url)}`)
+      console.log(`   URL: ${chalk.cyan(`http://127.0.0.1:${webServer.port}`)}`)
+      console.log(chalk.dim('   A session link with the access token was opened in your browser.'))
+      console.log(chalk.dim('   To reopen later, run `paytaca web` again.'))
       console.log(chalk.dim('   Press Ctrl+C to stop.\n'))
 
       if (opts.open !== false) {

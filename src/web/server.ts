@@ -433,6 +433,10 @@ function createDefaultDepsWithQuotes(isChipnet: boolean, backendUrl?: string): W
         backendUrl,
       })
       quoteStore.set(quote.orderId, quote)
+      if (quoteStore.size > 50) {
+        const oldest = quoteStore.keys().next().value
+        if (oldest) quoteStore.delete(oldest)
+      }
       let amountUsd: number | undefined = quote.amountUsd
       if (amountUsd === undefined) {
         try {
@@ -453,9 +457,20 @@ interface JsonBody {
   [key: string]: unknown
 }
 
+const MAX_BODY_BYTES = 1024 * 1024
+
 async function readBody(req: http.IncomingMessage): Promise<JsonBody> {
   const chunks: Buffer[] = []
-  for await (const chunk of req) chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
+  let total = 0
+  for await (const chunk of req) {
+    const buf = typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer)
+    total += buf.length
+    if (total > MAX_BODY_BYTES) {
+      req.destroy()
+      throw new Error('Request body too large')
+    }
+    chunks.push(buf)
+  }
   const raw = Buffer.concat(chunks).toString('utf8')
   if (!raw) return {}
   try { return JSON.parse(raw) } catch { return {} }
@@ -495,9 +510,8 @@ export async function startWebServer(
   const deps = options.deps || createDefaultDepsWithQuotes(isChipnet, backendUrl)
   const pageHtml = renderPage()
 
-  function checkAuth(req: http.IncomingMessage, url?: URL): boolean {
-    if (req.headers['x-paytaca-token'] === token) return true
-    return url != null && url.searchParams.get('token') === token
+  function checkAuth(req: http.IncomingMessage): boolean {
+    return req.headers['x-paytaca-token'] === token
   }
 
   function checkHost(req: http.IncomingMessage): boolean {
@@ -718,7 +732,7 @@ export async function startWebServer(
 
       const imageFileMatch = pathname.match(/^\/api\/ai\/images\/([^/]+)\/file$/)
       if (imageFileMatch && req.method === 'GET') {
-        if (!checkAuth(req, url)) return json(res, 401, { error: 'Unauthorized' })
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
         const id = decodeURIComponent(imageFileMatch[1])
         const file = await deps.serveImageFile(id)
         if (!file) return json(res, 404, { error: 'Image not found' })
@@ -734,7 +748,7 @@ export async function startWebServer(
 
       const imageDeleteMatch = pathname.match(/^\/api\/ai\/images\/([^/]+)$/)
       if (imageDeleteMatch && req.method === 'DELETE') {
-        if (!checkAuth(req, url)) return json(res, 401, { error: 'Unauthorized' })
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
         const id = decodeURIComponent(imageDeleteMatch[1])
         const deleted = await deps.deleteImageFile(id)
         return json(res, 200, { deleted })
@@ -742,8 +756,8 @@ export async function startWebServer(
 
       json(res, 404, { error: 'Not found' })
     } catch (err: any) {
-      const message = err?.message || String(err)
-      json(res, 500, { error: message })
+      console.error('[paytaca web]', err?.stack || err?.message || err)
+      json(res, 500, { error: 'Internal server error' })
     }
   })
 

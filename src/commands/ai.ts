@@ -992,7 +992,7 @@ export function registerAiCommands(program: Command): void {
           backendUrl: opts.backend,
         })
         if (opts.json) {
-          outputJson(result)
+          outputJson({ ...result, base64: undefined })
           return
         }
         if (result.success && result.path) {

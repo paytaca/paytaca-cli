@@ -564,7 +564,7 @@ export function registerTools(
     {
       title: 'Get AI time credits',
       description:
-        'Return remaining Paytaca AI time credits for all models, or for one model when "model" is given. When a session is inactive, includes a purchaseHint whose "message" is the exact text to relay to the user (a copy-paste top-up command) instead of upsell or follow-up questions. If auto-refill is armed and its model has no active credits, this call triggers an immediate refill purchase (spends BCH/LIFT per the armed config) and reports the outcome under "refillTick"; standing auto-refill state is under "autoRefill".',
+        'Return remaining Paytaca AI time credits for all models, or for one model when "model" is given. When a session is inactive, includes a purchaseHint whose "message" is the exact text to relay to the user (a copy-paste top-up command) instead of upsell or follow-up questions. Armed auto-refill state is reported under "autoRefill"; refills themselves run in the background, never from this read-only call.',
       inputSchema: {
         model: z.string().optional(),
         chipnet: z.boolean().optional(),
@@ -576,33 +576,17 @@ export function registerTools(
       try {
         const wallet = loadWalletRef()
         if (!wallet) throw new WalletNotConfiguredError()
-        let status = await getWalletStatus(wallet.walletHash, {
+        const status = await getWalletStatus(wallet.walletHash, {
           modelId: model,
           backendUrl: backend,
         })
 
         const auto = readAutoRefillState()
-        let tick: RefillTickResult | null = null
-        if (auto?.enabled && auto.model && wallet.canSign) {
-          if (!hasActiveCredits(status, auto.model)) {
-            try {
-              tick = await autoRefillTick(createRefillTickDeps(cn(chipnet), backend))
-              status = await getWalletStatus(wallet.walletHash, {
-                modelId: model,
-                backendUrl: backend,
-              })
-            } catch {
-              tick = null
-            }
-          }
-        }
-
         if (!model) {
           const sessions = summarizeAllCredits(status)
           const payload: Record<string, unknown> = { sessions }
           const autoField = autoRefillField(auto)
           if (autoField) payload.autoRefill = autoField
-          if (tick && tick.action !== 'idle') payload.refillTick = tickSummary(tick)
           let hint: PurchaseHint | null = null
           if (!sessions.some((s) => s.active)) {
             hint = await resolvePurchaseHint(
@@ -617,7 +601,6 @@ export function registerTools(
         const payload: Record<string, unknown> = { ...summary }
         const autoField = autoRefillField(auto)
         if (autoField) payload.autoRefill = autoField
-        if (tick && tick.action !== 'idle') payload.refillTick = tickSummary(tick)
         let hint: PurchaseHint | null = null
         if (!summary.active) {
           hint = await resolvePurchaseHint(model, backend)
