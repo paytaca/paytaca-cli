@@ -11,7 +11,11 @@
  *   - computeWalletHash() is identical to paytaca-app
  */
 
-import { generateMnemonic as bip39Generate, validateMnemonic } from 'bip39'
+import {
+  generateMnemonic as bip39Generate,
+  validateMnemonic,
+  wordlists,
+} from 'bip39'
 import sha256 from 'js-sha256'
 import {
   storeMnemonic as keychainStoreMnemonic,
@@ -63,24 +67,101 @@ export function generateMnemonic(): { mnemonic: string; walletHash: string } {
   return { mnemonic, walletHash }
 }
 
+const BIP39_WORDLIST = new Set(wordlists.english)
+const VALID_WORD_COUNTS = new Set([12, 15, 18, 21, 24])
+
+/**
+ * Parse a seed phrase entered with spaces, commas, or a mix of both
+ * into a lowercase word array.
+ */
+export function parseMnemonicWords(input: string): string[] {
+  return input
+    .trim()
+    .toLowerCase()
+    .split(/[,\s]+/)
+    .filter(Boolean)
+}
+
+function levenshtein(a: string, b: string): number {
+  const m = a.length
+  const n = b.length
+  let prev: number[] = Array.from({ length: n + 1 }, (_, j) => j)
+  for (let i = 1; i <= m; i++) {
+    const curr: number[] = [i]
+    for (let j = 1; j <= n; j++) {
+      curr[j] = Math.min(
+        prev[j] + 1,
+        curr[j - 1] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      )
+    }
+    prev = curr
+  }
+  return prev[n]
+}
+
+/**
+ * Closest BIP39 word to a misspelled word (smallest edit distance;
+ * ties resolve to the earliest word in the wordlist).
+ */
+export function suggestWord(word: string): string | null {
+  let best: string | null = null
+  let bestDist = Infinity
+  for (const candidate of BIP39_WORDLIST) {
+    const dist = levenshtein(word, candidate)
+    if (dist < bestDist) {
+      best = candidate
+      bestDist = dist
+    }
+  }
+  return best
+}
+
+/**
+ * Validate seed phrase word count and BIP39 wordlist membership.
+ * Throws errors with misspelling suggestions for unknown words.
+ */
+export function validateMnemonicWords(words: string[]): void {
+  if (!VALID_WORD_COUNTS.has(words.length)) {
+    throw new Error(
+      `Invalid seed phrase: ${words.length} words. A BIP39 seed phrase must have 12, 15, 18, 21, or 24 words.`
+    )
+  }
+  const unknown = words.filter((w) => !BIP39_WORDLIST.has(w))
+  if (unknown.length > 0) {
+    const listed = unknown
+      .map((w) => {
+        const suggestion = suggestWord(w)
+        return suggestion ? `"${w}" (did you mean "${suggestion}"?)` : `"${w}"`
+      })
+      .join(', ')
+    throw new Error(`Invalid seed phrase: not BIP39 words — ${listed}`)
+  }
+}
+
 /**
  * Import an existing mnemonic, validate it, store in keychain,
- * and set as active wallet.
+ * and set as active wallet. Accepts space- and/or comma-separated input.
  */
 export function importMnemonic(mnemonic: string): {
   mnemonic: string
   walletHash: string
 } {
-  const trimmed = mnemonic.trim().toLowerCase()
-  if (!validateMnemonic(trimmed)) {
-    throw new Error('Invalid BIP39 mnemonic phrase')
+  const words = parseMnemonicWords(mnemonic)
+  if (words.length === 0) {
+    throw new Error('No seed phrase provided')
   }
-  const walletHash = computeWalletHash(trimmed)
+  validateMnemonicWords(words)
+  const normalized = words.join(' ')
+  if (!validateMnemonic(normalized)) {
+    throw new Error('Invalid BIP39 mnemonic phrase (checksum failed)')
+  }
+  const walletHash = computeWalletHash(normalized)
 
-  keychainStoreMnemonic(trimmed, walletHash)
+  keychainStoreMnemonic(normalized, walletHash)
   setActiveWallet(walletHash)
 
-  return { mnemonic: trimmed, walletHash }
+  return { mnemonic: normalized, walletHash }
 }
 
 /**

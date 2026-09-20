@@ -90,7 +90,7 @@ export function registerWalletCommands(program: Command): void {
       })
 
       const mnemonic = await new Promise<string>((resolve) => {
-        rl.question('\nEnter your 12-word seed phrase: ', (answer) => {
+        rl.question('\nEnter your seed phrase (12-24 words, separated by spaces or commas): ', (answer) => {
           rl.close()
           resolve(answer)
         })
