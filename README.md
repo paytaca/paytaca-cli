@@ -4,7 +4,7 @@ A command-line interface for the Paytaca [Bitcoin Cash](https://bitcoincash.org)
 
 Bitcoin Cash is peer-to-peer electronic cash, enabling fast, low-fee transactions for everyday use. Paytaca CLI brings the full capabilities of the Paytaca wallet to the terminal — create wallets, derive addresses, send and receive BCH, manage CashTokens (fungible tokens and NFTs), swap tokens on the Cauldron DEX, pay x402 HTTP APIs, chat over Nostr, and view transaction history, all from the command line.
 
-Designed to be AI agent-friendly and useful for automation by power users. It ships an MCP server and a one-step installer for the Paytaca AI provider.
+Designed to be AI agent-friendly and useful for automation by power users. It ships an MCP server, a one-step installer for the Paytaca AI provider, and a local web UI (`paytaca web`).
 
 ## Requirements
 
@@ -36,10 +36,14 @@ Most commands accept `--json` for machine-readable output and `--chipnet` to tar
 ```bash
 paytaca wallet create              # Generate a new 12-word seed phrase
 paytaca wallet create --chipnet    # Create on chipnet (testnet)
-paytaca wallet import              # Import an existing seed phrase
+paytaca wallet import              # Import a seed phrase (12/15/18/21/24 words)
 paytaca wallet info                # Show wallet hash, address, and balance
 paytaca wallet export              # Display the stored seed phrase (interactive terminal + biometrics)
 ```
+
+> `wallet import` accepts 12/15/18/21/24-word phrases separated by spaces or
+> commas. Unknown words are rejected with the closest BIP39 suggestion, and the
+> checksum is validated before the wallet is stored.
 
 > `wallet export` requires an interactive terminal and prompts for biometric
 > authentication (Touch ID, fingerprint, or Windows Hello) when available. It
@@ -185,7 +189,7 @@ paytaca ai auto-refill --status     # Inspect; also --disable, --delete
 
 `ai configure` accepts `--backend`, `--path`, `--api-key`, `--chipnet`, and `-y/--yes`. `ai purchase` and `ai auto-refill` accept `--lift` to pay with LIFT tokens at a discount. Add `--json` to any `ai` subcommand for machine-readable output.
 
-Armed auto-refill state lives at `~/.paytaca/auto-refill.json`. It runs inline — arming performs one immediate check (buying right away if the armed model has no credits), the `get_credits` MCP tool refills on demand, and the `paytaca mcp` server keeps a background backstop while a session is running. Each execution is appended to `~/.paytaca/auto-refill-events.jsonl` and the latest is reported as `lastEvent`. It disarms when the budget is spent, funds are short, or the plan is no longer offered. Use `--disable` to pause and `--delete` to remove the configuration (history is kept).
+Armed auto-refill state lives at `~/.paytaca/auto-refill.json`. Arming performs one immediate check (buying right away if the armed model has no credits), and the `paytaca mcp` server keeps a background backstop (every 60s) while a session is running. The `get_credits` MCP tool is read-only and never triggers a purchase. Each execution is appended to `~/.paytaca/auto-refill-events.jsonl` and the latest is reported as `lastEvent`. It disarms when the budget is spent, funds are short, or the plan is no longer offered. Use `--disable` to pause and `--delete` to remove the configuration (history is kept).
 
 ### Image Generation
 
@@ -232,7 +236,7 @@ paytaca ai configure opencode --api-key sk-pytc-…  # read-only wallet
 
 Read-only wallets report credits from the shared wallet hash but can't buy plans — fund credits from the full wallet.
 
-**MCP tools:** wallet reads (`get_balance`, `get_transactions`, `get_receiving_address`, `get_tokens`, `send`) plus Paytaca AI (`get_models`, `get_plans`, `get_credits`, `buy_plan`, `auto_refill`, `get_help`, `generate_image`, `get_image_status`, `get_image_models`, `get_image_history`).
+**MCP tools:** wallet (`get_balance`, `get_transactions`, `get_receiving_address`, `get_tokens`, `send`) plus Paytaca AI (`get_models`, `get_plans`, `get_credits`, `buy_plan`, `auto_refill`, `get_help`, `generate_image`, `get_image_status`, `get_image_models`, `get_image_history`).
 
 Spending tools (`send`, `buy_plan`, `auto_refill`, `generate_image`) require host-level approval. By default MCP operates on your **main wallet** and can spend real funds.
 
@@ -271,6 +275,27 @@ paytaca chat remove-display-name          # Remove published name
 paytaca chat remove-bch-address           # Remove published address
 ```
 
+### Web UI
+
+Launch a local browser UI for the wallet, Cauldron swaps, and Paytaca AI:
+
+```bash
+paytaca web                      # Serve on http://127.0.0.1:7474 and open the browser
+paytaca web --port 8080          # Use a custom port
+paytaca web --chipnet            # Mainnet by default; --chipnet targets testnet
+paytaca web --backend <url>      # Override the Paytaca AI backend URL
+paytaca web --no-open            # Do not auto-open the browser
+```
+
+The server binds to `127.0.0.1` only. Access is gated by a random per-session token sent in the `X-Paytaca-Token` header; the browser is auto-opened with a session link that carries the token, and the page strips it from the address bar after loading. With `--no-open`, use the printed URL alongside the session link to open it manually.
+
+The UI is organized into two tabs:
+
+- **Wallet** — send and receive BCH, send CashTokens, swap on the Cauldron DEX, and review transaction history (date, type, counterparty, amount, USD value, fee, and explorer links), with token-category selection in the send and swap forms.
+- **AI** — buy plans (BCH or a live LIFT quote), manage auto-refill (enable / pause / delete, with budget-cap validation), and browse generated images (gallery with lightbox, order history, and delete).
+
+Incoming transactions are streamed live over a Watchtower WebSocket and surface as in-page notifications; a light/dark theme toggle is persisted in the browser.
+
 ## Network
 
 All commands default to **mainnet**. Pass `--chipnet` for testnet:
@@ -293,6 +318,8 @@ Powered by [@napi-rs/keyring](https://github.com/Brooooooklyn/keyring-node) (pre
 
 Nostr chat keys are **not** persisted — they are re-derived from the wallet mnemonic at runtime via HD path `m/44'/1237'/0'/0/0` and held only in memory for the duration of a session. Non-secret chat metadata (contacts, rooms, messages) is written to `~/.paytaca/chat-state.json` with mode `0600`; no key material is ever written there.
 
+The `paytaca web` server listens on `127.0.0.1` only and requires a random per-session token in the `X-Paytaca-Token` header; requests whose `Host` header is not `127.0.0.1`/`localhost` are rejected, request bodies are capped at 1 MB, and internal error details are logged to stderr rather than returned to the client.
+
 ## Architecture
 
 ```
@@ -310,6 +337,7 @@ src/
     check.ts         Check if URL requires x402 payment
     ai.ts            Paytaca AI (configure, api-key, models, plans, credits, purchase, auto-refill, image)
     chat.ts          Nostr chat (contacts, conversations, identity, listen)
+    web.ts           `paytaca web` — local browser UI launcher
     mcp.ts           `paytaca mcp` stdio entry + per-harness config templates
     update.ts        Self-update from npm registry
   core/
@@ -318,6 +346,10 @@ src/
   mcp/
     server.ts        MCP server construction and stdio lifecycle
     tools.ts         MCP tool registration (wallet reads, send, Paytaca AI)
+  web/
+    server.ts        Local HTTP server (token auth, JSON API routes)
+    page.ts          Self-contained Alpine.js UI (wallet, swap, AI tabs)
+    assets.ts        Inline asset loading (vendored Alpine.js, styles)
   wallet/
     index.ts         Wallet class, mnemonic gen/import/load
     bch.ts           BchWallet (balance, send, history, CashTokens)
@@ -364,6 +396,7 @@ src/
 | `@cashlab/cauldron` | Cauldron DEX swap building |
 | `@napi-rs/keyring` | OS-native keychain storage |
 | `@modelcontextprotocol/sdk` | MCP server (stdio) |
+| `alpinejs` | Reactive web UI (`paytaca web`), vendored inline |
 | `bip39` | Mnemonic generation and validation |
 | `nostr-tools` | Nostr chat events, keys, and relay transport |
 | `js-sha256` | Hashing for key derivation and payment headers |
