@@ -8,6 +8,10 @@ export const LIFT_TOKEN_ID =
 
 export const PAYTACA_DIR = path.join(os.homedir(), '.paytaca')
 export const AUTO_REFILL_FILE = path.join(PAYTACA_DIR, 'auto-refill.json')
+export const AUTO_REFILL_EVENTS_FILE = path.join(
+  PAYTACA_DIR,
+  'auto-refill-events.jsonl'
+)
 
 export function resolveBackendUrl(explicit?: string): string {
   const url = explicit || process.env.PAYTACA_BACKEND_URL || DEFAULT_BACKEND_URL

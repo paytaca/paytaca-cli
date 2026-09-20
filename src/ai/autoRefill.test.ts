@@ -1,11 +1,17 @@
 import { describe, it, expect } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import type { AutoRefillState } from './autoRefill.js'
 import {
   autoRefillCanBuy,
   remainingBudget,
   autoRefillTick,
-  AUTO_REFILL_STALE_MS,
+  appendAutoRefillEvent,
+  deleteAutoRefill,
+  REFILL_COOLDOWN_MS,
   type RefillBuyOptions,
+  type RefillEvent,
   type RefillTickDeps,
 } from './autoRefill.js'
 
@@ -81,15 +87,25 @@ describe('autoRefillTick', () => {
     initial: AutoRefillState | null,
     cfg: {
       active?: boolean
-      buyResult?: { success: boolean; paid?: boolean; error?: string }
+      buyResult?: {
+        success: boolean
+        paid?: boolean
+        txid?: string
+        priceSats?: number
+        error?: string
+      }
     } = {}
   ) {
     let stored = initial
     const buys: RefillBuyOptions[] = []
+    const events: RefillEvent[] = []
     const deps: RefillTickDeps = {
       readState: () => stored,
       writeState: (s) => {
         stored = s
+      },
+      appendEvent: (e) => {
+        events.push(e)
       },
       now: () => NOW,
       hasActiveCredits: async () => cfg.active ?? false,
@@ -98,7 +114,7 @@ describe('autoRefillTick', () => {
         return cfg.buyResult ?? { success: true, paid: true }
       },
     }
-    return { deps, buys, current: () => stored }
+    return { deps, buys, events, current: () => stored }
   }
 
   it('does nothing when not armed', async () => {
@@ -163,14 +179,83 @@ describe('autoRefillTick', () => {
     expect(h.current()?.enabled).toBe(false)
   })
 
-  it('disarms stale state', async () => {
+  it('skips within the cooldown window without buying', async () => {
     const h = harness(
       state({
-        startedAt: new Date(NOW - AUTO_REFILL_STALE_MS - 1000).toISOString(),
+        startedAt: new Date(NOW).toISOString(),
+        lastRefillAt: new Date(NOW - 1000).toISOString(),
       })
     )
+    const result = await autoRefillTick(h.deps)
+    expect(result).toMatchObject({ action: 'skipped' })
+    expect(h.buys).toHaveLength(0)
+    expect(h.current()?.enabled).toBe(true)
+  })
+
+  it('allows a refill once the cooldown has elapsed', async () => {
+    const h = harness(
+      state({
+        startedAt: new Date(NOW).toISOString(),
+        lastRefillAt: new Date(NOW - REFILL_COOLDOWN_MS - 1000).toISOString(),
+      })
+    )
+    expect((await autoRefillTick(h.deps)).action).toBe('refilled')
+    expect(h.buys).toHaveLength(1)
+  })
+
+  it('records refillCount, txid and lastEvent on success', async () => {
+    const h = harness(state({ startedAt: new Date(NOW).toISOString() }), {
+      buyResult: { success: true, paid: true, txid: 'abc123', priceSats: 5000 },
+    })
+    expect((await autoRefillTick(h.deps)).action).toBe('refilled')
+    expect(h.current()).toMatchObject({
+      refillCount: 1,
+      lastRefillTxid: 'abc123',
+      lastEvent: {
+        action: 'refilled',
+        status: 'completed',
+        txid: 'abc123',
+        reason: null,
+      },
+    })
+    expect(h.events).toHaveLength(1)
+    expect(h.events[0]).toMatchObject({
+      action: 'refilled',
+      status: 'completed',
+      txid: 'abc123',
+      priceSats: 5000,
+      minutes: 15,
+    })
+  })
+
+  it('emits a disarmed event when the budget runs out', async () => {
+    const h = harness(
+      state({ maxMinutes: 15, startedAt: new Date(NOW).toISOString() })
+    )
+    expect((await autoRefillTick(h.deps)).action).toBe('refilled')
+    expect(h.current()?.lastEvent).toMatchObject({
+      action: 'disarmed',
+      reason: 'budget exhausted',
+    })
+    expect(h.events.map((e) => e.action)).toEqual(['refilled', 'disarmed'])
+  })
+
+  it('records a failed event when the purchase fails', async () => {
+    const h = harness(state({ startedAt: new Date(NOW).toISOString() }), {
+      buyResult: { success: false, paid: false, error: 'Insufficient balance' },
+    })
     expect((await autoRefillTick(h.deps)).action).toBe('disarmed')
-    expect(h.current()?.enabled).toBe(false)
+    expect(h.current()?.lastEvent).toMatchObject({
+      action: 'disarmed',
+      reason: 'Insufficient balance',
+      status: 'failed',
+    })
+    expect(h.events).toHaveLength(1)
+    expect(h.events[0]).toMatchObject({
+      action: 'disarmed',
+      status: 'failed',
+      reason: 'Insufficient balance',
+    })
   })
 
   it('skips without disarming when the credit check errors', async () => {
@@ -180,5 +265,39 @@ describe('autoRefillTick', () => {
     }
     expect(await autoRefillTick(h.deps)).toMatchObject({ action: 'skipped' })
     expect(h.current()?.enabled).toBe(true)
+  })
+})
+
+describe('auto-refill event log', () => {
+  function tmpFile(): string {
+    return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'pt-refill-')), 'events.jsonl')
+  }
+
+  it('appends events as JSONL', () => {
+    const file = tmpFile()
+    const event: RefillEvent = {
+      action: 'refilled',
+      reason: null,
+      at: new Date().toISOString(),
+      model: 'z-ai/glm-5.3-flash',
+      minutes: 15,
+      txid: 'abc',
+      priceSats: 5000,
+      paymentMethod: 'bch',
+      status: 'completed',
+    }
+    appendAutoRefillEvent(event, file)
+    appendAutoRefillEvent(event, file)
+    const lines = fs.readFileSync(file, 'utf8').trim().split('\n')
+    expect(lines).toHaveLength(2)
+    expect(JSON.parse(lines[0])).toMatchObject({ action: 'refilled', txid: 'abc' })
+  })
+
+  it('deleteAutoRefill removes the state file and tolerates a missing one', () => {
+    const file = tmpFile()
+    fs.writeFileSync(file, '{}')
+    expect(deleteAutoRefill(file)).toBe(true)
+    expect(fs.existsSync(file)).toBe(false)
+    expect(deleteAutoRefill(file)).toBe(false)
   })
 })

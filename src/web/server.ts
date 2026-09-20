@@ -41,9 +41,12 @@ import {
   readAutoRefillState,
   armAutoRefill,
   disarmAutoRefill,
+  deleteAutoRefill,
   remainingBudget,
-  type AutoRefillState,
+  autoRefillTick,
+  type RefillTickResult,
 } from '../ai/autoRefill.js'
+import { createRefillTickDeps } from '../mcp/tools.js'
 import {
   listImageModels,
   createImageOrder,
@@ -103,11 +106,12 @@ export interface WebDeps {
   quoteLiftNeeded(opts: { sats: number }): Promise<object>
   setAutoRefill(opts: {
     enabled: boolean
+    delete?: boolean
     model?: string
     minutes?: number
     maxMinutes?: number
     paymentMethod?: string
-  }): Promise<AutoRefillState>
+  }): Promise<Record<string, unknown>>
   getImageModels(): Promise<ImageModel[]>
   getImageHistory(page?: number): Promise<object>
   createImageQuote(opts: {
@@ -319,15 +323,28 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
     },
 
     async setAutoRefill(opts) {
+      if (opts.delete) {
+        return { deleted: true, existed: deleteAutoRefill() }
+      }
       if (opts.enabled) {
-        return armAutoRefill({
+        const state = armAutoRefill({
           model: opts.model,
           minutes: opts.minutes,
           maxMinutes: opts.maxMinutes,
           paymentMethod: (opts.paymentMethod as 'bch' | 'lift') || 'bch',
         })
+        let initialTick: RefillTickResult | null = null
+        const wallet = loadWalletRef()
+        if (wallet?.canSign) {
+          try {
+            initialTick = await autoRefillTick(createRefillTickDeps(isChipnet))
+          } catch {
+            initialTick = null
+          }
+        }
+        return initialTick ? { ...state, initialTick } : { ...state }
       }
-      return disarmAutoRefill()
+      return { ...disarmAutoRefill() }
     },
 
     async getImageModels() {
@@ -645,6 +662,7 @@ export async function startWebServer(
         const enabled = Boolean(body.enabled)
         const result = await deps.setAutoRefill({
           enabled,
+          delete: Boolean(body.delete),
           model: body.model != null ? String(body.model) : undefined,
           minutes: body.minutes != null ? Number(body.minutes) : undefined,
           maxMinutes: body.maxMinutes != null ? Number(body.maxMinutes) : undefined,

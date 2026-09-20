@@ -474,10 +474,15 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
                     <dt>Every</dt><dd><span x-text="state.autoRefill.minutes"></span> min</dd>
                     <dt>Max</dt><dd><span x-text="state.autoRefill.maxMinutes || '∞'"></span> min total</dd>
                     <dt>Left</dt><dd x-text="fmtDuration((state.autoRefill.remainingMinutes || 0) * 60)"></dd>
+                    <dt>Refills</dt><dd x-text="state.autoRefill.refillCount || 0"></dd>
                   </dl>
-                  <span class="pill pill-active">ACTIVE</span>
+                  <span class="pill" :class="state.autoRefill.enabled ? 'pill-active' : ''" x-text="state.autoRefill.enabled ? 'ACTIVE' : 'PAUSED'"></span>
                 </div>
-                <button class="btn btn-sm btn-danger" style="margin-top:18px" @click="toggleRefill(false)">Disable</button>
+                <template x-if="state.autoRefill.lastEvent"><div style="margin-top:12px;font-size:12px;color:var(--ink-3)" x-text="'Last: ' + state.autoRefill.lastEvent.action + '/' + state.autoRefill.lastEvent.status + (state.autoRefill.lastEvent.reason ? ' — ' + state.autoRefill.lastEvent.reason : '')"></div></template>
+                <div style="margin-top:18px;display:flex;gap:8px">
+                  <button class="btn btn-sm btn-danger" x-show="state.autoRefill.enabled" @click="toggleRefill(false)">Disable</button>
+                  <button class="btn btn-sm" @click="deleteRefill()">Delete</button>
+                </div>
               </div></template>
               <template x-if="state && !state?.autoRefill"><div>
                 <div style="font-size:12.5px;color:var(--ink-3);margin-bottom:12px">Auto-refill buys a new plan when credits run out.</div>
@@ -608,6 +613,7 @@ async doSwapExecute(){if(!this.pendingSwap)return;this.swapExecBusy=true;try{var
 startPurchase(model,minutes,priceUsd,priceSats,durationDisplay,displayName){this.pendingPurchase={model:model,minutes:minutes,priceUsd:priceUsd,priceSats:priceSats,durationDisplay:durationDisplay,displayName:displayName};this.purchaseMethod='bch';this.purchaseError='';this.liftQuote=null;this.liftQuoteError='';this.showPurchaseModal=true},
 async confirmPurchase(){if(!this.pendingPurchase)return;this.purchaseBusy=true;this.purchaseError='';try{var r=await this.api('POST','/api/ai/purchase',{model:this.pendingPurchase.model,minutes:this.pendingPurchase.minutes,method:this.purchaseMethod});if(r&&r.success&&r.paid){this.showPurchaseModal=false;this.pendingPurchase=null;this.toast('Plan purchased!');this.load()}else if(r&&r.success&&!r.paid){this.showPurchaseModal=false;this.pendingPurchase=null;this.toast(r.error||'Payment submitted — credits will update shortly',true);this.load()}else{this.purchaseError=(r&&r.error)||'Purchase failed';this.toast(this.purchaseError,true)}}catch(e){this.purchaseError=e.message||'Purchase failed';this.toast(e.message,true)}this.purchaseBusy=false},
 async toggleRefill(enable){try{if(enable){var model=this.refillModel;var minutes=parseInt(this.refillMinutes)||30;var maxMinutes=this.refillMax?parseInt(this.refillMax):undefined;var paymentMethod=this.refillPayMethod||'bch';if(!model){this.toast('Select a model',true);return}await this.api('POST','/api/ai/auto-refill',{enabled:true,model:model,minutes:minutes,maxMinutes:maxMinutes,paymentMethod:paymentMethod});this.toast('Auto-refill enabled')}else{await this.api('POST','/api/ai/auto-refill',{enabled:false});this.toast('Auto-refill disabled')}this.load()}catch(e){this.toast(e.message,true)}},
+async deleteRefill(){if(!confirm('Delete auto-refill configuration?'))return;try{await this.api('POST','/api/ai/auto-refill',{delete:true});this.toast('Auto-refill deleted');this.load()}catch(e){this.toast(e.message,true)}},
 async doImageQuote(){var prompt=(this.imgPrompt||'').trim();if(!prompt){this.toast('Enter a prompt',true);return}this.imgQuoteBusy=true;try{var quote=await this.api('POST','/api/ai/images/quote',{prompt:prompt,model:this.imgModel||undefined,aspectRatio:this.imgAspect,quality:this.imgQuality});this.pendingImageQuote=quote;this.showImageQuoteModal=true}catch(e){this.toast(e.message,true)}this.imgQuoteBusy=false},
 async confirmImageGen(){if(!this.pendingImageQuote)return;this.imgGenBusy=true;try{var orderId=this.pendingImageQuote.orderId;var result=await this.api('POST','/api/ai/images/fulfill',{orderId:orderId});this.showImageQuoteModal=false;this.aiSub='images';if(result&&result.path){this.lightbox={id:orderId,path:result.path};this.toast('Image saved to ~/.paytaca/images')}else{this.toast((result&&result.error)||(result&&result.paid?'Payment received — image will appear in your gallery':'Image generation failed'),true)}this.load()}catch(e){this.toast(e.message,true)}this.imgGenBusy=false;this.pendingImageQuote=null},
 openImage(h){this.lightbox={id:h.id,path:h.filepath||('~/paytaca/images/'+h.id)};this.lightboxConfirmDelete=false},

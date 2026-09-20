@@ -22,6 +22,7 @@ import {
   summarizeAllCredits,
   buildPurchaseHint,
   formatRemaining,
+  hasActiveCredits,
   type CreditsSummary,
   type PurchaseHint,
 } from '../ai/credits.js'
@@ -35,9 +36,14 @@ import {
 } from '../ai/images.js'
 import {
   armAutoRefill,
+  autoRefillTick,
+  deleteAutoRefill,
   disarmAutoRefill,
   readAutoRefillState,
   remainingBudget,
+  type AutoRefillState,
+  type RefillTickDeps,
+  type RefillTickResult,
 } from '../ai/autoRefill.js'
 
 type ToolResultContent =
@@ -56,6 +62,66 @@ function text(value: string): ToolResult {
 
 function json(value: unknown): ToolResult {
   return text(JSON.stringify(value, null, 2))
+}
+
+export function createRefillTickDeps(
+  isChipnet: boolean,
+  backendUrl?: string
+): RefillTickDeps {
+  return {
+    hasActiveCredits: async (model) => {
+      const wallet = loadWalletRef()
+      if (!wallet) throw new WalletNotConfiguredError()
+      const status = await getWalletStatus(wallet.walletHash, {
+        modelId: model,
+        backendUrl,
+      })
+      return hasActiveCredits(status, model)
+    },
+    buy: async (opts) => {
+      const result = await buyPlan({
+        model: opts.model,
+        minutes: opts.minutes,
+        paymentMethod: opts.paymentMethod,
+        isChipnet,
+        backendUrl,
+        confirmed: true,
+      })
+      return {
+        success: result.success,
+        paid: result.paid,
+        txid: result.txid,
+        priceSats: result.priceSats,
+        error: result.error,
+      }
+    },
+  }
+}
+
+function tickSummary(tick: RefillTickResult): Record<string, unknown> {
+  if (tick.action === 'idle') return { action: 'idle' }
+  if (tick.action === 'skipped') return { action: 'skipped', reason: tick.reason }
+  if (tick.action === 'refilled') {
+    return {
+      action: 'refilled',
+      model: tick.state.model ?? null,
+      minutes: tick.state.minutes ?? null,
+      txid: tick.state.lastRefillTxid ?? null,
+    }
+  }
+  return { action: 'disarmed', reason: tick.reason }
+}
+
+function autoRefillField(state: AutoRefillState | null): Record<string, unknown> | null {
+  if (!state) return null
+  return {
+    armed: Boolean(state.enabled),
+    model: state.model ?? null,
+    minutes: state.minutes ?? null,
+    remainingMinutes: remainingBudget(state),
+    refillCount: state.refillCount ?? 0,
+    lastEvent: state.lastEvent ?? null,
+  }
 }
 
 function clientName(server: McpServer): string {
@@ -498,7 +564,7 @@ export function registerTools(
     {
       title: 'Get AI time credits',
       description:
-        'Return remaining Paytaca AI time credits for all models, or for one model when "model" is given. When a session is inactive, includes a purchaseHint whose "message" is the exact text to relay to the user (a copy-paste top-up command) instead of upsell or follow-up questions.',
+        'Return remaining Paytaca AI time credits for all models, or for one model when "model" is given. When a session is inactive, includes a purchaseHint whose "message" is the exact text to relay to the user (a copy-paste top-up command) instead of upsell or follow-up questions. If auto-refill is armed and its model has no active credits, this call triggers an immediate refill purchase (spends BCH/LIFT per the armed config) and reports the outcome under "refillTick"; standing auto-refill state is under "autoRefill".',
       inputSchema: {
         model: z.string().optional(),
         chipnet: z.boolean().optional(),
@@ -510,13 +576,33 @@ export function registerTools(
       try {
         const wallet = loadWalletRef()
         if (!wallet) throw new WalletNotConfiguredError()
-        const status = await getWalletStatus(wallet.walletHash, {
+        let status = await getWalletStatus(wallet.walletHash, {
           modelId: model,
           backendUrl: backend,
         })
+
+        const auto = readAutoRefillState()
+        let tick: RefillTickResult | null = null
+        if (auto?.enabled && auto.model && wallet.canSign) {
+          if (!hasActiveCredits(status, auto.model)) {
+            try {
+              tick = await autoRefillTick(createRefillTickDeps(cn(chipnet), backend))
+              status = await getWalletStatus(wallet.walletHash, {
+                modelId: model,
+                backendUrl: backend,
+              })
+            } catch {
+              tick = null
+            }
+          }
+        }
+
         if (!model) {
           const sessions = summarizeAllCredits(status)
           const payload: Record<string, unknown> = { sessions }
+          const autoField = autoRefillField(auto)
+          if (autoField) payload.autoRefill = autoField
+          if (tick && tick.action !== 'idle') payload.refillTick = tickSummary(tick)
           let hint: PurchaseHint | null = null
           if (!sessions.some((s) => s.active)) {
             hint = await resolvePurchaseHint(
@@ -529,6 +615,9 @@ export function registerTools(
         }
         const summary = summarizeCredits(status, model)
         const payload: Record<string, unknown> = { ...summary }
+        const autoField = autoRefillField(auto)
+        if (autoField) payload.autoRefill = autoField
+        if (tick && tick.action !== 'idle') payload.refillTick = tickSummary(tick)
         let hint: PurchaseHint | null = null
         if (!summary.active) {
           hint = await resolvePurchaseHint(model, backend)
@@ -584,13 +673,15 @@ export function registerTools(
     {
       title: 'Manage auto-refill',
       description:
-        'Arm, disarm, or inspect automatic plan refills. Arming buys a plan silently when credits run out, up to max_minutes.',
+        'Arm, disarm, delete, or inspect automatic plan refills. Arming buys a plan silently when credits run out, up to max_minutes, and runs one immediate refill check (buys right away if the armed model has no active credits). Each execution is recorded in ~/.paytaca/auto-refill-events.jsonl and surfaced as lastEvent. delete=true removes the armed state (history is kept).',
       inputSchema: {
         enabled: z.boolean().optional(),
         model: z.string().optional(),
         minutes: z.number().int().positive().optional(),
         max_minutes: z.number().int().positive().optional(),
         payment_method: z.enum(['bch', 'lift']).optional(),
+        chipnet: z.boolean().optional(),
+        delete: z.boolean().optional(),
       },
       annotations: {
         readOnlyHint: false,
@@ -599,8 +690,13 @@ export function registerTools(
         openWorldHint: false,
       },
     },
-    async ({ enabled, model, minutes, max_minutes, payment_method }) => {
+    async ({ enabled, model, minutes, max_minutes, payment_method, chipnet, delete: del }) => {
       try {
+        if (del) {
+          const existed = deleteAutoRefill()
+          return json({ deleted: true, existed })
+        }
+
         if (enabled === false) {
           return json(disarmAutoRefill())
         }
@@ -613,20 +709,32 @@ export function registerTools(
               )
             )
           }
-          return json(
-            armAutoRefill({
-              model,
-              minutes,
-              maxMinutes: max_minutes,
-              paymentMethod: payment_method ?? 'bch',
-            })
-          )
+          const state = armAutoRefill({
+            model,
+            minutes,
+            maxMinutes: max_minutes,
+            paymentMethod: payment_method ?? 'bch',
+          })
+          let initialTick: Record<string, unknown> | null = null
+          const wallet = loadWalletRef()
+          if (wallet?.canSign) {
+            try {
+              initialTick = tickSummary(
+                await autoRefillTick(createRefillTickDeps(cn(chipnet)))
+              )
+            } catch (err: any) {
+              initialTick = { action: 'skipped', reason: err?.message || String(err) }
+            }
+          }
+          return json({ ...state, initialTick })
         }
 
         const state = readAutoRefillState()
         return json({
           armed: Boolean(state?.enabled),
           remainingMinutes: remainingBudget(state),
+          refillCount: state?.refillCount ?? 0,
+          lastEvent: state?.lastEvent ?? null,
           state,
         })
       } catch (err) {

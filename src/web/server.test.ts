@@ -68,7 +68,10 @@ function fakeDeps(): WebDeps {
     quoteLiftNeeded: async (opts) => ({
       sats: opts.sats, rawAmount: '6409000', display: '6.409', symbol: 'LIFT', decimals: 6,
     }),
-    setAutoRefill: async () => okRefill,
+    setAutoRefill: async (opts) => ({
+      ...okRefill,
+      ...Object.fromEntries(Object.entries(opts).filter(([, v]) => v !== undefined)),
+    }),
     getImageModels: async () => okImageModels,
     getImageHistory: async () => ({ data: [] }),
     createImageQuote: async () => okImageQuote,
@@ -222,6 +225,14 @@ describe('web server AI routes', () => {
       enabled: false,
     })
     expect(res.status).toBe(200)
+  })
+
+  it('POST /api/ai/auto-refill with delete', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/auto-refill`, srv.token, 'POST', {
+      delete: true,
+    })
+    expect(res.status).toBe(200)
+    expect(res.json.delete).toBe(true)
   })
 
   it('GET /api/ai/image-models returns models', async () => {

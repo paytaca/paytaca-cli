@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   getWalletStatus: vi.fn(),
   summarizeCredits: vi.fn(),
   summarizeAllCredits: vi.fn(),
+  hasActiveCredits: vi.fn(),
   buyPlan: vi.fn(),
   generateImage: vi.fn(),
   getImageHistory: vi.fn(),
@@ -29,6 +30,8 @@ const mocks = vi.hoisted(() => ({
   disarmAutoRefill: vi.fn(),
   readAutoRefillState: vi.fn(),
   remainingBudget: vi.fn(),
+  autoRefillTick: vi.fn(),
+  deleteAutoRefill: vi.fn(),
 }))
 
 vi.mock('../core/wallet.js', () => ({
@@ -66,6 +69,7 @@ vi.mock('../ai/credits.js', async (importOriginal) => {
     getWalletStatus: mocks.getWalletStatus,
     summarizeCredits: mocks.summarizeCredits,
     summarizeAllCredits: mocks.summarizeAllCredits,
+    hasActiveCredits: mocks.hasActiveCredits,
   }
 })
 
@@ -86,6 +90,8 @@ vi.mock('../ai/autoRefill.js', () => ({
   disarmAutoRefill: mocks.disarmAutoRefill,
   readAutoRefillState: mocks.readAutoRefillState,
   remainingBudget: mocks.remainingBudget,
+  autoRefillTick: mocks.autoRefillTick,
+  deleteAutoRefill: mocks.deleteAutoRefill,
 }))
 
 import { createServer } from './server.js'
@@ -647,6 +653,52 @@ describe('MCP tools', () => {
       })
       expect(JSON.parse(text(result))).toEqual({ modelId: 'm', active: false })
     })
+
+    it('runs an inline refill when armed and the model is inactive', async () => {
+      mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
+      mocks.getWalletStatus.mockResolvedValue({})
+      mocks.summarizeAllCredits.mockReturnValue([{ modelId: 'm', active: false }])
+      mocks.readAutoRefillState.mockReturnValue({
+        enabled: true,
+        model: 'm',
+        minutes: 15,
+        maxMinutes: 60,
+        spentMinutes: 0,
+        refillCount: 0,
+        paymentMethod: 'bch',
+      })
+      mocks.hasActiveCredits.mockReturnValue(false)
+      mocks.autoRefillTick.mockResolvedValue({
+        action: 'refilled',
+        state: { enabled: true, refillCount: 1 },
+      })
+      const c = await connect()
+      const result = await c.callTool({ name: 'get_credits', arguments: {} })
+      expect(mocks.autoRefillTick).toHaveBeenCalled()
+      const body = JSON.parse(text(result))
+      expect(body.refillTick).toMatchObject({ action: 'refilled' })
+      expect(body.autoRefill).toMatchObject({ armed: true, model: 'm' })
+    })
+
+    it('does not buy when the armed model has active credits', async () => {
+      mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
+      mocks.getWalletStatus.mockResolvedValue({})
+      mocks.summarizeAllCredits.mockReturnValue([{ modelId: 'm', active: true }])
+      mocks.readAutoRefillState.mockReturnValue({
+        enabled: true,
+        model: 'm',
+        minutes: 15,
+        maxMinutes: 60,
+        spentMinutes: 0,
+        refillCount: 0,
+        paymentMethod: 'bch',
+      })
+      mocks.hasActiveCredits.mockReturnValue(true)
+      const c = await connect()
+      const result = await c.callTool({ name: 'get_credits', arguments: {} })
+      expect(mocks.autoRefillTick).not.toHaveBeenCalled()
+      expect(JSON.parse(text(result)).refillTick).toBeUndefined()
+    })
   })
 
   describe('get_plans', () => {
@@ -774,7 +826,41 @@ describe('MCP tools', () => {
       expect(JSON.parse(text(result))).toEqual({
         armed: true,
         remainingMinutes: 7,
+        refillCount: 0,
+        lastEvent: null,
         state: { enabled: true, maxMinutes: 10, spentMinutes: 3 },
+      })
+    })
+
+    it('deletes the armed state when delete is true', async () => {
+      mocks.deleteAutoRefill.mockReturnValue(true)
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'auto_refill',
+        arguments: { delete: true },
+      })
+      expect(mocks.deleteAutoRefill).toHaveBeenCalled()
+      expect(JSON.parse(text(result))).toEqual({ deleted: true, existed: true })
+    })
+
+    it('runs an immediate refill check when arming with a signable wallet', async () => {
+      mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
+      mocks.armAutoRefill.mockReturnValue({ enabled: true, model: 'm' })
+      mocks.autoRefillTick.mockResolvedValue({ action: 'refilled', state: { enabled: true } })
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'auto_refill',
+        arguments: {
+          enabled: true,
+          model: 'm',
+          minutes: 15,
+          max_minutes: 60,
+        },
+      })
+      expect(mocks.autoRefillTick).toHaveBeenCalled()
+      expect(JSON.parse(text(result))).toMatchObject({
+        enabled: true,
+        initialTick: { action: 'refilled' },
       })
     })
   })

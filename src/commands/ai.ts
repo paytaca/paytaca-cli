@@ -49,9 +49,27 @@ import { CLIENTS, type McpClient } from './mcp.js'
 import {
   armAutoRefill,
   disarmAutoRefill,
+  deleteAutoRefill,
   readAutoRefillState,
   remainingBudget,
+  autoRefillTick,
+  type RefillTickResult,
 } from '../ai/autoRefill.js'
+import { createRefillTickDeps } from '../mcp/tools.js'
+
+
+function formatTickResult(tick: RefillTickResult): string {
+  switch (tick.action) {
+    case 'refilled':
+      return `Refilled now (${tick.state.refillCount ?? 0} total).`
+    case 'disarmed':
+      return `Auto-refill disarmed: ${tick.reason}`
+    case 'skipped':
+      return `No refill: ${tick.reason}`
+    default:
+      return 'No refill needed.'
+  }
+}
 
 
 function outputJson(value: unknown): void {
@@ -684,13 +702,22 @@ export function registerAiCommands(program: Command): void {
     .description('Arm, disarm, or inspect automatic plan refills')
     .option('--enable', 'Arm auto-refill')
     .option('--disable', 'Disarm auto-refill')
+    .option('--delete', 'Delete the auto-refill configuration')
     .option('--status', 'Show auto-refill status (default)')
     .option('--model <id>', 'Model id or display name to auto-refill')
     .option('--minutes <minutes>', 'Plan size in minutes per refill')
     .option('--max-minutes <minutes>', 'Maximum total minutes to auto-buy')
     .option('--lift', 'Pay refills with LIFT tokens')
+    .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .option('--json', 'Output as JSON')
-    .action((opts) => {
+    .action(async (opts) => {
+      if (opts.delete) {
+        const existed = deleteAutoRefill()
+        if (opts.json) outputJson({ deleted: true, existed })
+        else if (existed) console.log(chalk.dim('\n   Auto-refill configuration deleted.\n'))
+        else console.log(chalk.dim('\n   No auto-refill configuration to delete.\n'))
+        return
+      }
       if (opts.enable) {
         const minutes = opts.minutes !== undefined ? Number(opts.minutes) : undefined
         const maxMinutes =
@@ -711,8 +738,22 @@ export function registerAiCommands(program: Command): void {
           maxMinutes,
           paymentMethod: opts.lift ? 'lift' : 'bch',
         })
-        if (opts.json) outputJson(state)
-        else console.log(chalk.green(`\n   Auto-refill armed${state.model ? ` for ${state.model}` : ''}.\n`))
+        let tick: RefillTickResult | null = null
+        const wallet = loadWalletRef()
+        if (wallet?.canSign) {
+          try {
+            tick = await autoRefillTick(createRefillTickDeps(Boolean(opts.chipnet)))
+          } catch (err) {
+            tick = { action: 'skipped', reason: (err as Error).message }
+          }
+        }
+        if (opts.json) {
+          outputJson(tick ? { ...state, initialTick: tick } : state)
+        } else {
+          console.log(chalk.green(`\n   Auto-refill armed${state.model ? ` for ${state.model}` : ''}.`))
+          if (tick) console.log(chalk.dim(`   ${formatTickResult(tick)}`))
+          console.log()
+        }
         return
       }
       if (opts.disable) {
@@ -737,6 +778,16 @@ export function registerAiCommands(program: Command): void {
       console.log(`   Payment:  ${state.paymentMethod || 'bch'}`)
       const budget = remainingBudget(state)
       console.log(`   Budget:   ${budget === null ? '(unlimited)' : `${budget} min remaining`}`)
+      console.log(`   Refills:  ${state.refillCount ?? 0}`)
+      if (state.lastRefillAt) {
+        const tx = state.lastRefillTxid ? ` (${state.lastRefillTxid.slice(0, 12)}…)` : ''
+        console.log(`   Last:     ${new Date(state.lastRefillAt).toLocaleString()}${tx}`)
+      }
+      if (state.lastEvent) {
+        const ev = state.lastEvent
+        const reason = ev.reason ? ` — ${ev.reason}` : ''
+        console.log(`   Event:    ${ev.action}/${ev.status}${reason} @ ${new Date(ev.at).toLocaleString()}`)
+      }
       console.log()
     })
 

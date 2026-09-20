@@ -1,9 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { registerTools } from './tools.js'
-import { getWalletStatus, hasActiveCredits } from '../ai/credits.js'
-import { buyPlan } from '../ai/purchase.js'
+import { createRefillTickDeps, registerTools } from './tools.js'
 import { startAutoRefillLoop } from '../ai/autoRefill.js'
 import { loadWalletRef } from '../wallet/index.js'
 
@@ -41,14 +39,10 @@ function startRefillLoop(isChipnet: boolean): () => void {
   } catch {
     return () => {}
   }
-  if (!wallet) return () => {}
+  if (!wallet || !wallet.canSign) return () => {}
 
   return startAutoRefillLoop({
-    hasActiveCredits: async (model) => {
-      const status = await getWalletStatus(wallet.walletHash, { modelId: model })
-      return hasActiveCredits(status, model)
-    },
-    buy: (opts) => buyPlan({ ...opts, isChipnet, confirmed: true }),
+    ...createRefillTickDeps(isChipnet),
     onEvent: (result) => {
       if (result.action === 'refilled') {
         console.error(

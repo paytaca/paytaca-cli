@@ -180,12 +180,12 @@ paytaca ai balance                  # BCH + LIFT funds available for purchases
 paytaca ai purchase --model <id> --minutes <n>              # Buy a plan
 paytaca ai purchase --model <id> --minutes 60 --lift        # Pay with LIFT (discount)
 paytaca ai auto-refill --enable --model <id> --minutes <n> --max-minutes <n>
-paytaca ai auto-refill --status     # Inspect; also --disable
+paytaca ai auto-refill --status     # Inspect; also --disable, --delete
 ```
 
 `ai configure` accepts `--backend`, `--path`, `--api-key`, `--chipnet`, and `-y/--yes`. `ai purchase` and `ai auto-refill` accept `--lift` to pay with LIFT tokens at a discount. Add `--json` to any `ai` subcommand for machine-readable output.
 
-Armed auto-refill state lives at `~/.paytaca/auto-refill.json` and is executed by the `paytaca mcp` server: while an MCP session is running it checks the armed model's credits and silently buys the configured plan when they run out, up to `--max-minutes`. It disarms when the budget is spent, funds are short, the plan is no longer offered, or 24 hours pass without a refill.
+Armed auto-refill state lives at `~/.paytaca/auto-refill.json`. It runs inline — arming performs one immediate check (buying right away if the armed model has no credits), the `get_credits` MCP tool refills on demand, and the `paytaca mcp` server keeps a background backstop while a session is running. Each execution is appended to `~/.paytaca/auto-refill-events.jsonl` and the latest is reported as `lastEvent`. It disarms when the budget is spent, funds are short, or the plan is no longer offered. Use `--disable` to pause and `--delete` to remove the configuration (history is kept).
 
 ### Image Generation
 
