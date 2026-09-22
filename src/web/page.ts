@@ -23,6 +23,7 @@ export function renderPage(): string {
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
 :root{
+  color-scheme:light;
   --sans:'Rubik',system-ui,-apple-system,'Segoe UI',sans-serif;
   --mono:'JetBrains Mono',ui-monospace,'SF Mono','Cascadia Code',monospace;
   --bg:#ecf3f3;
@@ -50,6 +51,7 @@ export function renderPage(): string {
   --on-ink:#fff;
 }
 [data-theme="dark"]{
+  color-scheme:dark;
   --bg:#273746;
   --surface:rgba(28,40,51,0.7);
   --surface-2:#1c2833;
@@ -192,6 +194,11 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
 .pill-wait{background:rgba(255,193,7,0.12);color:#d4a017}
 [data-theme="dark"] .pill-ok{background:rgba(40,167,69,0.18);color:#4ade80}
 [data-theme="dark"] .pill-wait{background:rgba(255,193,7,0.18);color:#fbbf24}
+[data-theme="dark"] .field-input{background:rgba(255,255,255,0.06);border-color:rgba(255,255,255,0.2)}
+[data-theme="dark"] .field-input:focus{background:rgba(255,255,255,0.09)}
+[data-theme="dark"] .segmented,[data-theme="dark"] .seg{border-color:rgba(255,255,255,0.2)}
+[data-theme="dark"] .segmented-opt.active{background:rgba(255,255,255,0.12)}
+[data-theme="dark"] .seg button{background:rgba(255,255,255,0.08)}
 .pagination{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:18px}
 .pagination .page-info{font-family:var(--mono);font-size:11px;color:var(--ink-3)}
 .empty{padding:30px 12px;text-align:center;font-family:var(--mono);font-size:11.5px;letter-spacing:0.02em;color:var(--ink-3)}
@@ -348,14 +355,10 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
                   <div class="segmented-opt" :class="{active: sendType==='bch'}" @click="sendType='bch'; sendError=''; sendSuccess=''">BCH</div>
                   <div class="segmented-opt" :class="{active: sendType==='token'}" @click="sendType='token'; sendError=''; sendSuccess=''">CashToken</div>
                 </div>
-                <div x-show="sendType==='token'">
-                  <div class="field"><label class="field-label">Token Category ID</label><select class="field-input" x-model="sendTokenPreset" @change="if(sendTokenPreset==='__custom__')sendCategory='';else sendCategory=sendTokenPreset"><option value="__custom__">Enter token category</option><option value="5932b2fd4915d6a75d3ec53282cd49118149a2176ee67ed68b1111ff0786f7fc">LIFT</option><option value="2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544">PUSD</option></select></div>
-                  <div class="field" x-show="sendTokenPreset === '__custom__'"><input class="field-input" type="text" x-model="sendCategory" placeholder="Paste 64-char hex category ID"></div>
-                  <div class="field"><label class="field-label">Token Amount (base units)</label><input class="field-input" type="text" x-model="sendTokenAmount" placeholder="e.g. 1000"></div>
-                </div>
-                <div x-show="sendType==='bch'">
-                  <div class="field"><label class="field-label">Amount</label><div class="inline-row"><input class="field-input" type="number" x-model="sendAmount" placeholder="0.0" step="any" min="0"><select class="field-input shrink" x-model="sendCurrency" style="width:104px"><option value="bch">BCH</option><option value="sats">sats</option><option value="usd">USD</option></select></div></div>
-                </div>
+                <div class="field" x-show="sendType==='token'"><label class="field-label">Token Category ID</label><select class="field-input" x-model="sendTokenPreset" @change="if(sendTokenPreset==='__custom__')sendCategory='';else sendCategory=sendTokenPreset"><option value="__custom__">Enter token category</option><option value="5932b2fd4915d6a75d3ec53282cd49118149a2176ee67ed68b1111ff0786f7fc">LIFT</option><option value="2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544">PUSD</option></select></div>
+                <div class="field" x-show="sendType==='token' && sendTokenPreset === '__custom__'"><input class="field-input" type="text" x-model="sendCategory" placeholder="Paste 64-char hex category ID"></div>
+                <div class="field" x-show="sendType==='token'"><label class="field-label">Token Amount (base units)</label><input class="field-input" type="text" x-model="sendTokenAmount" placeholder="e.g. 1000"></div>
+                <div class="field" x-show="sendType==='bch'"><label class="field-label">Amount</label><div class="inline-row"><input class="field-input" type="number" x-model="sendAmount" placeholder="0.0" step="any" min="0"><select class="field-input shrink" x-model="sendCurrency" style="width:104px"><option value="bch">BCH</option><option value="sats">sats</option><option value="usd">USD</option></select></div></div>
                 <div class="field"><label class="field-label">Recipient Address</label><input class="field-input" type="text" x-model="sendAddress" placeholder="bitcoincash:q..."></div>
                 <template x-if="sendType==='token' && sendAddress && !isTokenAddr(sendAddress)"><div class="warning-bar">Address is not token-aware (z-prefix). Tokens may be lost.</div></template>
                 <div x-show="sendError" class="field-error" x-text="sendError"></div>
