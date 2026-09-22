@@ -382,8 +382,8 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
                 <div class="field"><label class="field-label">Token</label><select class="field-input" x-model="swapToken"><option value="__custom__">Enter token category</option><template x-for="t in swapTokens" :key="t.category"><option :value="t.category" x-text="t.symbol + '  ·  ' + t.category.slice(0,10) + '…' + t.category.slice(-6)"></option></template></select></div>
                 <div class="field" x-show="swapToken === '__custom__'"><input class="field-input" type="text" x-model="swapCustomCategory" placeholder="Paste 64-char hex category ID"></div>
                 <div class="segmented" style="margin-bottom:14px">
-                  <div class="segmented-opt" :class="{active: swapDir==='sell'}" @click="swapDir='sell'; swapQuoteText=''; pendingSwap=null">Sell Token → BCH</div>
                   <div class="segmented-opt" :class="{active: swapDir==='buy'}" @click="swapDir='buy'; swapQuoteText=''; pendingSwap=null">Buy Token ← BCH</div>
+                  <div class="segmented-opt" :class="{active: swapDir==='sell'}" @click="swapDir='sell'; swapQuoteText=''; pendingSwap=null">Sell Token → BCH</div>
                 </div>
                 <div class="field"><label class="field-label" x-text="swapDir==='sell' ? 'Token Amount' : 'BCH Amount'"></label><input class="field-input" type="number" x-model="swapAmount" placeholder="0.0" step="any" min="0"></div>
                 <div x-show="swapError" class="field-error" x-text="swapError"></div>
@@ -606,7 +606,7 @@ token:(function(){var t=new URLSearchParams(window.location.search).get('token')
 rcvType:'bch',rcvCategory:'',rcvAmount:'',rcvView:null,rcvQrSvg:'',
 sendType:'bch',sendAmount:'',sendCurrency:'bch',sendAddress:'',sendCategory:'',sendTokenPreset:'__custom__',sendTokenAmount:'',sendError:'',sendSuccess:'',pendingSend:null,
 histType:'all',histRecords:[],histPage:1,histNumPages:1,histHasNext:false,histLoading:false,histNetwork:'mainnet',
-swapTokens:[{symbol:'LIFT',category:'5932b2fd4915d6a75d3ec53282cd49118149a2176ee67ed68b1111ff0786f7fc'},{symbol:'PUSD',category:'2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544'}],swapToken:'5932b2fd4915d6a75d3ec53282cd49118149a2176ee67ed68b1111ff0786f7fc',swapCustomCategory:'',swapDir:'sell',swapAmount:'',swapError:'',swapQuoteText:'',swapBusy:false,swapExecBusy:false,pendingSwap:null,
+swapTokens:[{symbol:'LIFT',category:'5932b2fd4915d6a75d3ec53282cd49118149a2176ee67ed68b1111ff0786f7fc'},{symbol:'PUSD',category:'2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544'}],swapToken:'5932b2fd4915d6a75d3ec53282cd49118149a2176ee67ed68b1111ff0786f7fc',swapCustomCategory:'',swapDir:'buy',swapAmount:'',swapError:'',swapQuoteText:'',swapBusy:false,swapExecBusy:false,pendingSwap:null,
 pendingPurchase:null,purchaseBusy:false,purchaseMethod:'bch',purchaseError:'',liftQuote:null,liftQuoteBusy:false,liftQuoteError:'',showPurchaseModal:false,showSendModal:false,sendConfirmBusy:false,planSliderIdx:{},PLAN_STEPS:[0,15,30,60],
 pendingImageQuote:null,showImageQuoteModal:false,imgGenBusy:false,imgQuoteBusy:false,walletAction:null,aiAction:null,lightbox:null,lightboxConfirmDelete:false,imgUrls:{},
 refillModel:'',refillMinutesIdx:1,refillCapIdx:0,REFILL_MINUTES:[15,30,60],REFILL_CAPS:[2,4,8,-1],refillPayMethod:'bch',refillEditing:false,refillNotice:'',
