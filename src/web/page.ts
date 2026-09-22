@@ -343,7 +343,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
           <button class="action-btn" :class="{active: walletAction==='receive'}" @click="walletAction = walletAction==='receive' ? null : 'receive'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 7 7 17"/><path d="M16 17H7V8"/></svg>Receive</button>
           <button class="action-btn" :class="{active: walletAction==='swap'}" @click="walletAction = walletAction==='swap' ? null : 'swap'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></svg>Swap</button>
         </div>
-        <div class="grid" x-show="walletAction">
+        <div class="grid" x-show="walletAction" style="margin-top:16px">
           <div class="span-12">
             <div class="card">
               <div class="card-head"><div class="card-title" x-text="walletAction==='send' ? 'Send' : walletAction==='receive' ? 'Receive' : 'Cauldron Swap'"></div><button class="btn-close" @click="walletAction=null" title="Close">✕</button></div>
