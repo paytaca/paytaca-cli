@@ -109,9 +109,10 @@ body{font-family:var(--sans);background:var(--bg);color:var(--ink);font-size:14p
 .tx-toast a{font-family:var(--mono);font-size:10.5px;color:var(--accent);text-decoration:underline;text-underline-offset:2px}
 .tx-toast a:hover{color:var(--accent-strong)}
 .content{width:100%;max-width:1400px;margin:0 auto;padding:26px 30px 56px}
-.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
+.grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:16px}
 .span-4{grid-column:span 4}.span-5{grid-column:span 5}.span-6{grid-column:span 6}.span-7{grid-column:span 7}.span-8{grid-column:span 8}.span-12{grid-column:span 12}
-.grid>div{display:flex;flex-direction:column}.grid>div>.card{flex:1}
+.grid>div{display:flex;flex-direction:column;min-width:0}.grid>div>.card{flex:1;min-width:0}
+.tbl-scroll{overflow-x:auto}
 .card{background:var(--surface);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid var(--line);border-radius:var(--r);padding:20px;box-shadow:var(--shadow),var(--glass-hi)}
 .card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}
 .card-title{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:0.13em;text-transform:uppercase;color:var(--ink-2)}
@@ -409,7 +410,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
               <div class="card-head"><div class="card-title">History</div><select class="field-input" x-model="histType" @change="loadHistory(1)" style="width:auto;padding:5px 9px;font-size:11.5px"><option value="all">All</option><option value="incoming">Incoming</option><option value="outgoing">Outgoing</option></select></div>
               <template x-if="!histRecords.length && histLoading"><div class="empty">Loading…</div></template>
               <template x-if="!histRecords.length && !histLoading"><div class="empty">No transactions yet</div></template>
-              <template x-if="histRecords.length"><div><table class="tbl"><thead><tr><th>Date</th><th>Type</th><th>Counterparty</th><th style="text-align:right">Amount</th></tr></thead><tbody>
+              <template x-if="histRecords.length"><div class="tbl-scroll"><table class="tbl"><thead><tr><th>Date</th><th>Type</th><th>Counterparty</th><th style="text-align:right">Amount</th></tr></thead><tbody>
                 <template x-for="(r, ri) in histRecords" :key="ri"><tr><td class="hist-date" style="white-space:nowrap"><a :href="r.explorer" target="_blank" rel="noopener" :title="'View '+r.txid+' on explorer'" x-text="r.dateText"></a></td><td><span class="pill" :class="r.type==='incoming'?'pill-in':'pill-out'" x-text="r.type==='incoming'?'IN':'OUT'"></span></td><td class="hist-addr"><span class="mono-break" :title="r.counterparty" x-text="r.partyShort"></span><div class="hist-sub" x-show="r.type==='outgoing' && r.fee" x-text="'fee '+r.fee+' BCH'"></div></td><td class="tbl-num" style="text-align:right"><div class="hist-amt" :class="r.type==='incoming'?'hist-in':'hist-out'" x-text="(r.type==='incoming'?'+':'-')+r.amountText+' BCH'"></div><div class="hist-sub" x-show="r.usd!=null" x-text="'≈ $'+r.usd+' USD'"></div></td></tr></template>
               </tbody></table><div class="pagination"><button class="btn btn-sm btn-ghost" @click="loadHistory(histPage - 1)" x-show="histPage > 1">← Prev</button><span class="page-info">Page <span x-text="histPage"></span> / <span x-text="histNumPages"></span></span><button class="btn btn-sm btn-ghost" @click="loadHistory(histPage + 1)" x-show="histHasNext">Next →</button></div></div></template>
             </div>
@@ -434,9 +435,9 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
           <div class="span-8">
             <div class="card">
               <div class="card-head"><div class="card-title">Usage</div></div>
-              <template x-if="state?.usage?.length"><table class="tbl"><thead><tr><th>Model</th><th>Status</th><th>Remaining</th><th>Used</th></tr></thead><tbody>
+              <template x-if="state?.usage?.length"><div class="tbl-scroll"><table class="tbl"><thead><tr><th>Model</th><th>Status</th><th>Remaining</th><th>Used</th></tr></thead><tbody>
                 <template x-for="(s, i) in state?.usage || []" :key="i"><tr><td style="font-size:12.5px" x-text="s.displayName || s.model || 'Unknown'"></td><td><span class="pill pill-active" x-show="s.active">ACTIVE</span><span class="pill pill-idle" x-show="!s.active">IDLE</span></td><td class="tbl-num" x-text="fmtDuration(s.remainingSeconds)"></td><td class="tbl-num" x-text="fmtDuration(s.usedSeconds)"></td></tr></template>
-              </tbody></table></template>
+              </tbody></table></div></template>
               <template x-if="state && !state?.usage?.length"><div class="empty">No usage data</div></template>
               <template x-if="!state"><div class="empty">Loading…</div></template>
             </div>
