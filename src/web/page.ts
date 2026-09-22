@@ -212,11 +212,23 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
 .plan-group:first-child{padding-top:2px}
 .plan-group:last-child{border-bottom:0;padding-bottom:2px}
 .plan-model{font-size:13.5px;font-weight:600;margin-bottom:12px}
-.plan-tiers{display:flex;gap:10px;flex-wrap:wrap}
-.plan-tier{display:flex;align-items:center;gap:14px;border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 14px;background:var(--surface-3)}
-.plan-tier:hover{border-color:var(--accent);transform:translateY(-1px);transition:all .2s ease}
+.plan-slider{margin:2px 0 0}
+.plan-slider input[type="range"]{-webkit-appearance:none;appearance:none;display:block;width:100%;height:4px;border-radius:2px;background:var(--line);outline:none;cursor:pointer;margin:0}
+.plan-slider input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:16px;height:16px;border-radius:50%;background:var(--accent);border:2px solid var(--surface);box-shadow:0 1px 4px rgba(0,0,0,0.25);cursor:pointer}
+.plan-slider input[type="range"]::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:var(--accent);border:2px solid var(--surface);box-shadow:0 1px 4px rgba(0,0,0,0.25);cursor:pointer}
+.plan-slider input[type="range"]::-moz-range-track{background:transparent}
+.plan-ticks{display:flex;justify-content:space-between;padding:7px 8px 0}
+.plan-ticks span{width:0;display:flex;flex-direction:column;align-items:center;white-space:nowrap;font-family:var(--mono);font-size:9.5px;letter-spacing:0.04em;color:var(--ink-3)}
+.plan-ticks span::before{content:'';width:1px;height:4px;background:var(--line);margin-bottom:3px}
+.plan-selection{display:flex;align-items:center;gap:12px;margin-top:12px;min-height:29px}
+.plan-selection .grow{flex:1}
+.plan-hint{font-family:var(--mono);font-size:10.5px;letter-spacing:0.04em;color:var(--ink-3)}
+.plan-insufficient{font-family:var(--mono);font-size:10px;letter-spacing:0.04em;color:var(--err)}
 .plan-duration{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--ink-2)}
 .plan-price{font-size:13px;font-weight:600}
+.refill-model{margin-bottom:14px}
+.refill-pay{display:flex;align-items:center;gap:12px;margin-top:14px}
+.refill-pay .field-label{margin:0}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden}
 .seg button{appearance:none;background:var(--surface-3);border:0;padding:8px 20px;font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:0.08em;color:var(--ink-3);cursor:pointer}
 .seg button+.seg button{border-left:1px solid var(--line)}
@@ -435,7 +447,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
           <button class="action-btn" :class="{active: aiAction==='refill'}" @click="aiAction = aiAction==='refill' ? null : 'refill'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>Auto-Refill</button>
           <button class="action-btn" :class="{active: aiAction==='images'}" @click="aiAction = aiAction==='images' ? null : 'images'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>Generate Images</button>
         </div>
-        <div class="grid" x-show="aiAction==='buy' || aiAction==='refill'">
+        <div class="grid" x-show="aiAction==='buy' || aiAction==='refill'" style="margin-top:16px">
           <div class="span-12">
             <div class="card">
               <div class="card-head"><div class="card-title" x-text="aiAction==='buy' ? 'Buy Credits' : 'Auto-Refill'"></div><button class="btn-close" @click="aiAction=null" title="Close">✕</button></div>
@@ -445,14 +457,15 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
                 <template x-for="plan in state?.plans || []" :key="plan.modelId">
                   <div class="plan-group">
                     <div class="plan-model" x-text="plan.displayName || plan.modelId"></div>
-                    <div class="plan-tiers">
-                      <template x-for="tier in plan.tiers || []" :key="tier.minutes">
-                        <div class="plan-tier">
-                          <span class="plan-duration" x-text="tier.durationDisplay"></span>
-                          <span class="plan-price" x-text="tier.priceUsd != null ? '$' + tier.priceUsd.toFixed(2) : (tier.priceSats/1e8).toFixed(8) + ' BCH'"></span>
-                          <button class="btn btn-sm btn-primary" @click="startPurchase(plan.modelId, tier.minutes, tier.priceUsd, tier.priceSats, tier.durationDisplay, plan.displayName || plan.modelId)">Buy</button>
-                        </div>
-                      </template>
+                    <div class="plan-slider">
+                      <input type="range" min="0" max="3" step="1" :value="planSliderIdx[plan.modelId] || 0" @input="setPlanSlider(plan.modelId, parseInt($event.target.value))" :aria-label="'Duration for ' + (plan.displayName || plan.modelId)" :style="'background:linear-gradient(to right,var(--accent) 0%,var(--accent) ' + ((planSliderIdx[plan.modelId] || 0) / 3 * 100) + '%,var(--line) ' + ((planSliderIdx[plan.modelId] || 0) / 3 * 100) + '%,var(--line) 100%)'">
+                      <div class="plan-ticks"><span>0</span><span>15</span><span>30</span><span>60</span></div>
+                    </div>
+                    <div class="plan-selection">
+                      <template x-if="planMinutes(plan.modelId) > 0"><span style="display:flex;align-items:center;gap:12px"><span class="plan-duration" x-text="planTier(plan)?.durationDisplay || ''"></span><span class="plan-price" x-text="tierPriceLabel(planTier(plan))"></span><template x-if="tierInsufficient(planTier(plan))"><span class="plan-insufficient">insufficient balance</span></template></span></template>
+                      <template x-if="!planMinutes(plan.modelId)"><span class="plan-hint">Slide to select duration</span></template>
+                      <span class="grow"></span>
+                      <button class="btn btn-sm btn-primary" :disabled="!planMinutes(plan.modelId) || tierInsufficient(planTier(plan))" @click="buyPlan(plan)">Buy</button>
                     </div>
                   </div>
                 </template>
@@ -462,20 +475,26 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
               </div></template>
               <template x-if="aiAction==='refill'"><div>
               <template x-if="state && (!state.autoRefill || refillEditing)"><div>
-                <div style="font-size:12.5px;color:var(--ink-3);margin-bottom:12px">Auto-refill buys a new plan when credits run out. It tops up immediately if this model has no active credits.</div>
-                <div class="inline-row">
-                  <div class="field"><label class="field-label">Model</label><select class="field-input" x-model="refillModel"><option value="">Select model</option><template x-for="p in state?.plans || []" :key="p.modelId"><option :value="p.modelId" x-text="p.displayName || p.modelId"></option></template></select></div>
-                  <div class="field"><label class="field-label">Top up (minutes)</label><select class="field-input" x-model="refillMinutes"><template x-for="m in [15,30,60]" :key="m"><option :value="String(m)" x-text="m"></option></template><template x-if="refillMinutes && ![15,30,60].includes(parseInt(refillMinutes))"><option :value="refillMinutes" x-text="refillMinutes"></option></template></select></div>
-                </div>
-                <div class="inline-row" style="margin-top:12px">
-                  <div class="field"><label class="field-label">Budget cap (minutes, optional)</label><input class="field-input" type="number" min="1" x-model="refillMax" placeholder="Unlimited"></div>
-                  <div class="field"><label class="field-label">Pay with</label><select class="field-input" x-model="refillPayMethod"><option value="bch">BCH</option><option value="lift">LIFT</option></select></div>
-                </div>
-                <div style="margin-top:6px;font-size:11.5px;color:var(--ink-3)">Budget cap must be at least twice the top-up and a whole-number multiple of it<span x-text="' (min ' + (parseInt(refillMinutes||'30')*2) + ' min, steps of ' + parseInt(refillMinutes||'30') + ')'"></span>.</div>
-                <template x-if="refillNotice"><div style="margin-top:12px;font-size:12.5px;color:var(--ink-3)" x-text="refillNotice"></div></template>
-                <div style="margin-top:16px;display:flex;gap:8px">
-                  <button class="btn btn-sm btn-primary" @click="enableRefill()" x-text="refillEditing ? 'Save & Resume' : 'Enable Auto-Refill'"></button>
-                  <button class="btn btn-sm" x-show="refillEditing" @click="cancelRefillEdit()">Cancel</button>
+                <div style="font-size:12.5px;color:var(--ink-3);margin-bottom:14px">Auto-refill buys a new plan when credits run out. It tops up immediately if this model has no active credits.</div>
+                <div class="plan-group" style="padding-top:0">
+                  <div class="refill-model"><label class="field-label">Model</label><select class="field-input" x-model="refillModel"><option value="">Select model</option><template x-for="p in state?.plans || []" :key="p.modelId"><option :value="p.modelId" x-text="p.displayName || p.modelId"></option></template></select></div>
+                  <div class="plan-slider">
+                    <input type="range" min="0" max="2" step="1" :value="refillMinutesIdx" @input="refillMinutesIdx = parseInt($event.target.value)" aria-label="Top-up duration" :style="'background:linear-gradient(to right,var(--accent) 0%,var(--accent) ' + (refillMinutesIdx / 2 * 100) + '%,var(--line) ' + (refillMinutesIdx / 2 * 100) + '%,var(--line) 100%)'">
+                    <div class="plan-ticks"><span>15m</span><span>30m</span><span>1h</span></div>
+                  </div>
+                  <div class="plan-slider" style="margin-top:10px">
+                    <input type="range" min="0" max="3" step="1" :value="refillCapIdx" @input="refillCapIdx = parseInt($event.target.value)" aria-label="Budget cap multiplier" :style="'background:linear-gradient(to right,var(--accent) 0%,var(--accent) ' + (refillCapIdx / 3 * 100) + '%,var(--line) ' + (refillCapIdx / 3 * 100) + '%,var(--line) 100%)'">
+                    <div class="plan-ticks"><span>2×</span><span>4×</span><span>8×</span><span>∞</span></div>
+                  </div>
+                  <div class="refill-pay"><span class="field-label">Pay with</span><div class="seg"><button :class="{active: refillPayMethod==='bch'}" @click="refillPayMethod='bch'">BCH</button><button :class="{active: refillPayMethod==='lift'}" @click="refillPayMethod='lift'">LIFT</button></div></div>
+                  <div class="plan-selection">
+                    <template x-if="refillModel"><span style="display:flex;align-items:center;gap:12px"><span class="plan-duration" x-text="refillTopUpMinutes() + 'm top-up'"></span><span class="plan-price" style="font-size:11.5px;color:var(--ink-3)" x-text="refillCapLabel()"></span></span></template>
+                    <template x-if="!refillModel"><span class="plan-hint">Select a model to configure auto-refill</span></template>
+                    <span class="grow"></span>
+                    <button class="btn btn-sm btn-primary" :disabled="!refillModel" @click="enableRefill()" x-text="refillEditing ? 'Save & Resume' : 'Enable'"></button>
+                    <template x-if="refillEditing"><button class="btn btn-sm" @click="cancelRefillEdit()">Cancel</button></template>
+                  </div>
+                  <template x-if="refillNotice"><div style="margin-top:10px;font-size:12px;color:var(--ink-3)" x-text="refillNotice"></div></template>
                 </div>
               </div></template>
               <template x-if="state?.autoRefill && !refillEditing"><div>
@@ -503,7 +522,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
             </div>
           </div>
         </div>
-        <div x-show="aiAction==='images'" class="grid">
+        <div x-show="aiAction==='images'" class="grid" style="margin-top:16px">
           <div class="span-5">
             <div class="card">
               <div class="card-head"><div class="card-title">Image Generation</div></div>
@@ -588,9 +607,9 @@ rcvType:'bch',rcvCategory:'',rcvAmount:'',rcvView:null,rcvQrSvg:'',
 sendType:'bch',sendAmount:'',sendCurrency:'bch',sendAddress:'',sendCategory:'',sendTokenPreset:'__custom__',sendTokenAmount:'',sendError:'',sendSuccess:'',pendingSend:null,
 histType:'all',histRecords:[],histPage:1,histNumPages:1,histHasNext:false,histLoading:false,histNetwork:'mainnet',
 swapTokens:[{symbol:'LIFT',category:'5932b2fd4915d6a75d3ec53282cd49118149a2176ee67ed68b1111ff0786f7fc'},{symbol:'PUSD',category:'2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544'}],swapToken:'5932b2fd4915d6a75d3ec53282cd49118149a2176ee67ed68b1111ff0786f7fc',swapCustomCategory:'',swapDir:'sell',swapAmount:'',swapError:'',swapQuoteText:'',swapBusy:false,swapExecBusy:false,pendingSwap:null,
-pendingPurchase:null,purchaseBusy:false,purchaseMethod:'bch',purchaseError:'',liftQuote:null,liftQuoteBusy:false,liftQuoteError:'',showPurchaseModal:false,showSendModal:false,sendConfirmBusy:false,
+pendingPurchase:null,purchaseBusy:false,purchaseMethod:'bch',purchaseError:'',liftQuote:null,liftQuoteBusy:false,liftQuoteError:'',showPurchaseModal:false,showSendModal:false,sendConfirmBusy:false,planSliderIdx:{},PLAN_STEPS:[0,15,30,60],
 pendingImageQuote:null,showImageQuoteModal:false,imgGenBusy:false,imgQuoteBusy:false,walletAction:null,aiAction:null,lightbox:null,lightboxConfirmDelete:false,imgUrls:{},
-refillModel:'',refillMinutes:'30',refillMax:'',refillPayMethod:'bch',refillEditing:false,refillNotice:'',
+refillModel:'',refillMinutesIdx:1,refillCapIdx:0,REFILL_MINUTES:[15,30,60],REFILL_CAPS:[2,4,8,-1],refillPayMethod:'bch',refillEditing:false,refillNotice:'',
 imgPrompt:'',imgModel:'bytedance-seed/seedream-5-0-pro',imgAspect:'1:1',imgQuality:'auto',
 toastVisible:false,toastMsg:'',toastOk:true,
 ws:null,wsStatus:'connecting',wsAddress:null,wsSeen:{},wsReconnectTimer:null,wsPingTimer:null,wsRefreshTimer:null,wsLateTimer:null,notify:null,_ntid:0,
@@ -602,6 +621,15 @@ async api(method,apipath,body){var opts={method:method,headers:{'X-Paytaca-Token
 fmtDuration(s){if(!s||s<=0)return '0m';var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h?h+'h '+m+'m':m+'m'},
 bchPriceLabel(p){if(!p)return '';return p.priceUsd!=null?'$'+p.priceUsd.toFixed(2)+' USD':((p.priceSats||0)/1e8).toFixed(8)+' BCH'},
 liftPriceLabel(p){if(!p)return '';var pct=(this.state&&this.state.liftDiscountPercent)||0;var f=1-pct/100;return p.priceUsd!=null?'$'+(p.priceUsd*f).toFixed(2)+' USD':(((p.priceSats||0)*f)/1e8).toFixed(8)+' BCH'},
+planMinutes(modelId){return this.PLAN_STEPS[this.planSliderIdx[modelId]||0]||0},
+setPlanSlider(modelId,val){var next={};var keys=Object.keys(this.planSliderIdx);for(var i=0;i<keys.length;i++){next[keys[i]]=keys[i]===modelId?val:0}next[modelId]=val;this.planSliderIdx=next},
+planTier(plan){var m=this.planMinutes(plan.modelId);if(!m)return null;var tiers=(plan&&plan.tiers)||[],i;for(i=0;i<tiers.length;i++)if(tiers[i].minutes===m)return tiers[i];var sorted=tiers.slice().sort(function(a,b){return a.minutes-b.minutes});for(i=0;i<sorted.length;i++)if(sorted[i].minutes>=m)return sorted[i];return sorted[sorted.length-1]||null},
+tierPriceLabel(tier){if(!tier)return '';return tier.priceUsd!=null?'$'+tier.priceUsd.toFixed(2):(tier.priceSats/1e8).toFixed(8)+' BCH'},
+tierInsufficient(tier){if(!tier)return false;var have=this.state&&this.state.balance?Number(this.state.balance.spendableSats):0;return have<Number(tier.priceSats||0)},
+buyPlan(plan){var t=this.planTier(plan);if(!t)return;this.startPurchase(plan.modelId,t.minutes,t.priceUsd,t.priceSats,t.durationDisplay,plan.displayName||plan.modelId)},
+refillTopUpMinutes(){return this.REFILL_MINUTES[this.refillMinutesIdx]||30},
+refillCapMinutes(){var cap=this.REFILL_CAPS[this.refillCapIdx];return cap>0?cap*this.refillTopUpMinutes():null},
+refillCapLabel(){var cap=this.refillCapMinutes();if(!cap)return 'No cap';return 'Max '+cap+' min ('+this.REFILL_CAPS[this.refillCapIdx]+'×)'},
 
 async loadLiftQuote(){var p=this.pendingPurchase;if(!p||!p.priceSats){this.liftQuote=null;this.liftQuoteError='';return}var pct=(this.state&&this.state.liftDiscountPercent)||0;var sats=Math.round(p.priceSats*(1-pct/100));if(sats<1)sats=1;this.liftQuoteBusy=true;this.liftQuoteError='';try{this.liftQuote=await this.api('GET','/api/ai/lift-quote?sats='+sats)}catch(e){this.liftQuote=null;this.liftQuoteError=e.message||'Failed to estimate LIFT needed'}this.liftQuoteBusy=false},
 
@@ -624,11 +652,11 @@ async loadHistory(page){this.histPage=page||1;this.histLoading=true;this.histRec
 async doSwapQuote(){var tokenId=this.swapToken==='__custom__'?(this.swapCustomCategory||'').trim():(this.swapToken||'').trim();var amount=(this.swapAmount||'').trim();this.swapError='';if(!tokenId||!/^[a-fA-F0-9]{64}$/.test(tokenId)){this.swapError='Enter a valid 64-char hex token ID';return}if(!amount||isNaN(parseFloat(amount))||parseFloat(amount)<=0){this.swapError='Enter a valid amount';return}this.swapBusy=true;try{var q=await this.api('POST','/api/swap/quote',{tokenId:tokenId,direction:this.swapDir,amount:amount});this.pendingSwap={tokenId:tokenId,direction:this.swapDir,amount:amount};var text=q.formatted||'';if(!text){text='Rate: '+(q.rate||'?')+'\\nToken: '+q.tokenAmount+' '+(q.symbol||'')+'\\nBCH: '+(Number(q.bchAmountSats)/1e8).toFixed(8)+' BCH\\nTrade fee: '+(Number(q.tradeFeeSats)/1e8).toFixed(8)+' BCH';if(q.platformFeeSats)text+='\\nPlatform fee: '+(Number(q.platformFeeSats)/1e8).toFixed(8)+' BCH'}this.swapQuoteText=text}catch(e){this.swapError=e.message}this.swapBusy=false},
 async doSwapExecute(){if(!this.pendingSwap)return;this.swapExecBusy=true;try{var result=await this.api('POST','/api/swap/execute',this.pendingSwap);if(result.success){this.toast('Swap executed! TX: '+(result.txid||'').slice(0,16)+'...');this.swapQuoteText='';this.pendingSwap=null;this.load()}else{this.swapError=result.error||'Swap failed'}}catch(e){this.swapError=e.message}this.swapExecBusy=false},
 startPurchase(model,minutes,priceUsd,priceSats,durationDisplay,displayName){this.pendingPurchase={model:model,minutes:minutes,priceUsd:priceUsd,priceSats:priceSats,durationDisplay:durationDisplay,displayName:displayName};this.purchaseMethod='bch';this.purchaseError='';this.liftQuote=null;this.liftQuoteError='';this.showPurchaseModal=true},
-async confirmPurchase(){if(!this.pendingPurchase)return;this.purchaseBusy=true;this.purchaseError='';try{var r=await this.api('POST','/api/ai/purchase',{model:this.pendingPurchase.model,minutes:this.pendingPurchase.minutes,method:this.purchaseMethod});if(r&&r.success&&r.paid){this.showPurchaseModal=false;this.pendingPurchase=null;this.toast('Plan purchased!');this.load()}else if(r&&r.success&&!r.paid){this.showPurchaseModal=false;this.pendingPurchase=null;this.toast(r.error||'Payment submitted — credits will update shortly',true);this.load()}else{this.purchaseError=(r&&r.error)||'Purchase failed';this.toast(this.purchaseError,true)}}catch(e){this.purchaseError=e.message||'Purchase failed';this.toast(e.message,true)}this.purchaseBusy=false},
-async enableRefill(){var model=this.refillModel;var minutes=parseInt(this.refillMinutes)||30;var paymentMethod=this.refillPayMethod||'bch';var maxMinutes;if(!model){this.toast('Select a model',true);return}if(this.refillMax!==''&&this.refillMax!=null){var raw=Number(this.refillMax);if(!Number.isInteger(raw)||raw<=0){this.toast('Budget cap must be a whole number',true);return}if(raw<minutes*2){this.toast('Budget cap must be at least twice the top-up ('+minutes*2+' min)',true);return}if(raw%minutes!==0){this.toast('Budget cap must be a multiple of the top-up ('+minutes+' min)',true);return}maxMinutes=raw}try{var r=await this.api('POST','/api/ai/auto-refill',{enabled:true,model:model,minutes:minutes,maxMinutes:maxMinutes,paymentMethod:paymentMethod});this.refillNotice=this.refillNoticeText(r&&r.initialTick);this.refillEditing=false;this.toast('Auto-refill enabled');this.load()}catch(e){this.toast(e.message,true)}},
+async confirmPurchase(){if(!this.pendingPurchase)return;this.purchaseBusy=true;this.purchaseError='';try{var r=await this.api('POST','/api/ai/purchase',{model:this.pendingPurchase.model,minutes:this.pendingPurchase.minutes,method:this.purchaseMethod});if(r&&r.success&&r.paid){this.showPurchaseModal=false;this.pendingPurchase=null;this.planSliderIdx={};this.toast('Plan purchased!');this.load()}else if(r&&r.success&&!r.paid){this.showPurchaseModal=false;this.pendingPurchase=null;this.toast(r.error||'Payment submitted — credits will update shortly',true);this.load()}else{this.purchaseError=(r&&r.error)||'Purchase failed';this.toast(this.purchaseError,true)}}catch(e){this.purchaseError=e.message||'Purchase failed';this.toast(e.message,true)}this.purchaseBusy=false},
+async enableRefill(){var model=this.refillModel;var minutes=this.refillTopUpMinutes();var maxMinutes=this.refillCapMinutes();var paymentMethod=this.refillPayMethod||'bch';if(!model){this.toast('Select a model',true);return}try{var r=await this.api('POST','/api/ai/auto-refill',{enabled:true,model:model,minutes:minutes,maxMinutes:maxMinutes,paymentMethod:paymentMethod});this.refillNotice=this.refillNoticeText(r&&r.initialTick);this.refillEditing=false;this.toast('Auto-refill enabled');this.load()}catch(e){this.toast(e.message,true)}},
 async resumeRefill(){try{var r=await this.api('POST','/api/ai/auto-refill',{enabled:true});this.refillNotice=this.refillNoticeText(r&&r.initialTick);this.toast('Auto-refill resumed');this.load()}catch(e){this.toast(e.message,true)}},
 async pauseRefill(){try{await this.api('POST','/api/ai/auto-refill',{enabled:false});this.refillNotice='';this.toast('Auto-refill paused');this.load()}catch(e){this.toast(e.message,true)}},
-startRefillEdit(){if(!this.state||!this.state.autoRefill)return;this.refillModel=this.state.autoRefill.model||'';this.refillMinutes=String(this.state.autoRefill.minutes||30);this.refillMax=this.state.autoRefill.maxMinutes?String(this.state.autoRefill.maxMinutes):'';this.refillPayMethod=this.state.autoRefill.paymentMethod||'bch';this.refillNotice='';this.refillEditing=true},
+startRefillEdit(){if(!this.state||!this.state.autoRefill)return;var ar=this.state.autoRefill;this.refillModel=ar.model||'';var mins=ar.minutes||30;var mi=this.REFILL_MINUTES.indexOf(mins);this.refillMinutesIdx=mi>=0?mi:1;this.refillCapIdx=ar.maxMinutes?Math.round(ar.maxMinutes/mins)<=2?0:Math.round(ar.maxMinutes/mins)<=4?1:2:3;this.refillPayMethod=ar.paymentMethod||'bch';this.refillNotice='';this.refillEditing=true},
 cancelRefillEdit(){this.refillEditing=false;this.refillNotice=''},
 refillNoticeText(tick){if(!tick)return '';if(tick.action==='refilled'){var m=(tick.state&&tick.state.minutes)||'';var tx=tick.state&&tick.state.lastRefillTxid;return 'Topped up '+m+' min now'+(tx?' (tx '+String(tx).slice(0,10)+'…)':'')+'.'}if(tick.action==='skipped')return 'Refill skipped: '+tick.reason+'.';if(tick.action==='disarmed')return 'Auto-refill stopped: '+tick.reason+'.';return 'Credits still active — no refill needed.'},
 async deleteRefill(){if(!confirm('Delete auto-refill configuration?'))return;try{await this.api('POST','/api/ai/auto-refill',{delete:true});this.refillEditing=false;this.refillNotice='';this.toast('Auto-refill deleted');this.load()}catch(e){this.toast(e.message,true)}},
