@@ -385,7 +385,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
                   <div class="segmented-opt" :class="{active: swapDir==='buy'}" @click="swapDir='buy'; swapQuoteText=''; pendingSwap=null">Buy Token ← BCH</div>
                   <div class="segmented-opt" :class="{active: swapDir==='sell'}" @click="swapDir='sell'; swapQuoteText=''; pendingSwap=null">Sell Token → BCH</div>
                 </div>
-                <div class="field"><label class="field-label" x-text="swapDir==='sell' ? 'Token Amount' : 'BCH Amount'"></label><input class="field-input" type="number" x-model="swapAmount" placeholder="0.0" step="any" min="0"></div>
+                <div class="field"><label class="field-label">Token Amount (human units)</label><input class="field-input" type="number" x-model="swapAmount" placeholder="0.0" step="any" min="0"></div>
                 <div x-show="swapError" class="field-error" x-text="swapError"></div>
                 <button class="btn btn-primary" style="margin-top:14px;min-width:180px" @click="doSwapQuote()" :disabled="swapBusy" x-text="swapBusy ? 'Fetching quote…' : 'Get Quote'"></button>
                 <template x-if="swapQuoteText"><div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--line-2)">
