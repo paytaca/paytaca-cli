@@ -106,6 +106,16 @@ export function hasActiveCredits(
   return candidates.some(sessionActive)
 }
 
+export function remainingSeconds(
+  status: WalletStatus | null,
+  modelId?: string
+): number | null {
+  if (!status) return null
+  const session = findSession(status, modelId)
+  if (!session) return 0
+  return session.time_remaining_seconds ?? 0
+}
+
 export function formatRemaining(seconds: number): string {
   if (!isFinite(seconds) || seconds <= 0) return '0s'
   const total = Math.floor(seconds)

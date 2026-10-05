@@ -860,4 +860,95 @@ describe('MCP tools', () => {
       })
     })
   })
+
+  describe('await_refill', () => {
+    const armed = {
+      enabled: true,
+      model: 'm',
+      minutes: 15,
+      maxMinutes: 60,
+      spentMinutes: 0,
+      refillCount: 0,
+      paymentMethod: 'bch',
+    }
+
+    it('refuses when auto-refill is not armed', async () => {
+      mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
+      mocks.readAutoRefillState.mockReturnValue(null)
+      const c = await connect()
+      const result = await c.callTool({ name: 'await_refill', arguments: {} })
+      expect(JSON.parse(text(result))).toEqual({
+        resumed: false,
+        reason: 'Auto-refill is not armed.',
+      })
+      expect(mocks.autoRefillTick).not.toHaveBeenCalled()
+    })
+
+    it('refuses when asked for a model other than the armed one', async () => {
+      mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
+      mocks.readAutoRefillState.mockReturnValue(armed)
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'await_refill',
+        arguments: { model: 'other/model' },
+      })
+      const body = JSON.parse(text(result))
+      expect(body.resumed).toBe(false)
+      expect(body.reason).toMatch(/armed for m/)
+      expect(mocks.autoRefillTick).not.toHaveBeenCalled()
+    })
+
+    it('returns immediately when credits are already active', async () => {
+      mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
+      mocks.readAutoRefillState.mockReturnValue(armed)
+      mocks.getWalletStatus.mockResolvedValue({})
+      mocks.hasActiveCredits.mockReturnValue(true)
+      mocks.summarizeCredits.mockReturnValue({ modelId: 'm', active: true })
+      const c = await connect()
+      const result = await c.callTool({ name: 'await_refill', arguments: {} })
+      expect(JSON.parse(text(result))).toMatchObject({
+        resumed: true,
+        alreadyActive: true,
+        model: 'm',
+      })
+      expect(mocks.autoRefillTick).not.toHaveBeenCalled()
+    })
+
+    it('triggers the armed refill and resumes once credits are active', async () => {
+      mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
+      mocks.readAutoRefillState.mockReturnValue(armed)
+      mocks.getWalletStatus.mockResolvedValue({})
+      mocks.hasActiveCredits.mockReturnValueOnce(false).mockReturnValue(true)
+      mocks.autoRefillTick.mockResolvedValue({
+        action: 'refilled',
+        state: { model: 'm', minutes: 15 },
+      })
+      mocks.summarizeCredits.mockReturnValue({ modelId: 'm', active: true })
+      const c = await connect()
+      const result = await c.callTool({ name: 'await_refill', arguments: {} })
+      expect(mocks.autoRefillTick).toHaveBeenCalled()
+      expect(JSON.parse(text(result))).toMatchObject({
+        resumed: true,
+        model: 'm',
+        refillTick: { action: 'refilled' },
+      })
+    })
+
+    it('does not attempt a refill when the wallet cannot sign', async () => {
+      mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: false })
+      mocks.readAutoRefillState.mockReturnValue(armed)
+      mocks.getWalletStatus.mockResolvedValue({})
+      mocks.hasActiveCredits.mockReturnValue(false)
+      mocks.summarizeCredits.mockReturnValue({ modelId: 'm', active: false })
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'await_refill',
+        arguments: { timeout_seconds: 1 },
+      })
+      expect(mocks.autoRefillTick).not.toHaveBeenCalled()
+      const body = JSON.parse(text(result))
+      expect(body.resumed).toBe(false)
+      expect(body.reason).toMatch(/cannot sign/i)
+    })
+  })
 })

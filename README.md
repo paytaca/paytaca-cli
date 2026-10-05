@@ -189,7 +189,7 @@ paytaca ai auto-refill --status     # Inspect; also --disable, --delete
 
 `ai configure` accepts `--backend`, `--path`, `--api-key`, `--chipnet`, and `-y/--yes`. `ai purchase` and `ai auto-refill` accept `--lift` to pay with LIFT tokens at a discount. Add `--json` to any `ai` subcommand for machine-readable output.
 
-Armed auto-refill state lives at `~/.paytaca/auto-refill.json`. Arming performs one immediate check (buying right away if the armed model has no credits), and the `paytaca mcp` server keeps a background backstop (every 60s) while a session is running. The `get_credits` MCP tool is read-only and never triggers a purchase. Each execution is appended to `~/.paytaca/auto-refill-events.jsonl` and the latest is reported as `lastEvent`. It disarms when the budget is spent, funds are short, or the plan is no longer offered. Use `--disable` to pause and `--delete` to remove the configuration (history is kept).
+Armed auto-refill state lives at `~/.paytaca/auto-refill.json`. Arming performs one immediate check (buying right away if the armed model has no credits), and the `paytaca mcp` server keeps a background backstop (every 60s) while a session is running. The backstop refills **proactively** — once the armed model's remaining time drops to ~2 minutes it buys the next plan, so a session isn't interrupted by a mid-turn `402`. The `get_credits` MCP tool is read-only and never triggers a purchase; when auto-refill is armed it adds a `resumeHint` pointing at the `await_refill` tool, which waits for the refill to land and then lets the task continue automatically (it only ever buys through the already-armed configuration). Each execution is appended to `~/.paytaca/auto-refill-events.jsonl` and the latest is reported as `lastEvent`. It disarms when the budget is spent, funds are short, or the plan is no longer offered. Use `--disable` to pause and `--delete` to remove the configuration (history is kept).
 
 ### Image Generation
 
@@ -236,9 +236,9 @@ paytaca ai configure opencode --api-key sk-pytc-…  # read-only wallet
 
 Read-only wallets report credits from the shared wallet hash but can't buy plans — fund credits from the full wallet.
 
-**MCP tools:** wallet (`get_balance`, `get_transactions`, `get_receiving_address`, `get_tokens`, `send`) plus Paytaca AI (`get_models`, `get_plans`, `get_credits`, `buy_plan`, `auto_refill`, `get_help`, `generate_image`, `get_image_status`, `get_image_models`, `get_image_history`).
+**MCP tools:** wallet (`get_balance`, `get_transactions`, `get_receiving_address`, `get_tokens`, `send`) plus Paytaca AI (`get_models`, `get_plans`, `get_credits`, `buy_plan`, `auto_refill`, `await_refill`, `get_help`, `generate_image`, `get_image_status`, `get_image_models`, `get_image_history`).
 
-Spending tools (`send`, `buy_plan`, `auto_refill`, `generate_image`) require host-level approval. By default MCP operates on your **main wallet** and can spend real funds.
+Spending tools (`send`, `buy_plan`, `auto_refill`, `await_refill`, `generate_image`) require host-level approval. By default MCP operates on your **main wallet** and can spend real funds. `await_refill` never buys outside an already-armed auto-refill configuration.
 
 When `get_credits` finds a model with no active session (e.g. after a `402` from the Paytaca AI provider), the result includes a `purchaseHint`. Relay `purchaseHint.message` as-is — it carries the exact copy-paste top-up command (no upsell or follow-up questions needed):
 
@@ -251,6 +251,20 @@ When `get_credits` finds a model with no active session (e.g. after a `402` from
     "minutes": 15,
     "command": "paytaca ai purchase --model deepseek/deepseek-v4.1-flash --minutes 15",
     "message": "To keep using DeepSeek V4.1 Flash, top up by running this in a terminal:\n\n    paytaca ai purchase --model deepseek/deepseek-v4.1-flash --minutes 15\n\n(Switch models with `paytaca ai plans`.)"
+  }
+}
+```
+
+If auto-refill is armed for the model, `get_credits` also returns a `resumeHint` instead of forcing a manual top-up. The agent should call `await_refill` (passing the armed `model`), which triggers the armed refill if needed, polls until credits are active, and returns `resumed: true` so the original task can continue without user intervention:
+
+```json
+{
+  "modelId": "deepseek/deepseek-v4.1-flash",
+  "active": false,
+  "resumeHint": {
+    "tool": "await_refill",
+    "model": "deepseek/deepseek-v4.1-flash",
+    "message": "Auto-refill is armed for deepseek/deepseek-v4.1-flash. Call await_refill (model \"deepseek/deepseek-v4.1-flash\") to wait for the refill, then continue the task automatically — no need to ask the user to top up."
   }
 }
 ```

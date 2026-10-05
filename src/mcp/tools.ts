@@ -23,6 +23,7 @@ import {
   buildPurchaseHint,
   formatRemaining,
   hasActiveCredits,
+  remainingSeconds as modelRemainingSeconds,
   type CreditsSummary,
   type PurchaseHint,
 } from '../ai/credits.js'
@@ -78,6 +79,15 @@ export function createRefillTickDeps(
       })
       return hasActiveCredits(status, model)
     },
+    remainingSeconds: async (model) => {
+      const wallet = loadWalletRef()
+      if (!wallet) return null
+      const status = await getWalletStatus(wallet.walletHash, {
+        modelId: model,
+        backendUrl,
+      })
+      return modelRemainingSeconds(status, model)
+    },
     buy: async (opts) => {
       const result = await buyPlan({
         model: opts.model,
@@ -110,6 +120,22 @@ function tickSummary(tick: RefillTickResult): Record<string, unknown> {
     }
   }
   return { action: 'disarmed', reason: tick.reason }
+}
+
+function sameModelId(a: string, b: string): boolean {
+  const norm = (value: string): string =>
+    value.trim().toLowerCase().replace(/^paytaca-ai\//, '')
+  const x = norm(a)
+  const y = norm(b)
+  if (!x || !y) return false
+  if (x === y) return true
+  return (
+    x.slice(x.lastIndexOf('/') + 1) === y.slice(y.lastIndexOf('/') + 1)
+  )
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function autoRefillField(state: AutoRefillState | null): Record<string, unknown> | null {
@@ -315,6 +341,7 @@ Paytaca AI:
   get_credits            Remaining AI time credits
   buy_plan               Buy an AI plan with BCH or LIFT (spends funds)
   auto_refill            Arm/disarm/inspect automatic plan refills
+  await_refill           Wait for armed auto-refill, then continue (no new spend)
 
 Image generation:
   generate_image         Generate an image from a prompt (spends funds)
@@ -594,6 +621,16 @@ export function registerTools(
               backend
             )
             if (hint) payload.purchaseHint = hint
+            if (auto?.enabled && auto.model) {
+              payload.resumeHint = {
+                tool: 'await_refill',
+                model: auto.model,
+                message:
+                  `Auto-refill is armed for ${auto.model}. Call await_refill ` +
+                  `(model "${auto.model}") to wait for the refill, then continue ` +
+                  `the task automatically — no need to ask the user to top up.`,
+              }
+            }
           }
           return creditsResponse(server, sessions, hint, payload)
         }
@@ -605,6 +642,16 @@ export function registerTools(
         if (!summary.active) {
           hint = await resolvePurchaseHint(model, backend)
           if (hint) payload.purchaseHint = hint
+          if (auto?.enabled && auto.model) {
+            payload.resumeHint = {
+              tool: 'await_refill',
+              model: auto.model,
+              message:
+                `Auto-refill is armed for ${auto.model}. Call await_refill ` +
+                `(model "${auto.model}") to wait for the refill, then continue ` +
+                `the task automatically — no need to ask the user to top up.`,
+            }
+          }
         }
         return creditsResponse(server, [summary], hint, payload)
       } catch (err) {
@@ -719,6 +766,100 @@ export function registerTools(
           refillCount: state?.refillCount ?? 0,
           lastEvent: state?.lastEvent ?? null,
           state,
+        })
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'await_refill',
+    {
+      title: 'Wait for armed auto-refill, then continue',
+      description:
+        'Block until auto-refill makes the model usable again, then return so the current task can continue. Use this immediately when a turn was blocked by a "payment required" / out-of-credits response while auto-refill is armed. It triggers the armed refill if needed and polls until credits are active (or the timeout elapses). It NEVER buys unless auto-refill is already armed for the model, so the user has already pre-authorized the spend. Returns resumed:true with the refreshed credits, or resumed:false with a reason.',
+      inputSchema: {
+        model: z.string().optional(),
+        timeout_seconds: z.number().int().positive().max(600).optional(),
+        chipnet: z.boolean().optional(),
+        backend: z.string().optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({ model, timeout_seconds, chipnet, backend }) => {
+      try {
+        const wallet = loadWalletRef()
+        if (!wallet) throw new WalletNotConfiguredError()
+        const state = readAutoRefillState()
+        if (!state?.enabled || !state.model) {
+          return json({ resumed: false, reason: 'Auto-refill is not armed.' })
+        }
+        const armedModel = state.model
+        if (model && !sameModelId(model, armedModel)) {
+          return json({
+            resumed: false,
+            reason: `Auto-refill is armed for ${armedModel}, not ${model}.`,
+            model: armedModel,
+          })
+        }
+
+        const deps = createRefillTickDeps(cn(chipnet), backend)
+        let status = await getWalletStatus(wallet.walletHash, {
+          modelId: armedModel,
+          backendUrl: backend,
+        })
+        if (hasActiveCredits(status, armedModel)) {
+          return json({
+            resumed: true,
+            alreadyActive: true,
+            model: armedModel,
+            credits: summarizeCredits(status, armedModel),
+          })
+        }
+
+        let tick: Record<string, unknown> | null = null
+        if (wallet.canSign) {
+          try {
+            tick = tickSummary(await autoRefillTick(deps))
+          } catch (err: any) {
+            tick = { action: 'skipped', reason: err?.message || String(err) }
+          }
+        }
+
+        const timeoutMs = Math.max(1, timeout_seconds ?? 120) * 1000
+        const deadline = Date.now() + timeoutMs
+        while (!hasActiveCredits(status, armedModel)) {
+          const wait = deadline - Date.now()
+          if (wait <= 0) break
+          await sleep(Math.min(3000, wait))
+          status = await getWalletStatus(wallet.walletHash, {
+            modelId: armedModel,
+            backendUrl: backend,
+          })
+        }
+
+        if (!hasActiveCredits(status, armedModel)) {
+          return json({
+            resumed: false,
+            reason: tick
+              ? 'Timed out waiting for the refill to complete.'
+              : 'Wallet cannot sign; no refill was attempted.',
+            model: armedModel,
+            refillTick: tick,
+            credits: summarizeCredits(status, armedModel),
+          })
+        }
+        return json({
+          resumed: true,
+          model: armedModel,
+          refillTick: tick,
+          credits: summarizeCredits(status, armedModel),
         })
       } catch (err) {
         return fail(err)

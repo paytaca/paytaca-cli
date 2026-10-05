@@ -31,6 +31,7 @@ describe('paytaca MCP server', () => {
     expect(names).toEqual(
       [
         'auto_refill',
+        'await_refill',
         'buy_plan',
         'get_balance',
         'get_credits',

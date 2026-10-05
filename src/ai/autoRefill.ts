@@ -147,6 +147,12 @@ export function autoRefillCanBuy(
 
 export const REFILL_COOLDOWN_MS = 5 * 60 * 1000
 
+// Top up proactively once the armed model's remaining credits fall to (or
+// below) this many seconds, instead of waiting for a zero balance. The
+// background loop runs every 60s, so this keeps a buffer that outlasts a
+// typical turn and prevents a mid-session 402 / "payment required" response.
+export const REFILL_LEAD_SECONDS = 120
+
 export interface RefillBuyOptions {
   model: string
   minutes: number
@@ -164,6 +170,7 @@ export interface RefillBuyResult {
 export interface RefillTickDeps {
   hasActiveCredits: (model: string) => Promise<boolean>
   buy: (opts: RefillBuyOptions) => Promise<RefillBuyResult>
+  remainingSeconds?: (model: string) => Promise<number | null>
   readState?: () => AutoRefillState | null
   writeState?: (state: AutoRefillState) => void
   appendEvent?: (event: RefillEvent) => void
@@ -230,13 +237,28 @@ export async function autoRefillTick(
     return disarmWithState(state, 'budget exhausted')
   }
 
-  let active: boolean
-  try {
-    active = await deps.hasActiveCredits(model)
-  } catch (err: any) {
-    return { action: 'skipped', reason: `credit check failed: ${err?.message || err}` }
+  // Prefer remaining-seconds awareness so we top up BEFORE the buffer empties
+  // (a mid-turn 402 is what forces the user to manually resume). Fall back to
+  // the binary active/zero check when remaining time is unavailable.
+  let remaining: number | null = null
+  if (deps.remainingSeconds) {
+    try {
+      remaining = await deps.remainingSeconds(model)
+    } catch (err: any) {
+      return { action: 'skipped', reason: `credit check failed: ${err?.message || err}` }
+    }
   }
-  if (active) return { action: 'idle' }
+  if (remaining !== null) {
+    if (remaining > REFILL_LEAD_SECONDS) return { action: 'idle' }
+  } else {
+    let active: boolean
+    try {
+      active = await deps.hasActiveCredits(model)
+    } catch (err: any) {
+      return { action: 'skipped', reason: `credit check failed: ${err?.message || err}` }
+    }
+    if (active) return { action: 'idle' }
+  }
 
   const fresh = read()
   if (!fresh || !fresh.enabled) return { action: 'idle' }

@@ -10,6 +10,7 @@ import {
   appendAutoRefillEvent,
   deleteAutoRefill,
   REFILL_COOLDOWN_MS,
+  REFILL_LEAD_SECONDS,
   type RefillBuyOptions,
   type RefillEvent,
   type RefillTickDeps,
@@ -87,6 +88,7 @@ describe('autoRefillTick', () => {
     initial: AutoRefillState | null,
     cfg: {
       active?: boolean
+      remaining?: number | null
       buyResult?: {
         success: boolean
         paid?: boolean
@@ -109,6 +111,9 @@ describe('autoRefillTick', () => {
       },
       now: () => NOW,
       hasActiveCredits: async () => cfg.active ?? false,
+      ...(cfg.remaining !== undefined
+        ? { remainingSeconds: async () => cfg.remaining ?? 0 }
+        : {}),
       buy: async (o) => {
         buys.push(o)
         return cfg.buyResult ?? { success: true, paid: true }
@@ -129,6 +134,43 @@ describe('autoRefillTick', () => {
     })
     expect(await autoRefillTick(h.deps)).toEqual({ action: 'idle' })
     expect(h.buys).toHaveLength(0)
+  })
+
+  it('refills proactively when remaining falls to the lead threshold', async () => {
+    const h = harness(state({ startedAt: new Date(NOW).toISOString() }), {
+      active: true,
+      remaining: REFILL_LEAD_SECONDS,
+    })
+    const result = await autoRefillTick(h.deps)
+    expect(h.buys).toHaveLength(1)
+    expect(result).toMatchObject({ action: 'refilled' })
+  })
+
+  it('waits while remaining is above the lead threshold', async () => {
+    const h = harness(state({ startedAt: new Date(NOW).toISOString() }), {
+      active: true,
+      remaining: REFILL_LEAD_SECONDS + 1,
+    })
+    expect(await autoRefillTick(h.deps)).toEqual({ action: 'idle' })
+    expect(h.buys).toHaveLength(0)
+  })
+
+  it('refills when remaining time is zero', async () => {
+    const h = harness(state({ startedAt: new Date(NOW).toISOString() }), {
+      active: true,
+      remaining: 0,
+    })
+    expect((await autoRefillTick(h.deps)).action).toBe('refilled')
+    expect(h.buys).toHaveLength(1)
+  })
+
+  it('skips without disarming when the remaining check errors', async () => {
+    const h = harness(state({ startedAt: new Date(NOW).toISOString() }))
+    h.deps.remainingSeconds = async () => {
+      throw new Error('offline')
+    }
+    expect(await autoRefillTick(h.deps)).toMatchObject({ action: 'skipped' })
+    expect(h.current()?.enabled).toBe(true)
   })
 
   it('buys the armed plan when credits run out', async () => {
