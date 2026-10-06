@@ -4,9 +4,14 @@ import {
   getSessions,
   findSession,
   hasActiveCredits,
+  hasPaygBalance,
+  hasUsableCredits,
+  paygBalanceUsd,
+  paygEnabled,
   summarizeCredits,
   summarizeAllCredits,
   buildPurchaseHint,
+  PAYG_MIN_BALANCE_USD,
 } from './credits.js'
 
 function status(sessions: WalletStatus[]): WalletStatus {
@@ -163,5 +168,50 @@ describe('buildPurchaseHint', () => {
   it('returns null when there are no usable tiers', () => {
     expect(buildPurchaseHint({ id: 'm', price_tiers: [] })).toBeNull()
     expect(buildPurchaseHint({ id: 'm', price_tiers: [{ minutes: 0, price_sats: 0 }] })).toBeNull()
+  })
+})
+
+const payg = (over: Partial<WalletStatus> = {}): WalletStatus =>
+  ({ sessions: [], payg_enabled: true, balance_usd: 5, ...over } as unknown as WalletStatus)
+
+describe('paygEnabled', () => {
+  it('is true only when the flag is set', () => {
+    expect(paygEnabled(payg())).toBe(true)
+    expect(paygEnabled(payg({ payg_enabled: false }))).toBe(false)
+    expect(paygEnabled(null)).toBe(false)
+  })
+})
+
+describe('paygBalanceUsd', () => {
+  it('returns the numeric balance', () => {
+    expect(paygBalanceUsd(payg({ balance_usd: 3.5 }))).toBe(3.5)
+  })
+
+  it('returns 0 for missing or non-positive balances', () => {
+    expect(paygBalanceUsd(payg({ balance_usd: 0 }))).toBe(0)
+    expect(paygBalanceUsd(payg({ balance_usd: -1 }))).toBe(0)
+    expect(paygBalanceUsd(null)).toBe(0)
+  })
+})
+
+describe('hasPaygBalance', () => {
+  it('compares against the minimum threshold', () => {
+    expect(hasPaygBalance(payg({ balance_usd: PAYG_MIN_BALANCE_USD }))).toBe(true)
+    expect(hasPaygBalance(payg({ balance_usd: PAYG_MIN_BALANCE_USD * 0.5 }))).toBe(false)
+  })
+})
+
+describe('hasUsableCredits', () => {
+  it('is true with plan credits', () => {
+    expect(hasUsableCredits(status([active]))).toBe(true)
+  })
+
+  it('is true with only a payg balance', () => {
+    expect(hasUsableCredits(payg())).toBe(true)
+  })
+
+  it('is false with neither', () => {
+    expect(hasUsableCredits(status([expired]))).toBe(false)
+    expect(hasUsableCredits(payg({ balance_usd: 0 }))).toBe(false)
   })
 })

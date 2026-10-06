@@ -33,8 +33,10 @@ import {
   summarizeAllCredits,
   getSessions,
   formatRemaining,
+  paygBalanceUsd,
+  paygEnabled,
 } from '../ai/credits.js'
-import { buyPlan, type PaymentMethod } from '../ai/purchase.js'
+import { buyPlan, topUpBalance, type PaymentMethod } from '../ai/purchase.js'
 import {
   listImageModels,
   getImageHistory,
@@ -172,7 +174,7 @@ function printPlans(config: AiConfig, modelQuery?: string): void {
 }
 
 export function registerAiCommands(program: Command): void {
-  const ai = program.command('ai').description('Paytaca AI: models, plans, credits, purchase')
+  const ai = program.command('ai').description('Paytaca AI: models, plans, credits, purchase, top-up')
 
   // ── ai configure ────────────────────────────────────────────────────
   ai.command('configure')
@@ -544,8 +546,9 @@ export function registerAiCommands(program: Command): void {
 
   // ── ai balance ──────────────────────────────────────────────────────
   ai.command('balance')
-    .description('Show wallet balance available for AI plan purchases (BCH + LIFT)')
+    .description('Show wallet funds for AI purchases (BCH + LIFT) and prepaid AI balance')
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
+    .option('--backend <url>', 'Override backend URL')
     .option('--json', 'Output as JSON')
     .action(async (opts) => {
       const isChipnet = Boolean(opts.chipnet)
@@ -553,6 +556,22 @@ export function registerAiCommands(program: Command): void {
         const balance = await getBalanceView(isChipnet)
         const tokens = await getTokenBalances(isChipnet)
         const lift = tokens.tokens.find((t) => t.category === LIFT_TOKEN_ID)
+
+        let aiBalanceUsd: number | null = null
+        let payg = false
+        const wallet = loadWalletRef()
+        if (wallet) {
+          try {
+            const status = await getWalletStatus(wallet.walletHash, {
+              backendUrl: opts.backend,
+            })
+            payg = paygEnabled(status)
+            aiBalanceUsd = paygBalanceUsd(status)
+          } catch {
+            // Prepaid balance is best-effort; wallet funds alone are still useful.
+          }
+        }
+
         if (opts.json) {
           outputJson({
             network: balance.network,
@@ -570,10 +589,14 @@ export function registerAiCommands(program: Command): void {
                   rawBalance: lift.rawBalance,
                 }
               : null,
+            ai: {
+              payg_enabled: payg,
+              balance_usd: aiBalanceUsd,
+            },
           })
           return
         }
-        console.log(chalk.bold(`\n   Funds for AI Plans (${balance.network})\n`))
+        console.log(chalk.bold(`\n   Funds for AI (${balance.network})\n`))
         console.log(`   BCH:   ${balance.spendableBch} BCH ${chalk.dim(`(${formatSats(balance.spendableSats)} sats)`)}`)
         if (balance.usd !== null) {
           console.log(chalk.dim(`          ≈ ${formatUsd(balance.usd)}`))
@@ -582,6 +605,13 @@ export function registerAiCommands(program: Command): void {
           console.log(`   LIFT:  ${lift.displayBalance} ${lift.symbol || 'LIFT'}`)
         } else {
           console.log(chalk.dim('   LIFT:  none'))
+        }
+        if (aiBalanceUsd !== null) {
+          console.log(
+            `   AI:    ${formatUsd(aiBalanceUsd)} ${chalk.dim(
+              payg ? '(pay-as-you-go balance)' : '(pay-as-you-go unavailable)'
+            )}`
+          )
         }
         console.log()
       } catch (err: any) {
@@ -702,6 +732,117 @@ export function registerAiCommands(program: Command): void {
       if (result.timeRemainingSeconds !== undefined) {
         console.log(chalk.dim(`   Credits remaining: ${formatRemaining(result.timeRemainingSeconds)}`))
       }
+      console.log()
+    })
+
+  // ── ai topup ────────────────────────────────────────────────────────
+  ai.command('topup')
+    .description('Add prepaid balance for pay-as-you-go AI usage (x402 payment with BCH or LIFT)')
+    .option('--amount <usd>', 'Amount in USD to add (defaults to the smallest preset)')
+    .option('--lift', 'Pay with LIFT tokens (discount) instead of BCH')
+    .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
+    .option('--backend <url>', 'Override backend URL')
+    .option('-y, --yes', 'Skip confirmation prompt')
+    .option('--json', 'Output as JSON')
+    .action(async (opts) => {
+      const paymentMethod: PaymentMethod = opts.lift ? 'lift' : 'bch'
+      const json = Boolean(opts.json)
+      const amountUsd = opts.amount !== undefined ? Number(opts.amount) : undefined
+
+      if (
+        amountUsd !== undefined &&
+        (!Number.isFinite(amountUsd) || amountUsd <= 0)
+      ) {
+        if (json) outputJson({ error: 'Amount must be a positive number of USD.' })
+        else console.log(chalk.red('\nError: Amount must be a positive number of USD.\n'))
+        process.exitCode = 1
+        return
+      }
+
+      const quote = await topUpBalance({
+        amountUsd,
+        paymentMethod,
+        isChipnet: Boolean(opts.chipnet),
+        backendUrl: opts.backend,
+        confirmed: false,
+      })
+
+      if (quote.status !== 402 && !quote.success) {
+        if (json) outputJson(quote)
+        else console.log(chalk.red(`\n   Error: ${quote.error || 'Top-up failed.'}\n`))
+        process.exitCode = 1
+        return
+      }
+
+      const effectiveUsd = quote.amountUsd ?? amountUsd ?? null
+      const priceSats = quote.priceSats ?? 0
+
+      if (json && !opts.yes) {
+        outputJson({
+          error: 'Payment not confirmed. Re-run with --yes to execute.',
+          amountUsd: effectiveUsd,
+          priceSats,
+          paymentMethod,
+          recipientAddress: quote.recipientAddress,
+          topupPresets: quote.topupPresets,
+          minTopupUsd: quote.minTopupUsd,
+          currentBalanceUsd: quote.balanceUsd,
+        })
+        process.exitCode = 1
+        return
+      }
+
+      const confirmed =
+        Boolean(opts.yes) ||
+        (json
+          ? false
+          : await promptConfirmation(
+              `Add ${
+                effectiveUsd !== null ? `$${effectiveUsd}` : 'balance'
+              } to your Paytaca AI balance for ${(priceSats / 1e8).toFixed(8)} BCH${
+                paymentMethod === 'lift' ? ' (paid with LIFT)' : ''
+              }?`
+            ))
+
+      if (!confirmed) {
+        if (json) outputJson({ error: 'Payment rejected by user.' })
+        else console.log(chalk.dim('\n   Top-up cancelled.\n'))
+        process.exitCode = 1
+        return
+      }
+
+      const result = await topUpBalance({
+        amountUsd,
+        paymentMethod,
+        isChipnet: Boolean(opts.chipnet),
+        backendUrl: opts.backend,
+        confirmed: true,
+      })
+
+      if (json) {
+        outputJson(result)
+        if (!result.success) process.exitCode = 1
+        return
+      }
+
+      if (!result.success) {
+        console.log(chalk.red(`\n   Error: ${result.error || 'Top-up failed.'}\n`))
+        process.exitCode = 1
+        return
+      }
+      if (!result.paid) {
+        console.log(chalk.yellow(`\n   ${result.error || 'No top-up made.'}\n`))
+        return
+      }
+      console.log(
+        chalk.green(
+          `\n   Balance topped up${result.amountUsd != null ? ` by $${result.amountUsd}` : ''}.`
+        )
+      )
+      if (result.balanceUsd != null) {
+        console.log(`   New AI balance: ${formatUsd(result.balanceUsd)}`)
+      }
+      if (result.txid) console.log(`   txid: ${result.txid}`)
       console.log()
     })
 

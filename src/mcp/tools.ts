@@ -22,12 +22,14 @@ import {
   summarizeAllCredits,
   buildPurchaseHint,
   formatRemaining,
-  hasActiveCredits,
+  hasUsableCredits,
+  paygBalanceUsd,
+  paygEnabled,
   remainingSeconds as modelRemainingSeconds,
   type CreditsSummary,
   type PurchaseHint,
 } from '../ai/credits.js'
-import { buyPlan } from '../ai/purchase.js'
+import { buyPlan, topUpBalance } from '../ai/purchase.js'
 import {
   generateImage,
   getImageHistory,
@@ -84,7 +86,7 @@ export function createRefillTickDeps(
         modelId: model,
         backendUrl,
       })
-      return hasActiveCredits(status, model)
+      return hasUsableCredits(status, model)
     },
     remainingSeconds: async (model) => {
       const wallet = loadWalletRef()
@@ -345,8 +347,9 @@ Wallet (spend):
 Paytaca AI:
   get_models             List AI models
   get_plans              Plan pricing per AI model
-  get_credits            Remaining AI time credits
+  get_credits            Remaining AI time credits + pay-as-you-go balance
   buy_plan               Buy an AI plan with BCH or LIFT (spends funds)
+  topup                  Add pay-as-you-go AI balance with BCH or LIFT (spends funds)
   auto_refill            Arm/disarm/inspect automatic plan refills
   await_refill           Wait for armed auto-refill, then continue (no new spend)
 
@@ -364,10 +367,13 @@ Video generation:
 
 Notes:
   - All tools accept an optional "chipnet" flag (default mainnet).
-  - send, buy_plan, generate_image, and generate_video spend real funds from
-    the active wallet; the MCP host is responsible for asking the user for
+  - send, buy_plan, topup, generate_image, and generate_video spend real funds
+    from the active wallet; the MCP host is responsible for asking the user for
     approval before invoking them.
-  - When get_credits reports an inactive session it includes a purchaseHint.
+  - get_credits reports a pay-as-you-go "balance_usd" alongside plan sessions.
+    When the balance covers usage, no purchaseHint is returned: the model is
+    already usable, so just continue the task.
+  - When get_credits reports no usable credits it includes a purchaseHint.
     Relay purchaseHint.message (it contains the exact copy-paste command to
     buy more time); do not replace it with upsell or "what next" questions.
   - Wallet is resolved from the OS keychain (run "paytaca wallet create" first).`
@@ -624,11 +630,15 @@ export function registerTools(
         const auto = readAutoRefillState()
         if (!model) {
           const sessions = summarizeAllCredits(status)
-          const payload: Record<string, unknown> = { sessions }
+          const payload: Record<string, unknown> = {
+            sessions,
+            balance_usd: paygBalanceUsd(status),
+            payg_enabled: paygEnabled(status),
+          }
           const autoField = autoRefillField(auto)
           if (autoField) payload.autoRefill = autoField
           let hint: PurchaseHint | null = null
-          if (!sessions.some((s) => s.active)) {
+          if (!hasUsableCredits(status)) {
             hint = await resolvePurchaseHint(
               sessions[0]?.modelId ?? undefined,
               backend
@@ -648,11 +658,15 @@ export function registerTools(
           return creditsResponse(server, sessions, hint, payload)
         }
         const summary = summarizeCredits(status, model)
-        const payload: Record<string, unknown> = { ...summary }
+        const payload: Record<string, unknown> = {
+          ...summary,
+          balance_usd: paygBalanceUsd(status),
+          payg_enabled: paygEnabled(status),
+        }
         const autoField = autoRefillField(auto)
         if (autoField) payload.autoRefill = autoField
         let hint: PurchaseHint | null = null
-        if (!summary.active) {
+        if (!hasUsableCredits(status, model)) {
           hint = await resolvePurchaseHint(model, backend)
           if (hint) payload.purchaseHint = hint
           if (auto?.enabled && auto.model) {
@@ -699,6 +713,42 @@ export function registerTools(
           await buyPlan({
             model,
             minutes,
+            paymentMethod: payment_method ?? 'bch',
+            isChipnet: cn(chipnet),
+            backendUrl: backend,
+            confirmed: true,
+          })
+        )
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'topup',
+    {
+      title: 'Top up AI balance',
+      description:
+        'Add prepaid USD balance for pay-as-you-go AI usage, paying with BCH or LIFT via x402. This is an alternative to buying a model-locked plan: the balance is charged per prompt by actual usage and works across all models. SPENDS REAL FUNDS. The MCP host must obtain user approval before calling this.',
+      inputSchema: {
+        amount_usd: z.number().positive().optional(),
+        payment_method: z.enum(['bch', 'lift']).optional(),
+        chipnet: z.boolean().optional(),
+        backend: z.string().optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({ amount_usd, payment_method, chipnet, backend }) => {
+      try {
+        return json(
+          await topUpBalance({
+            amountUsd: amount_usd,
             paymentMethod: payment_method ?? 'bch',
             isChipnet: cn(chipnet),
             backendUrl: backend,
@@ -827,7 +877,7 @@ export function registerTools(
           modelId: armedModel,
           backendUrl: backend,
         })
-        if (hasActiveCredits(status, armedModel)) {
+        if (hasUsableCredits(status, armedModel)) {
           return json({
             resumed: true,
             alreadyActive: true,
@@ -847,7 +897,7 @@ export function registerTools(
 
         const timeoutMs = Math.max(1, timeout_seconds ?? 120) * 1000
         const deadline = Date.now() + timeoutMs
-        while (!hasActiveCredits(status, armedModel)) {
+        while (!hasUsableCredits(status, armedModel)) {
           const wait = deadline - Date.now()
           if (wait <= 0) break
           await sleep(Math.min(3000, wait))
@@ -857,7 +907,7 @@ export function registerTools(
           })
         }
 
-        if (!hasActiveCredits(status, armedModel)) {
+        if (!hasUsableCredits(status, armedModel)) {
           return json({
             resumed: false,
             reason: tick

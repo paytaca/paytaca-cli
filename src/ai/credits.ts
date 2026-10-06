@@ -106,6 +106,31 @@ export function hasActiveCredits(
   return candidates.some(sessionActive)
 }
 
+export const PAYG_MIN_BALANCE_USD = 0.001
+
+export function paygEnabled(status: WalletStatus | null): boolean {
+  return status?.payg_enabled === true
+}
+
+export function paygBalanceUsd(status: WalletStatus | null): number {
+  const value = Number(status?.balance_usd)
+  return Number.isFinite(value) && value > 0 ? value : 0
+}
+
+export function hasPaygBalance(
+  status: WalletStatus | null,
+  min: number = PAYG_MIN_BALANCE_USD
+): boolean {
+  return paygEnabled(status) && paygBalanceUsd(status) >= min
+}
+
+export function hasUsableCredits(
+  status: WalletStatus | null,
+  modelId?: string
+): boolean {
+  return hasActiveCredits(status, modelId) || hasPaygBalance(status)
+}
+
 export function remainingSeconds(
   status: WalletStatus | null,
   modelId?: string

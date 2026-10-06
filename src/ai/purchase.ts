@@ -32,6 +32,7 @@ import {
   type AiConfig,
   type AiModelConfig,
   type PriceTier,
+  type TopupQuote,
 } from './client.js'
 import { LIFT_TOKEN_ID, resolveBackendUrl, apiUrl } from './config.js'
 import { selectModel, selectTier, formatDuration } from './models.js'
@@ -309,6 +310,32 @@ async function payWithLift(
   return { txid: data.txid, vout }
 }
 
+export async function payRequirements(
+  ctx: WalletContext,
+  hdWallet: LibauthHDWallet,
+  requirements: PaymentRequirements,
+  paymentMethod: PaymentMethod,
+  isChipnet: boolean
+): Promise<{ txid: string; vout: number }> {
+  const changeAddress = ctx.bch.getAddressSetAt(0).change
+  if (paymentMethod === 'lift') {
+    return payWithLift(ctx, hdWallet, requirements, changeAddress, isChipnet)
+  }
+  if (!isValidBchAddress(requirements.payTo, isChipnet)) {
+    throw new Error('Server returned an invalid BCH payment address.')
+  }
+  const amountBch = Number(requirements.amount) / 1e8
+  const sendResult = await ctx.bch.sendBch(
+    amountBch,
+    requirements.payTo,
+    changeAddress
+  )
+  if (!sendResult.success || !sendResult.txid) {
+    throw new Error(sendResult.error || 'Transaction broadcast failed.')
+  }
+  return { txid: sendResult.txid, vout: 0 }
+}
+
 function resolveModelTier(
   config: AiConfig,
   modelQuery: string,
@@ -502,45 +529,18 @@ export async function buyPlan(opts: BuyPlanOptions): Promise<BuyPlanResult> {
     }
   }
 
-  const changeAddress = ctx.bch.getAddressSetAt(0).change
   let txid: string
   let vout = 0
   try {
-    if (paymentMethod === 'lift') {
-      const result = await payWithLift(
-        ctx,
-        hdWallet,
-        requirements,
-        changeAddress,
-        isChipnet
-      )
-      txid = result.txid
-      vout = result.vout
-    } else {
-      if (!isValidBchAddress(requirements.payTo, isChipnet)) {
-        return {
-          success: false,
-          paid: false,
-          status: 402,
-          error: 'Server returned an invalid BCH payment address.',
-        }
-      }
-      const amountBch = Number(requirements.amount) / 1e8
-      const sendResult = await ctx.bch.sendBch(
-        amountBch,
-        requirements.payTo,
-        changeAddress
-      )
-      if (!sendResult.success || !sendResult.txid) {
-        return {
-          success: false,
-          paid: false,
-          status: 402,
-          error: sendResult.error || 'Transaction broadcast failed.',
-        }
-      }
-      txid = sendResult.txid
-    }
+    const paid = await payRequirements(
+      ctx,
+      hdWallet,
+      requirements,
+      paymentMethod,
+      isChipnet
+    )
+    txid = paid.txid
+    vout = paid.vout
   } catch (err: any) {
     return { success: false, paid: false, status: 402, error: err?.message || String(err) }
   }
@@ -612,6 +612,249 @@ export async function buyPlan(opts: BuyPlanOptions): Promise<BuyPlanResult> {
     status: retryResponse.status,
     sessionActivated,
     timeRemainingSeconds,
+    data: retryData,
+    error: retryResponse.ok
+      ? undefined
+      : `Payment broadcast (txid ${txid}) but the backend returned ${retryResponse.status}.`,
+  }
+}
+
+export interface TopUpOptions {
+  amountUsd?: number
+  paymentMethod?: PaymentMethod
+  isChipnet?: boolean
+  confirmed?: boolean
+  backendUrl?: string
+}
+
+export interface TopUpResult {
+  success: boolean
+  paid: boolean
+  amountUsd?: number
+  balanceUsd?: number
+  topupPresets?: number[]
+  minTopupUsd?: number
+  priceSats?: number
+  paymentMethod?: PaymentMethod
+  txid?: string
+  recipientAddress?: string
+  status?: number
+  data?: unknown
+  error?: string
+}
+
+function buildTopupRequest(
+  baseUrl: string,
+  walletHash: string,
+  amountUsd: number | undefined,
+  paymentMethod: PaymentMethod
+): BuildPlanRequest {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Wallet-Hash': walletHash,
+  }
+  if (amountUsd !== undefined) headers['X-Topup-Usd'] = String(amountUsd)
+  if (paymentMethod === 'lift') headers['X-Payment-Method'] = 'lift'
+
+  const payload: Record<string, unknown> = { payment_method: paymentMethod }
+  if (amountUsd !== undefined) payload.amount_usd = amountUsd
+
+  return {
+    url: `${apiUrl(baseUrl, '/v1/wallet/topup')}?wallet_hash=${encodeURIComponent(
+      walletHash
+    )}`,
+    headers,
+    body: JSON.stringify(payload),
+  }
+}
+
+export async function topUpBalance(opts: TopUpOptions): Promise<TopUpResult> {
+  const paymentMethod: PaymentMethod =
+    opts.paymentMethod === 'lift' ? 'lift' : 'bch'
+  const isChipnet = Boolean(opts.isChipnet)
+  const baseUrl = resolveBackendUrl(opts.backendUrl)
+
+  const parsedAmount = Number(opts.amountUsd)
+  const amountUsd =
+    opts.amountUsd !== undefined &&
+    Number.isFinite(parsedAmount) &&
+    parsedAmount > 0
+      ? parsedAmount
+      : undefined
+
+  let ctx: WalletContext
+  try {
+    ctx = requireWallet(isChipnet)
+  } catch (err: any) {
+    return { success: false, paid: false, error: err?.message || String(err) }
+  }
+
+  const hdWallet = new LibauthHDWallet(
+    ctx.mnemonic,
+    BCH_DERIVATION_PATH,
+    isChipnet ? 'chipnet' : 'mainnet'
+  )
+  const x402Payer = new X402Payer({ hdWallet, addressIndex: 0 })
+  const { url, headers, body } = buildTopupRequest(
+    baseUrl,
+    ctx.walletHash,
+    amountUsd,
+    paymentMethod
+  )
+
+  let firstResponse: Response
+  try {
+    firstResponse = await fetch(url, {
+      method: 'POST',
+      headers,
+      body,
+      signal: AbortSignal.timeout(120000),
+    })
+  } catch (err: any) {
+    return { success: false, paid: false, error: `Request failed: ${err?.message || err}` }
+  }
+
+  const firstText = await firstResponse.text()
+  let firstData: any
+  try {
+    firstData = JSON.parse(firstText)
+  } catch {
+    firstData = firstText
+  }
+
+  const quote: TopupQuote | null =
+    firstData && typeof firstData === 'object' ? (firstData as TopupQuote) : null
+
+  if (firstResponse.status !== 402) {
+    return {
+      success: firstResponse.ok,
+      paid: false,
+      amountUsd: quote?.topup_amount_usd ?? amountUsd,
+      balanceUsd: quote?.balance_usd,
+      topupPresets: quote?.topup_presets,
+      minTopupUsd: quote?.min_topup_usd,
+      paymentMethod,
+      status: firstResponse.status,
+      data: firstData,
+      error: firstResponse.ok
+        ? undefined
+        : (firstData as any)?.error || `Unexpected response (${firstResponse.status}).`,
+    }
+  }
+
+  const paymentRequired = parsePaymentRequiredJson(firstData)
+  if (!paymentRequired) {
+    return {
+      success: false,
+      paid: false,
+      status: 402,
+      error: 'Could not parse PaymentRequired from 402 response body.',
+    }
+  }
+  const requirements = selectBchPaymentRequirements(
+    paymentRequired,
+    isChipnet ? 'chipnet' : 'mainnet'
+  )
+  if (!requirements) {
+    return {
+      success: false,
+      paid: false,
+      status: 402,
+      error: 'Server does not accept BCH payment for balance top-ups.',
+    }
+  }
+
+  const effectiveUsd = quote?.topup_amount_usd
+  const priceSats = Number(requirements.amount) || 0
+
+  if (!opts.confirmed) {
+    return {
+      success: false,
+      paid: false,
+      status: 402,
+      amountUsd: effectiveUsd ?? amountUsd,
+      balanceUsd: quote?.balance_usd,
+      topupPresets: quote?.topup_presets,
+      minTopupUsd: quote?.min_topup_usd,
+      priceSats,
+      paymentMethod,
+      recipientAddress: requirements.payTo,
+      error: 'Payment not confirmed.',
+    }
+  }
+
+  let txid: string
+  let vout = 0
+  try {
+    const paid = await payRequirements(
+      ctx,
+      hdWallet,
+      requirements,
+      paymentMethod,
+      isChipnet
+    )
+    txid = paid.txid
+    vout = paid.vout
+  } catch (err: any) {
+    return { success: false, paid: false, status: 402, error: err?.message || String(err) }
+  }
+
+  const paymentPayload = await x402Payer.createPaymentPayload(
+    requirements,
+    paymentRequired.resource.url,
+    txid,
+    vout,
+    requirements.amount
+  )
+  const retryHeaders = {
+    ...headers,
+    'PAYMENT-SIGNATURE': JSON.stringify(paymentPayload),
+  }
+
+  let retryResponse: Response
+  try {
+    retryResponse = await fetch(url, {
+      method: 'POST',
+      headers: retryHeaders,
+      body,
+      signal: AbortSignal.timeout(120000),
+    })
+  } catch (err: any) {
+    return {
+      success: true,
+      paid: true,
+      amountUsd: effectiveUsd ?? amountUsd,
+      paymentMethod,
+      txid,
+      recipientAddress: requirements.payTo,
+      priceSats,
+      error: `Payment was broadcast but the response timed out: ${err?.message || err}. Check your balance with \`paytaca ai balance\`.`,
+    }
+  }
+
+  const retryText = await retryResponse.text()
+  let retryData: any
+  try {
+    retryData = JSON.parse(retryText)
+  } catch {
+    retryData = retryText
+  }
+
+  const creditedUsd =
+    retryData && typeof retryData === 'object' ? retryData.amount_usd : undefined
+  const newBalance =
+    retryData && typeof retryData === 'object' ? retryData.balance_usd : undefined
+
+  return {
+    success: retryResponse.ok,
+    paid: true,
+    amountUsd: creditedUsd ?? effectiveUsd ?? amountUsd,
+    balanceUsd: newBalance,
+    paymentMethod,
+    txid,
+    recipientAddress: requirements.payTo,
+    priceSats,
+    status: retryResponse.status,
     data: retryData,
     error: retryResponse.ok
       ? undefined

@@ -32,9 +32,12 @@ import {
 import {
   formatRemaining,
   getSessions,
+  paygBalanceUsd,
+  paygEnabled,
 } from '../ai/credits.js'
 import {
   buyPlan,
+  topUpBalance as executeTopupBalance,
   type PaymentMethod,
 } from '../ai/purchase.js'
 import {
@@ -113,6 +116,10 @@ export interface WebDeps {
   purchasePlan(opts: {
     model: string
     minutes: number
+    method: string
+  }): Promise<object>
+  topUpBalance(opts: {
+    amountUsd?: number
     method: string
   }): Promise<object>
   quoteLiftNeeded(opts: { sats: number }): Promise<object>
@@ -229,6 +236,8 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
           : null,
         usage: sessions,
         plans,
+        aiBalanceUsd: paygBalanceUsd(status),
+        paygEnabled: paygEnabled(status),
         liftDiscountPercent: config.lift_payment_discount_percent ?? 0,
         autoRefill: autoRefill
           ? { ...autoRefill, remainingMinutes: remainingBudget(autoRefill) }
@@ -334,6 +343,16 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
       return buyPlan({
         model: opts.model,
         minutes: opts.minutes,
+        paymentMethod: (opts.method as PaymentMethod) || 'bch',
+        isChipnet,
+        backendUrl,
+        confirmed: true,
+      })
+    },
+
+    async topUpBalance(opts) {
+      return executeTopupBalance({
+        amountUsd: opts.amountUsd,
         paymentMethod: (opts.method as PaymentMethod) || 'bch',
         isChipnet,
         backendUrl,
@@ -799,6 +818,27 @@ export async function startWebServer(
         if (!Number.isFinite(minutes) || minutes <= 0) return json(res, 400, { error: 'Invalid minutes' })
         if (method !== 'bch' && method !== 'lift') return json(res, 400, { error: 'Method must be "bch" or "lift"' })
         const result = await deps.purchasePlan({ model, minutes, method })
+        return json(res, 200, result)
+      }
+
+      if (pathname === '/api/ai/topup' && req.method === 'POST') {
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
+        if (req.headers['content-type'] !== 'application/json') {
+          return json(res, 400, { error: 'Content-Type must be application/json' })
+        }
+        const body = await readBody(req)
+        const method = String(body.method || 'bch')
+        if (method !== 'bch' && method !== 'lift') {
+          return json(res, 400, { error: 'Method must be "bch" or "lift"' })
+        }
+        let amountUsd: number | undefined
+        if (body.amount != null && body.amount !== '') {
+          amountUsd = Number(body.amount)
+          if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+            return json(res, 400, { error: 'Invalid amount' })
+          }
+        }
+        const result = await deps.topUpBalance({ amountUsd, method })
         return json(res, 200, result)
       }
 

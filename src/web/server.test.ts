@@ -70,6 +70,9 @@ function fakeDeps(): WebDeps {
     }),
     swapExecute: async () => ({ success: true, txid: 'swap123' }),
     purchasePlan: async () => ({ success: true, paid: true, txid: 'pay123' }),
+    topUpBalance: async (opts) => ({
+      success: true, paid: true, amountUsd: opts.amountUsd ?? 1, balanceUsd: 5, txid: 'top123',
+    }),
     quoteLiftNeeded: async (opts) => ({
       sats: opts.sats, rawAmount: '6409000', display: '6.409', symbol: 'LIFT', decimals: 6,
     }),

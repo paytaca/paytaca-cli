@@ -20,7 +20,9 @@ const mocks = vi.hoisted(() => ({
   summarizeCredits: vi.fn(),
   summarizeAllCredits: vi.fn(),
   hasActiveCredits: vi.fn(),
+  hasUsableCredits: vi.fn(),
   buyPlan: vi.fn(),
+  topUpBalance: vi.fn(),
   generateImage: vi.fn(),
   getImageHistory: vi.fn(),
   getImageOrderStatus: vi.fn(),
@@ -75,11 +77,13 @@ vi.mock('../ai/credits.js', async (importOriginal) => {
     summarizeCredits: mocks.summarizeCredits,
     summarizeAllCredits: mocks.summarizeAllCredits,
     hasActiveCredits: mocks.hasActiveCredits,
+    hasUsableCredits: mocks.hasUsableCredits,
   }
 })
 
 vi.mock('../ai/purchase.js', () => ({
   buyPlan: mocks.buyPlan,
+  topUpBalance: mocks.topUpBalance,
 }))
 
 vi.mock('../ai/images.js', () => ({
@@ -131,6 +135,7 @@ function goodAddress(address: string): boolean {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.hasUsableCredits.mockReset()
   mocks.isValidBchAddress.mockImplementation(goodAddress)
 })
 
@@ -734,6 +739,8 @@ describe('MCP tools', () => {
       })
       expect(JSON.parse(text(result))).toEqual({
         sessions: [{ modelId: 'm', active: true }],
+        balance_usd: 0,
+        payg_enabled: false,
       })
       expect(result.structuredContent).toBeUndefined()
     })
@@ -767,6 +774,8 @@ describe('MCP tools', () => {
             tokenLimit: 500000,
           },
         ],
+        balance_usd: 0,
+        payg_enabled: false,
       })
     })
 
@@ -783,6 +792,8 @@ describe('MCP tools', () => {
       expect(text(result)).toContain('| Model M | active |')
       expect(result.structuredContent).toEqual({
         sessions: [{ modelId: 'm', displayName: 'Model M', active: true, timeRemainingSeconds: 60 }],
+        balance_usd: 0,
+        payg_enabled: false,
       })
     })
 
@@ -809,13 +820,19 @@ describe('MCP tools', () => {
       mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
       mocks.getWalletStatus.mockResolvedValue({})
       mocks.summarizeCredits.mockReturnValue({ modelId: 'm', active: true })
+      mocks.hasUsableCredits.mockReturnValue(true)
       const c = await connect()
       const result = await c.callTool({
         name: 'get_credits',
         arguments: { model: 'm' },
       })
       expect(mocks.summarizeCredits).toHaveBeenCalledWith({}, 'm')
-      expect(JSON.parse(text(result))).toEqual({ modelId: 'm', active: true })
+      expect(JSON.parse(text(result))).toEqual({
+        modelId: 'm',
+        active: true,
+        balance_usd: 0,
+        payg_enabled: false,
+      })
     })
 
     it('includes the copy-paste purchase command for an inactive model', async () => {
@@ -852,7 +869,12 @@ describe('MCP tools', () => {
         name: 'get_credits',
         arguments: { model: 'm' },
       })
-      expect(JSON.parse(text(result))).toEqual({ modelId: 'm', active: false })
+      expect(JSON.parse(text(result))).toEqual({
+        modelId: 'm',
+        active: false,
+        balance_usd: 0,
+        payg_enabled: false,
+      })
     })
 
     it('never buys from get_credits, even when armed and the model is inactive', async () => {
@@ -868,7 +890,7 @@ describe('MCP tools', () => {
         refillCount: 0,
         paymentMethod: 'bch',
       })
-      mocks.hasActiveCredits.mockReturnValue(false)
+      mocks.hasUsableCredits.mockReturnValue(false)
       const c = await connect()
       const result = await c.callTool({ name: 'get_credits', arguments: {} })
       expect(mocks.autoRefillTick).not.toHaveBeenCalled()
@@ -890,11 +912,25 @@ describe('MCP tools', () => {
         refillCount: 0,
         paymentMethod: 'bch',
       })
-      mocks.hasActiveCredits.mockReturnValue(true)
+      mocks.hasUsableCredits.mockReturnValue(true)
       const c = await connect()
       const result = await c.callTool({ name: 'get_credits', arguments: {} })
       expect(mocks.autoRefillTick).not.toHaveBeenCalled()
       expect(JSON.parse(text(result)).refillTick).toBeUndefined()
+    })
+
+    it('reports the pay-as-you-go balance and suppresses the hint when it covers usage', async () => {
+      mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
+      mocks.getWalletStatus.mockResolvedValue({ balance_usd: 2.5, payg_enabled: true })
+      mocks.summarizeAllCredits.mockReturnValue([{ modelId: 'm', active: false }])
+      mocks.hasUsableCredits.mockReturnValue(true)
+      const c = await connect()
+      const result = await c.callTool({ name: 'get_credits', arguments: {} })
+      const body = JSON.parse(text(result))
+      expect(body.balance_usd).toBe(2.5)
+      expect(body.payg_enabled).toBe(true)
+      expect(body.purchaseHint).toBeUndefined()
+      expect(body.resumeHint).toBeUndefined()
     })
   })
 
@@ -957,6 +993,42 @@ describe('MCP tools', () => {
       expect(mocks.buyPlan).toHaveBeenCalledWith({
         model: 'deepseek/deepseek-v4-pro',
         minutes: 60,
+        paymentMethod: 'bch',
+        isChipnet: false,
+        backendUrl: undefined,
+        confirmed: true,
+      })
+    })
+  })
+
+  describe('topup', () => {
+    it('tops up with a given amount and defaults to BCH', async () => {
+      mocks.topUpBalance.mockResolvedValue({ success: true, paid: true, balanceUsd: 6 })
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'topup',
+        arguments: { amount_usd: 5, payment_method: 'lift' },
+      })
+      expect(mocks.topUpBalance).toHaveBeenCalledWith({
+        amountUsd: 5,
+        paymentMethod: 'lift',
+        isChipnet: false,
+        backendUrl: undefined,
+        confirmed: true,
+      })
+      expect(JSON.parse(text(result))).toEqual({
+        success: true,
+        paid: true,
+        balanceUsd: 6,
+      })
+    })
+
+    it('omits the amount so the server uses its smallest preset', async () => {
+      mocks.topUpBalance.mockResolvedValue({ success: true, paid: true })
+      const c = await connect()
+      await c.callTool({ name: 'topup', arguments: {} })
+      expect(mocks.topUpBalance).toHaveBeenCalledWith({
+        amountUsd: undefined,
         paymentMethod: 'bch',
         isChipnet: false,
         backendUrl: undefined,
@@ -1103,7 +1175,7 @@ describe('MCP tools', () => {
       mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
       mocks.readAutoRefillState.mockReturnValue(armed)
       mocks.getWalletStatus.mockResolvedValue({})
-      mocks.hasActiveCredits.mockReturnValue(true)
+      mocks.hasUsableCredits.mockReturnValue(true)
       mocks.summarizeCredits.mockReturnValue({ modelId: 'm', active: true })
       const c = await connect()
       const result = await c.callTool({ name: 'await_refill', arguments: {} })
@@ -1119,7 +1191,7 @@ describe('MCP tools', () => {
       mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
       mocks.readAutoRefillState.mockReturnValue(armed)
       mocks.getWalletStatus.mockResolvedValue({})
-      mocks.hasActiveCredits.mockReturnValueOnce(false).mockReturnValue(true)
+      mocks.hasUsableCredits.mockReturnValueOnce(false).mockReturnValue(true)
       mocks.autoRefillTick.mockResolvedValue({
         action: 'refilled',
         state: { model: 'm', minutes: 15 },
@@ -1139,7 +1211,7 @@ describe('MCP tools', () => {
       mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: false })
       mocks.readAutoRefillState.mockReturnValue(armed)
       mocks.getWalletStatus.mockResolvedValue({})
-      mocks.hasActiveCredits.mockReturnValue(false)
+      mocks.hasUsableCredits.mockReturnValue(false)
       mocks.summarizeCredits.mockReturnValue({ modelId: 'm', active: false })
       const c = await connect()
       const result = await c.callTool({

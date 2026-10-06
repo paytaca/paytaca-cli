@@ -50,6 +50,7 @@ describe('paytaca MCP server', () => {
         'get_video_models',
         'get_video_status',
         'send',
+        'topup',
       ].sort()
     )
   })

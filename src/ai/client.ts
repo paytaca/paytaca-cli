@@ -33,10 +33,22 @@ export interface WalletSession {
   time_used_seconds?: number
   time_remaining_seconds?: number
   token_limit?: number
+  balance_usd?: number
+  payg_enabled?: boolean
 }
 
 export interface WalletStatus extends WalletSession {
   sessions?: WalletSession[]
+}
+
+export interface TopupQuote {
+  billing_mode?: string
+  payg_enabled?: boolean
+  balance_usd?: number
+  topup_amount_usd?: number
+  topup_presets?: number[]
+  min_topup_usd?: number
+  payment_method?: string
 }
 
 export interface ChatMessage {
