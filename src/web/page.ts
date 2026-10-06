@@ -164,6 +164,8 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
 .btn-danger{background:transparent;border-color:var(--line);color:var(--err)}
 .btn-danger:hover{border-color:var(--err);background:var(--err-soft)}
 .btn-sm{padding:6px 11px;font-size:11.5px}
+.spin{animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 .btn-ghost{background:transparent;border-color:transparent;color:var(--ink-2)}
 .btn-ghost:hover{background:var(--surface-2);border-color:transparent;color:var(--ink)}
 .btn-group{display:flex;gap:8px;margin-top:16px}
@@ -325,9 +327,9 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
           <span class="live-dot"></span>
           <span x-text="wsStatus==='live' ? 'Live' : wsStatus==='connecting' ? 'Sync' : 'Off'"></span>
         </div>
-        <button class="btn btn-sm" @click="load()" title="Refresh">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6"/><path d="M21.34 15.57a10 10 0 1 1-.57-8.38"/></svg>
-          Refresh
+        <button class="btn btn-sm" @click="load()" :disabled="refreshing" :title="refreshing ? 'Refreshing…' : 'Refresh'">
+          <svg :class="refreshing ? 'spin' : ''" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6"/><path d="M21.34 15.57a10 10 0 1 1-.57-8.38"/></svg>
+          <span x-text="refreshing ? 'Refreshing' : 'Refresh'"></span>
         </button>
       </div>
     </header>
@@ -729,7 +731,7 @@ document.addEventListener('alpine:init',function(){Alpine.data('app',function(){
 token:(function(){try{var t=new URLSearchParams(window.location.search).get('token')||'';if(t){sessionStorage.setItem('pt-token',t);history.replaceState(null,'',window.location.pathname)}return t||sessionStorage.getItem('pt-token')||''}catch(e){return ''}})(),theme:localStorage.getItem('pt-theme')||'light',tab:'wallet',state:null,
 rcvType:'bch',rcvCategory:'',rcvAmount:'',rcvView:null,rcvQrSvg:'',
 sendType:'bch',sendAmount:'',sendCurrency:'bch',sendAddress:'',sendCategory:'',sendTokenPreset:'__custom__',sendTokenAmount:'',sendError:'',sendSuccess:'',pendingSend:null,
-histType:'all',histRecords:[],histPage:1,histNumPages:1,histHasNext:false,histLoading:false,histNetwork:'mainnet',
+ histType:'all',histRecords:[],histPage:1,histNumPages:1,histHasNext:false,histLoading:false,histNetwork:'mainnet',refreshing:false,
 swapTokens:[{symbol:'LIFT',category:'5932b2fd4915d6a75d3ec53282cd49118149a2176ee67ed68b1111ff0786f7fc'},{symbol:'PUSD',category:'2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544'}],swapToken:'5932b2fd4915d6a75d3ec53282cd49118149a2176ee67ed68b1111ff0786f7fc',swapCustomCategory:'',swapDir:'buy',swapAmount:'',swapError:'',swapQuoteText:'',swapBusy:false,swapExecBusy:false,pendingSwap:null,
 pendingPurchase:null,purchaseBusy:false,purchaseMethod:'bch',purchaseError:'',liftQuote:null,liftQuoteBusy:false,liftQuoteError:'',showPurchaseModal:false,showSendModal:false,sendConfirmBusy:false,planSliderIdx:{},PLAN_STEPS:[0,15,30,60],
 showTopupModal:false,topupAmount:'',topupMethod:'bch',topupBusy:false,topupError:'',topupPresets:[1,5,10,25],
@@ -741,7 +743,7 @@ vidPrompt:'',vidModel:'',vidDuration:'5',vidResolution:'720p',vidAspect:'16:9',v
 toastVisible:false,toastMsg:'',toastOk:true,
 ws:null,wsStatus:'connecting',wsAddress:null,wsSeen:{},wsReconnectTimer:null,wsPingTimer:null,wsRefreshTimer:null,wsLateTimer:null,notify:null,_ntid:0,
 async init(){document.documentElement.setAttribute('data-theme',this.theme);try{this.state=await this.api('GET','/api/wallet/state');this.loadHistory(1);this.loadImages();this.loadVideos();await this.onRcvChange();this.connectWatch()}catch(e){this.toast(e.message,true)}var self=this;document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible'&&self.state){if(!self.ws||self.ws.readyState!==1){if(self.wsReconnectTimer)clearTimeout(self.wsReconnectTimer);self.connectWatch()}}});window.addEventListener('online',function(){if(self.state){if(self.wsReconnectTimer)clearTimeout(self.wsReconnectTimer);self.connectWatch()}})},
-async load(){try{this.state=await this.api('GET','/api/wallet/state');this.onRcvChange();this.loadHistory(this.histPage);this.loadImages();this.loadVideos()}catch(e){this.toast(e.message,true)}},
+async load(){this.refreshing=true;try{this.state=await this.api('GET','/api/wallet/state');this.onRcvChange();await Promise.all([this.loadHistory(this.histPage),this.loadImages(),this.loadVideos()])}catch(e){this.toast(e.message,true)}finally{this.refreshing=false}},
 loadImages(){var s=this;(this.state&&this.state.imageHistory||[]).forEach(function(h){if(h.status==='completed'&&h.filepath)s.loadImage(h.id)})},
 async loadImage(id){if(!id||this.imgUrls[id])return;try{var res=await fetch('/api/ai/images/'+id+'/file',{headers:{'X-Paytaca-Token':this.token}});if(!res.ok)return;var blob=await res.blob();this.imgUrls[id]=URL.createObjectURL(blob)}catch(e){}},
 loadVideos(){var s=this;(this.state&&this.state.videoHistory||[]).forEach(function(h){if(h.filepath)s.loadVideo(h.id)})},
