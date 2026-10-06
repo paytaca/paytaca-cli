@@ -26,6 +26,11 @@ const mocks = vi.hoisted(() => ({
   getImageOrderStatus: vi.fn(),
   isStillProcessing: vi.fn(),
   listImageModels: vi.fn(),
+  generateVideo: vi.fn(),
+  getVideoHistory: vi.fn(),
+  getVideoOrderStatus: vi.fn(),
+  isVideoStillProcessing: vi.fn(),
+  listVideoModels: vi.fn(),
   armAutoRefill: vi.fn(),
   disarmAutoRefill: vi.fn(),
   readAutoRefillState: vi.fn(),
@@ -85,6 +90,14 @@ vi.mock('../ai/images.js', () => ({
   listImageModels: mocks.listImageModels,
 }))
 
+vi.mock('../ai/videos.js', () => ({
+  generateVideo: mocks.generateVideo,
+  getVideoHistory: mocks.getVideoHistory,
+  getVideoOrderStatus: mocks.getVideoOrderStatus,
+  isStillProcessing: mocks.isVideoStillProcessing,
+  listVideoModels: mocks.listVideoModels,
+}))
+
 vi.mock('../ai/autoRefill.js', () => ({
   armAutoRefill: mocks.armAutoRefill,
   disarmAutoRefill: mocks.disarmAutoRefill,
@@ -137,6 +150,8 @@ describe('MCP tools', () => {
       expect(text(result)).toMatch(/get_balance/)
       expect(text(result)).toMatch(/generate_image/)
       expect(text(result)).toMatch(/get_image_status/)
+      expect(text(result)).toMatch(/generate_video/)
+      expect(text(result)).toMatch(/get_video_status/)
       expect(text(result)).toMatch(/SPENDS REAL FUNDS|spend real funds/i)
     })
   })
@@ -327,6 +342,192 @@ describe('MCP tools', () => {
       const result = await c.callTool({
         name: 'get_image_status',
         arguments: { order_id: 'order-1' },
+      })
+      expect(result.isError).toBe(true)
+      expect(text(result)).toMatch(/boom/)
+    })
+  })
+
+  describe('video tools', () => {
+    it('lists video models', async () => {
+      mocks.listVideoModels.mockResolvedValue([
+        { id: 'video-a', display_name: 'Video A' },
+      ])
+      const c = await connect()
+      const result = await c.callTool({ name: 'get_video_models', arguments: {} })
+      expect(result.isError).toBeFalsy()
+      expect(mocks.listVideoModels).toHaveBeenCalledWith({ backendUrl: undefined })
+      expect(JSON.parse(text(result))).toEqual([
+        { id: 'video-a', display_name: 'Video A' },
+      ])
+    })
+
+    it('passes pagination to get_video_history', async () => {
+      mocks.getVideoHistory.mockResolvedValue({ count: 0, data: [] })
+      const c = await connect()
+      await c.callTool({
+        name: 'get_video_history',
+        arguments: { page: 2, page_size: 5 },
+      })
+      expect(mocks.getVideoHistory).toHaveBeenCalledWith({
+        page: 2,
+        pageSize: 5,
+        backendUrl: undefined,
+      })
+    })
+
+    it('returns a saved path with structured content on success', async () => {
+      mocks.generateVideo.mockResolvedValue({
+        success: true,
+        paid: true,
+        orderId: 'vorder-1',
+        model: 'video-a',
+        amountSats: 2000,
+        amountUsd: 0.02,
+        txid: 'txid-1',
+        status: 'completed',
+        path: '/tmp/vorder-1.mp4',
+        mediaType: 'video/mp4',
+      })
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'generate_video',
+        arguments: { prompt: 'a cat', model: 'video-a', duration: 5, chipnet: false },
+      })
+      expect(result.isError).toBeFalsy()
+      expect(mocks.generateVideo).toHaveBeenCalledWith({
+        prompt: 'a cat',
+        model: 'video-a',
+        duration: 5,
+        resolution: undefined,
+        aspectRatio: undefined,
+        generateAudio: undefined,
+        isChipnet: false,
+        backendUrl: undefined,
+      })
+      expect(text(result)).toMatch(/Saved to: \/tmp\/vorder-1\.mp4/)
+      expect((result.content as any[]).some((b) => b.type === 'image')).toBe(false)
+      expect(result.structuredContent).toMatchObject({
+        orderId: 'vorder-1',
+        path: '/tmp/vorder-1.mp4',
+        txid: 'txid-1',
+      })
+    })
+
+    it('returns an error result when generation fails', async () => {
+      mocks.generateVideo.mockResolvedValue({
+        success: false,
+        paid: true,
+        orderId: 'vorder-1',
+        txid: 'txid-1',
+        error: 'Payment was broadcast (txid txid-1) but the backend could not confirm it yet.',
+      })
+      mocks.isVideoStillProcessing.mockReturnValue(false)
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'generate_video',
+        arguments: { prompt: 'a cat' },
+      })
+      expect(result.isError).toBe(true)
+      expect(text(result)).toMatch(/could not confirm/)
+      expect(text(result)).toMatch(/txid-1/)
+    })
+
+    it('returns processing status when generation times out', async () => {
+      mocks.generateVideo.mockResolvedValue({
+        success: false,
+        paid: true,
+        orderId: 'vorder-1',
+        model: 'video-a',
+        txid: 'txid-1',
+        amountSats: 2000,
+        amountUsd: 0.02,
+        error: 'Timed out waiting for video generation (order vorder-1 is "processing").',
+      })
+      mocks.isVideoStillProcessing.mockReturnValue(true)
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'generate_video',
+        arguments: { prompt: 'a cat' },
+      })
+      expect(result.isError).toBeFalsy()
+      expect(text(result)).toMatch(/still processing/)
+      expect(text(result)).toMatch(/vorder-1/)
+      expect(text(result)).toMatch(/get_video_status/)
+      expect(result.structuredContent).toMatchObject({
+        orderId: 'vorder-1',
+        status: 'processing',
+        txid: 'txid-1',
+      })
+    })
+
+    it('returns an error result when the flow throws', async () => {
+      mocks.generateVideo.mockRejectedValue(new Error('backend down'))
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'generate_video',
+        arguments: { prompt: 'a cat' },
+      })
+      expect(result.isError).toBe(true)
+      expect(text(result)).toBe('backend down')
+    })
+
+    it('returns a saved path on get_video_status when complete', async () => {
+      mocks.getVideoOrderStatus.mockResolvedValue({
+        success: true,
+        paid: true,
+        orderId: 'vorder-1',
+        model: 'video-a',
+        amountSats: 2000,
+        amountUsd: 0.02,
+        txid: 'txid-1',
+        status: 'completed',
+        path: '/tmp/vorder-1.mp4',
+        mediaType: 'video/mp4',
+      })
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'get_video_status',
+        arguments: { order_id: 'vorder-1' },
+      })
+      expect(result.isError).toBeFalsy()
+      expect(text(result)).toMatch(/Saved to: \/tmp\/vorder-1\.mp4/)
+      expect(result.structuredContent).toMatchObject({
+        orderId: 'vorder-1',
+        path: '/tmp/vorder-1.mp4',
+      })
+    })
+
+    it('returns processing status when still generating', async () => {
+      mocks.getVideoOrderStatus.mockResolvedValue({
+        success: false,
+        paid: true,
+        orderId: 'vorder-1',
+        error: 'Timed out waiting for video generation',
+      })
+      mocks.isVideoStillProcessing.mockReturnValue(true)
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'get_video_status',
+        arguments: { order_id: 'vorder-1' },
+      })
+      expect(result.isError).toBeFalsy()
+      expect(text(result)).toMatch(/still processing/)
+      expect(text(result)).toMatch(/vorder-1/)
+    })
+
+    it('returns error when get_video_status fails', async () => {
+      mocks.getVideoOrderStatus.mockResolvedValue({
+        success: false,
+        paid: true,
+        orderId: 'vorder-1',
+        error: 'Video generation failed: boom',
+      })
+      mocks.isVideoStillProcessing.mockReturnValue(false)
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'get_video_status',
+        arguments: { order_id: 'vorder-1' },
       })
       expect(result.isError).toBe(true)
       expect(text(result)).toMatch(/boom/)

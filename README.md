@@ -210,6 +210,26 @@ paytaca ai image status <order-id>                  # Poll a pending generation 
 
 Image generation uses a two-phase flow: an order is created (returning a CashScript contract address and sats price), BCH is paid on-chain, the backend confirms payment via Watchtower, generation runs server-side, and the finished image is saved under `~/.paytaca/images/`. Use `image status` to resume if a generation is still processing when the initial request returns.
 
+### Video Generation
+
+Generate videos with AI models, paid in BCH on-chain:
+
+```bash
+paytaca ai video models                             # List available video models
+paytaca ai video generate "a green phoenix"         # Generate a video from a prompt
+paytaca ai video generate "prompt" --model <id>     # Specify model (defaults to cheapest)
+paytaca ai video generate "prompt" --duration 5     # Duration in seconds
+paytaca ai video generate "prompt" --resolution 720p # Resolution: 480p, 720p, 1080p
+paytaca ai video generate "prompt" --aspect-ratio 16:9 # Aspect ratio, e.g. 16:9, 9:16
+paytaca ai video generate "prompt" --audio on       # Audio generation: on or off
+paytaca ai video generate "prompt" --yes            # Skip confirmation prompt
+paytaca ai video history                            # Show order history
+paytaca ai video history --page 2                   # Paginate history
+paytaca ai video status <order-id>                  # Poll a pending generation order
+```
+
+Video generation follows the same two-phase flow as images: an order is created (returning a CashScript contract address and sats price), BCH is paid on-chain, the backend confirms payment via Watchtower, generation runs server-side, and the finished video is saved under `~/.paytaca/videos/`. Use `video status` to resume if a generation is still processing when the initial request returns.
+
 ### MCP Server
 
 Configure an AI harness in one step. This installs the Paytaca MCP server and, for opencode, also the Paytaca AI provider (model catalogue + API key) so the Paytaca AI models are usable immediately:

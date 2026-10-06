@@ -36,6 +36,13 @@ import {
   listImageModels,
 } from '../ai/images.js'
 import {
+  generateVideo,
+  getVideoHistory,
+  getVideoOrderStatus,
+  isStillProcessing as isVideoStillProcessing,
+  listVideoModels,
+} from '../ai/videos.js'
+import {
   armAutoRefill,
   autoRefillTick,
   deleteAutoRefill,
@@ -349,11 +356,17 @@ Image generation:
   get_image_models       List image generation models
   get_image_history      Image generation order history
 
+Video generation:
+  generate_video         Generate a video from a prompt (spends funds)
+  get_video_status       Poll/resume a pending video generation order
+  get_video_models       List video generation models
+  get_video_history      Video generation order history
+
 Notes:
   - All tools accept an optional "chipnet" flag (default mainnet).
-  - send, buy_plan, and generate_image spend real funds from the active
-    wallet; the MCP host is responsible for asking the user for approval
-    before invoking them.
+  - send, buy_plan, generate_image, and generate_video spend real funds from
+    the active wallet; the MCP host is responsible for asking the user for
+    approval before invoking them.
   - When get_credits reports an inactive session it includes a purchaseHint.
     Relay purchaseHint.message (it contains the exact copy-paste command to
     buy more time); do not replace it with upsell or "what next" questions.
@@ -1056,6 +1069,229 @@ export function registerTools(
               type: 'text' as const,
               text: [
                 `Image generated (order ${result.orderId}).`,
+                `Saved to: ${result.path}`,
+                `Model: ${result.model}`,
+                `Cost: ${result.amountSats} sats`,
+                `txid: ${result.txid}`,
+              ].join('\n'),
+            },
+          ],
+          structuredContent: {
+            orderId: result.orderId,
+            model: result.model,
+            status: result.status,
+            path: result.path,
+            mediaType: result.mediaType,
+            amountSats: result.amountSats,
+            amountUsd: result.amountUsd,
+            txid: result.txid,
+          },
+        }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'get_video_models',
+    {
+      title: 'List video models',
+      description:
+        'List the video generation models available through Paytaca AI.',
+      inputSchema: {
+        search: z.string().optional(),
+        backend: z.string().optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ search, backend }) => {
+      try {
+        return json(await listVideoModels({ search, backendUrl: backend }))
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'get_video_history',
+    {
+      title: 'Get video order history',
+      description: 'Return paginated Paytaca video generation order history.',
+      inputSchema: {
+        page: z.number().int().positive().optional(),
+        page_size: z.number().int().positive().optional(),
+        backend: z.string().optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ page, page_size, backend }) => {
+      try {
+        return json(
+          await getVideoHistory({ page, pageSize: page_size, backendUrl: backend })
+        )
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'get_video_status',
+    {
+      title: 'Poll video generation status',
+      description:
+        'Poll an existing video generation order by ID. If generation is complete, saves the video to disk and returns its file path plus the model/cost. If still processing, returns the current status so you can retry later. Use this to resume after generate_video returns a "processing" status.',
+      inputSchema: {
+        order_id: z.string().min(1),
+        chipnet: z.boolean().optional(),
+        backend: z.string().optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ order_id, chipnet, backend }) => {
+      try {
+        const result = await getVideoOrderStatus(order_id, {
+          isChipnet: cn(chipnet),
+          backendUrl: backend,
+        })
+
+        if (result.success && result.path) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: [
+                  `Video ready (order ${result.orderId}).`,
+                  `Saved to: ${result.path}`,
+                  `Model: ${result.model}`,
+                  `Cost: ${result.amountSats} sats`,
+                  `txid: ${result.txid}`,
+                ].join('\n'),
+              },
+            ],
+            structuredContent: {
+              orderId: result.orderId,
+              model: result.model,
+              status: result.status,
+              path: result.path,
+              mediaType: result.mediaType,
+              amountSats: result.amountSats,
+              amountUsd: result.amountUsd,
+              txid: result.txid,
+            },
+          }
+        }
+
+        if (isVideoStillProcessing(result)) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: [
+                  `Video generation is still processing (order ${result.orderId}).`,
+                  `Try again in a few seconds with get_video_status.`,
+                ].join('\n'),
+              },
+            ],
+            structuredContent: {
+              orderId: result.orderId,
+              status: 'processing',
+            },
+          }
+        }
+
+        return fail(new Error(result.error || 'Video generation failed.'))
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'generate_video',
+    {
+      title: 'Generate a video',
+      description:
+        'Generate a video from a text prompt with a Paytaca AI video model. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). Saves the video to disk and returns its file path. The MCP host must obtain user approval before calling this.',
+      inputSchema: {
+        prompt: z.string().min(1),
+        model: z.string().optional(),
+        duration: z.number().int().positive().optional(),
+        resolution: z.string().optional(),
+        aspect_ratio: z.string().optional(),
+        generate_audio: z.boolean().optional(),
+        chipnet: z.boolean().optional(),
+        backend: z.string().optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({
+      prompt,
+      model,
+      duration,
+      resolution,
+      aspect_ratio,
+      generate_audio,
+      chipnet,
+      backend,
+    }) => {
+      try {
+        const result = await generateVideo({
+          prompt,
+          model,
+          duration,
+          resolution,
+          aspectRatio: aspect_ratio,
+          generateAudio: generate_audio,
+          isChipnet: cn(chipnet),
+          backendUrl: backend,
+        })
+
+        if (isVideoStillProcessing(result)) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: [
+                  `Video generation is still processing (order ${result.orderId}).`,
+                  `The generation is running server-side — call get_video_status with order_id "${result.orderId}" to retrieve the result.`,
+                  `Model: ${result.model}`,
+                  `Paid: ${result.amountSats} sats (txid: ${result.txid})`,
+                ].join('\n'),
+              },
+            ],
+            structuredContent: {
+              orderId: result.orderId,
+              model: result.model,
+              status: 'processing',
+              amountSats: result.amountSats,
+              amountUsd: result.amountUsd,
+              txid: result.txid,
+            },
+          }
+        }
+
+        if (!result.success || !result.path) {
+          return fail(new Error(result.error || 'Video generation failed.'))
+        }
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: [
+                `Video generated (order ${result.orderId}).`,
                 `Saved to: ${result.path}`,
                 `Model: ${result.model}`,
                 `Cost: ${result.amountSats} sats`,

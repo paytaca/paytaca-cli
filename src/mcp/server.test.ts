@@ -45,6 +45,10 @@ describe('paytaca MCP server', () => {
         'get_transactions',
         'generate_image',
         'get_image_status',
+        'generate_video',
+        'get_video_history',
+        'get_video_models',
+        'get_video_status',
         'send',
       ].sort()
     )
@@ -65,8 +69,10 @@ describe('paytaca MCP server', () => {
     const send = tools.find((t) => t.name === 'send')
     const buy = tools.find((t) => t.name === 'buy_plan')
     const image = tools.find((t) => t.name === 'generate_image')
+    const video = tools.find((t) => t.name === 'generate_video')
     expect(send?.annotations?.destructiveHint).toBe(true)
     expect(buy?.annotations?.destructiveHint).toBe(true)
     expect(image?.annotations?.destructiveHint).toBe(true)
+    expect(video?.annotations?.destructiveHint).toBe(true)
   })
 })

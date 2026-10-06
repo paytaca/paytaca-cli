@@ -60,6 +60,18 @@ import {
   type ImageHistoryEntry,
 } from '../ai/images.js'
 import {
+  listVideoModels,
+  createVideoOrder,
+  fulfillVideoOrder,
+  getVideoHistory,
+  VIDEO_DIR,
+  VIDEO_MEDIA_TYPE_EXTENSIONS,
+  type VideoModel,
+  type VideoOrderQuote,
+  type GenerateVideoResult,
+  type VideoHistoryEntry,
+} from '../ai/videos.js'
+import {
   estimateSwap,
   executeSwap,
   formatQuote,
@@ -124,6 +136,19 @@ export interface WebDeps {
   fulfillImage(orderId: string): Promise<GenerateImageResult>
   serveImageFile(id: string): Promise<{ filePath: string; mediaType: string } | null>
   deleteImageFile(id: string): Promise<boolean>
+  getVideoModels(): Promise<VideoModel[]>
+  getVideoHistory(page?: number): Promise<object>
+  createVideoQuote(opts: {
+    prompt: string
+    model?: string
+    duration?: number
+    resolution?: string
+    aspectRatio?: string
+    generateAudio?: boolean
+  }): Promise<VideoOrderQuote>
+  fulfillVideo(orderId: string): Promise<GenerateVideoResult>
+  serveVideoFile(id: string): Promise<{ filePath: string; mediaType: string } | null>
+  deleteVideoFile(id: string): Promise<boolean>
 }
 
 function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
@@ -177,6 +202,18 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
         }))
       } catch {}
 
+      let videoModels: VideoModel[] = []
+      try { videoModels = await listVideoModels({ backendUrl }) } catch {}
+
+      let videoHistory: VideoHistoryEntry[] = []
+      try {
+        const hist = await getVideoHistory({ backendUrl, page: 1, pageSize: 20 })
+        videoHistory = (hist.data || []).map((e) => ({
+          ...e,
+          filepath: localVideoFile(e.id) ?? undefined,
+        }))
+      } catch {}
+
       return {
         walletHash,
         bchPriceUsd,
@@ -198,6 +235,8 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
           : null,
         imageModels,
         imageHistory,
+        videoModels,
+        videoHistory,
       }
     },
 
@@ -391,6 +430,52 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
         return false
       }
     },
+
+    async getVideoModels() {
+      return listVideoModels({ backendUrl })
+    },
+
+    async getVideoHistory(page?: number) {
+      return getVideoHistory({ backendUrl, page, pageSize: 20 })
+    },
+
+    async createVideoQuote(opts) {
+      return createVideoOrder({
+        prompt: opts.prompt,
+        model: opts.model,
+        duration: opts.duration,
+        resolution: opts.resolution,
+        aspectRatio: opts.aspectRatio,
+        generateAudio: opts.generateAudio,
+        isChipnet,
+        backendUrl,
+      })
+    },
+
+    async fulfillVideo(orderId) {
+      throw new Error('Fulfillment requires the original quote. Use POST /api/ai/videos/fulfill with stored quote.')
+    },
+
+    async serveVideoFile(id) {
+      const filePath = localVideoFile(id)
+      if (!filePath) return null
+      const ext = filePath.split('.').pop() || ''
+      return {
+        filePath,
+        mediaType: VIDEO_EXT_TO_MEDIA[ext] || 'application/octet-stream',
+      }
+    },
+
+    async deleteVideoFile(id) {
+      const filePath = localVideoFile(id)
+      if (!filePath) return false
+      try {
+        fs.unlinkSync(filePath)
+        return true
+      } catch {
+        return false
+      }
+    },
   }
 }
 
@@ -405,13 +490,46 @@ function localImageFile(id: string): string | null {
   }
 }
 
+function localVideoFile(id: string): string | null {
+  const safeId = id.replace(/[^a-zA-Z0-9_-]/g, '')
+  if (!safeId) return null
+  try {
+    const files = fs.readdirSync(VIDEO_DIR).filter((f) => f.startsWith(safeId + '.'))
+    return files.length ? path.join(VIDEO_DIR, files[0]) : null
+  } catch {
+    return null
+  }
+}
+
 const IMAGE_EXT_TO_MEDIA: Record<string, string> = Object.fromEntries(
   Object.entries(MEDIA_TYPE_EXTENSIONS).map(([mediaType, ext]) => [ext, mediaType])
+)
+
+const VIDEO_EXT_TO_MEDIA: Record<string, string> = Object.fromEntries(
+  Object.entries(VIDEO_MEDIA_TYPE_EXTENSIONS).map(([mediaType, ext]) => [ext, mediaType])
 )
 
 function createDefaultDepsWithQuotes(isChipnet: boolean, backendUrl?: string): WebDeps {
   const base = defaultDeps(isChipnet, backendUrl)
   const quoteStore = new Map<string, ImageOrderQuote>()
+  const videoQuoteStore = new Map<string, VideoOrderQuote>()
+
+  async function withAmountUsd<T extends { amountSats: number; amountUsd?: number }>(
+    quote: T
+  ): Promise<T> {
+    let amountUsd: number | undefined = quote.amountUsd
+    if (amountUsd === undefined) {
+      try {
+        const usdPerBch = await getBchUsdPrice(isChipnet)
+        if (usdPerBch !== null) {
+          amountUsd = Number(((quote.amountSats / 1e8) * usdPerBch).toFixed(2))
+        }
+      } catch {
+        amountUsd = undefined
+      }
+    }
+    return { ...quote, amountUsd }
+  }
 
   return {
     ...base,
@@ -437,18 +555,33 @@ function createDefaultDepsWithQuotes(isChipnet: boolean, backendUrl?: string): W
         const oldest = quoteStore.keys().next().value
         if (oldest) quoteStore.delete(oldest)
       }
-      let amountUsd: number | undefined = quote.amountUsd
-      if (amountUsd === undefined) {
-        try {
-          const usdPerBch = await getBchUsdPrice(isChipnet)
-          if (usdPerBch !== null) {
-            amountUsd = Number(((quote.amountSats / 1e8) * usdPerBch).toFixed(2))
-          }
-        } catch {
-          amountUsd = undefined
-        }
+      return withAmountUsd(quote)
+    },
+
+    async fulfillVideo(orderId) {
+      const quote = videoQuoteStore.get(orderId)
+      if (!quote) throw new Error('No quote found for order. Request a new quote first.')
+      videoQuoteStore.delete(orderId)
+      return fulfillVideoOrder(quote, { isChipnet, backendUrl })
+    },
+
+    async createVideoQuote(opts) {
+      const quote = await createVideoOrder({
+        prompt: opts.prompt,
+        model: opts.model,
+        duration: opts.duration,
+        resolution: opts.resolution,
+        aspectRatio: opts.aspectRatio,
+        generateAudio: opts.generateAudio,
+        isChipnet,
+        backendUrl,
+      })
+      videoQuoteStore.set(quote.orderId, quote)
+      if (videoQuoteStore.size > 50) {
+        const oldest = videoQuoteStore.keys().next().value
+        if (oldest) videoQuoteStore.delete(oldest)
       }
-      return { ...quote, amountUsd }
+      return withAmountUsd(quote)
     },
   }
 }
@@ -754,6 +887,82 @@ export async function startWebServer(
         return json(res, 200, { deleted })
       }
 
+      if (pathname === '/api/ai/video-models' && req.method === 'GET') {
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
+        const models = await deps.getVideoModels()
+        return json(res, 200, { models })
+      }
+
+      if (pathname === '/api/ai/videos/history' && req.method === 'GET') {
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
+        const page = url.searchParams.get('page') ? Number(url.searchParams.get('page')) : undefined
+        const result = await deps.getVideoHistory(page)
+        return json(res, 200, result)
+      }
+
+      if (pathname === '/api/ai/videos/quote' && req.method === 'POST') {
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
+        if (req.headers['content-type'] !== 'application/json') {
+          return json(res, 400, { error: 'Content-Type must be application/json' })
+        }
+        const body = await readBody(req)
+        const prompt = String(body.prompt || '').trim()
+        if (!prompt) return json(res, 400, { error: 'Missing prompt' })
+        let duration: number | undefined
+        if (body.duration != null && body.duration !== '') {
+          duration = Number(body.duration)
+          if (!Number.isFinite(duration) || duration <= 0) {
+            return json(res, 400, { error: 'Duration must be a positive number' })
+          }
+        }
+        const quote = await deps.createVideoQuote({
+          prompt,
+          model: body.model != null ? String(body.model) : undefined,
+          duration,
+          resolution: body.resolution != null ? String(body.resolution) : undefined,
+          aspectRatio: body.aspectRatio != null ? String(body.aspectRatio) : undefined,
+          generateAudio:
+            body.generateAudio != null ? Boolean(body.generateAudio) : undefined,
+        })
+        return json(res, 200, quote)
+      }
+
+      if (pathname === '/api/ai/videos/fulfill' && req.method === 'POST') {
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
+        if (req.headers['content-type'] !== 'application/json') {
+          return json(res, 400, { error: 'Content-Type must be application/json' })
+        }
+        const body = await readBody(req)
+        const orderId = String(body.orderId || '')
+        if (!orderId) return json(res, 400, { error: 'Missing orderId' })
+        const result = await deps.fulfillVideo(orderId)
+        return json(res, 200, result)
+      }
+
+      const videoFileMatch = pathname.match(/^\/api\/ai\/videos\/([^/]+)\/file$/)
+      if (videoFileMatch && req.method === 'GET') {
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
+        const id = decodeURIComponent(videoFileMatch[1])
+        const file = await deps.serveVideoFile(id)
+        if (!file) return json(res, 404, { error: 'Video not found' })
+        const data = fs.readFileSync(file.filePath)
+        res.writeHead(200, {
+          'Content-Type': file.mediaType,
+          'Content-Length': data.length,
+          'Cache-Control': 'public, max-age=3600',
+        })
+        res.end(data)
+        return
+      }
+
+      const videoDeleteMatch = pathname.match(/^\/api\/ai\/videos\/([^/]+)$/)
+      if (videoDeleteMatch && req.method === 'DELETE') {
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
+        const id = decodeURIComponent(videoDeleteMatch[1])
+        const deleted = await deps.deleteVideoFile(id)
+        return json(res, 200, { deleted })
+      }
+
       json(res, 404, { error: 'Not found' })
     } catch (err: any) {
       console.error('[paytaca web]', err?.stack || err?.message || err)
@@ -761,7 +970,7 @@ export async function startWebServer(
     }
   })
 
-  const port = options.port || 7474
+  const port = options.port ?? 7474
 
   return new Promise<WebServer>((resolve, reject) => {
     server.on('error', reject)

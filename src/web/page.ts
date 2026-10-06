@@ -238,15 +238,17 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
 .seg button .off{margin-left:6px;color:var(--accent)}
 .seg button.active .off{color:rgba(255,255,255,0.75)}
 .gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:16px}
-.gallery-item{margin:0;cursor:pointer}
-.gallery-item img{display:block;width:100%;aspect-ratio:1;object-fit:cover;border:1px solid var(--line);border-radius:var(--r-sm);transition:border-color .15s ease,opacity .15s ease;background:var(--surface-2)}
-.gallery-item:hover img{border-color:var(--accent)}
+.gallery-item{margin:0;cursor:pointer;position:relative}
+.gallery-item img,.gallery-item video{display:block;width:100%;aspect-ratio:1;object-fit:cover;border:1px solid var(--line);border-radius:var(--r-sm);transition:border-color .15s ease,opacity .15s ease;background:var(--surface-2)}
+.gallery-item:hover img,.gallery-item:hover video{border-color:var(--accent)}
+.gallery-play{position:absolute;top:8px;right:8px;display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;background:rgba(15,25,35,0.55);color:#fff;pointer-events:none}
+.gallery-item:hover .gallery-play{background:var(--accent)}
 .gallery-item figcaption{display:flex;justify-content:space-between;gap:8px;margin-top:7px;font-family:var(--mono);font-size:10px;color:var(--ink-3)}
 .gallery-item .cap{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lightbox{display:none;position:fixed;inset:0;z-index:120;align-items:center;justify-content:center;padding:24px;background:rgba(15,25,35,0.7);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
 .lightbox.open{display:flex}
 .lightbox-inner{width:100%;max-width:880px;animation:modalIn .2s cubic-bezier(.16,1,.3,1)}
-.lightbox img{display:block;max-width:100%;max-height:74vh;margin:0 auto;border:1px solid rgba(255,255,255,0.14);border-radius:var(--r);background:var(--surface-3)}
+.lightbox img,.lightbox video{display:block;max-width:100%;max-height:74vh;margin:0 auto;border:1px solid rgba(255,255,255,0.14);border-radius:var(--r);background:var(--surface-3)}
 .lightbox-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px}
 .lightbox-path{font-family:var(--mono);font-size:10.5px;color:rgba(255,255,255,0.75);opacity:.9;word-break:break-all}
 .lightbox-actions{display:flex;gap:8px;flex-shrink:0}
@@ -448,6 +450,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
           <button class="action-btn" :class="{active: aiAction==='buy'}" @click="aiAction = aiAction==='buy' ? null : 'buy'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>Buy Credits</button>
           <button class="action-btn" :class="{active: aiAction==='refill'}" @click="aiAction = aiAction==='refill' ? null : 'refill'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>Auto-Refill</button>
           <button class="action-btn" :class="{active: aiAction==='images'}" @click="aiAction = aiAction==='images' ? null : 'images'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>Generate Images</button>
+          <button class="action-btn" :class="{active: aiAction==='video'}" @click="aiAction = aiAction==='video' ? null : 'video'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>Generate Videos</button>
         </div>
         <div class="grid" x-show="aiAction==='buy' || aiAction==='refill'" style="margin-top:16px">
           <div class="span-12">
@@ -569,6 +572,54 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
             </div>
           </div>
         </div>
+        <div x-show="aiAction==='video'" class="grid" style="margin-top:16px">
+          <div class="span-5">
+            <div class="card">
+              <div class="card-head"><div class="card-title">Video Generation</div></div>
+              <div class="field"><label class="field-label">Prompt</label><textarea class="field-input" x-model="vidPrompt" placeholder="Describe the video you want to create..."></textarea></div>
+              <template x-if="state?.videoModels?.length"><div class="field"><label class="field-label">Model</label><select class="field-input" x-model="vidModel"><template x-for="m in state?.videoModels || []" :key="m.id"><option :value="m.id" x-text="m.display_name || m.id"></option></template></select></div></template>
+              <div class="inline-row"><div class="field"><label class="field-label">Duration</label><select class="field-input" x-model="vidDuration"><option value="4">4s</option><option value="5">5s</option><option value="6">6s</option><option value="8">8s</option><option value="10">10s</option></select></div><div class="field"><label class="field-label">Resolution</label><select class="field-input" x-model="vidResolution"><option value="480p">480p</option><option value="720p">720p</option><option value="1080p">1080p</option></select></div></div>
+              <div class="inline-row"><div class="field"><label class="field-label">Aspect Ratio</label><select class="field-input" x-model="vidAspect"><option value="16:9">16:9</option><option value="9:16">9:16</option><option value="1:1">1:1</option></select></div><div class="field"><label class="field-label">Audio</label><select class="field-input" x-model="vidAudio"><option value="on">With audio</option><option value="off">Silent</option></select></div></div>
+              <button class="btn btn-primary" style="margin-top:14px;width:100%" @click="doVideoQuote()" :disabled="vidQuoteBusy" x-text="vidQuoteBusy ? 'Quoting…' : 'Get Quote'"></button>
+            </div>
+            <div class="card" style="margin-top:14px">
+              <div class="card-head"><div class="card-title">Order History</div></div>
+              <template x-for="h in (state?.videoHistory || []).slice(0,10)" :key="h.id">
+                <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line-2)">
+                  <span class="pill" :class="{'pill-ok':h.status==='completed'||h.status==='generation_complete','pill-fail':h.status==='failed','pill-wait':h.status==='processing'||h.status==='pending_payment','pill-idle':!h.status||(!['completed','generation_complete','failed','processing','pending_payment'].includes(h.status))}" x-text="(h.status||'unknown').toUpperCase()"></span>
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="h.model_display_name || h.model || 'Unknown'"></div>
+                    <div style="font-size:11px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="h.prompt || 'No prompt'"></div>
+                  </div>
+                  <div style="text-align:right;flex-shrink:0;font-family:var(--mono);font-size:10.5px;color:var(--ink-3)">
+                    <div x-text="(h.created_at || '').slice(0,10)"></div>
+                    <div x-show="h.price_usd != null || h.actual_cost_usd != null" x-text="'$' + (h.price_usd != null ? h.price_usd : h.actual_cost_usd).toFixed(2)"></div>
+                  </div>
+                  <template x-if="h.filepath"><button class="btn btn-sm btn-ghost" style="flex-shrink:0;padding:4px 6px" @click.stop="openVideo(h)" title="View video"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg></button></template>
+                </div>
+              </template>
+              <template x-if="state && !(state?.videoHistory || []).length"><div class="empty">No orders yet</div></template>
+            </div>
+          </div>
+          <div class="span-7">
+            <div class="card">
+              <div class="card-head"><div class="card-title">Gallery</div><span class="pill pill-idle" x-show="(state?.videoHistory || []).filter(h => h.filepath).length" x-text="(state?.videoHistory || []).filter(h => h.filepath).length + ' SAVED'"></span></div>
+              <template x-if="(state?.videoHistory || []).filter(h => h.filepath).length"><div class="gallery">
+                <template x-for="h in (state?.videoHistory || []).filter(h => h.filepath)" :key="h.id">
+                  <figure class="gallery-item" @click="openVideo(h)">
+                    <img :src="vidPosters[h.id] || ''" :alt="h.prompt || 'Generated video'" x-show="vidPosters[h.id]">
+                    <video :src="vidUrls[h.id] || ''" muted playsinline preload="metadata" x-show="!vidPosters[h.id] && vidUrls[h.id]"></video>
+                    <span class="gallery-play"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
+                    <figcaption><span class="cap" x-text="videoCaption(h)"></span><span x-text="(h.completed_at || '').slice(0,10)"></span></figcaption>
+                  </figure>
+                </template>
+              </div></template>
+              <template x-if="state && !(state?.videoHistory || []).some(h => h.filepath)"><div class="empty">No videos yet — generate your first one</div></template>
+              <template x-if="!state"><div class="empty">Loading…</div></template>
+              <div style="font-size:10.5px;color:var(--ink-3);font-family:var(--mono);margin-top:16px" x-show="state">files saved in ~/.paytaca/videos · click a video to play</div>
+            </div>
+          </div>
+        </div>
       </div>
     </main>
   </div>
@@ -590,6 +641,22 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
     </div>
   </div>
 </div>
+<div class="modal-backdrop" :class="{open: showVideoQuoteModal}" @click.self="showVideoQuoteModal=false"><div class="modal" role="dialog" aria-modal="true"><div class="modal-title">Video Generation</div><div class="modal-body">Model: <strong x-text="pendingVideoQuote?.model || 'default'"></strong><br><span x-show="pendingVideoQuote?.duration || pendingVideoQuote?.resolution" x-text="(pendingVideoQuote?.duration ? pendingVideoQuote.duration + 's' : '') + (pendingVideoQuote?.resolution ? ' · ' + pendingVideoQuote.resolution : '') + (pendingVideoQuote?.aspectRatio ? ' · ' + pendingVideoQuote.aspectRatio : '')"></span><br x-show="pendingVideoQuote?.duration || pendingVideoQuote?.resolution">Cost: <span class="tbl-num" x-text="pendingVideoQuote?.amountSats ? (pendingVideoQuote.amountSats / 1e8).toFixed(8) + ' BCH' : 'calculating...'"></span><span x-show="pendingVideoQuote?.amountUsd != null" x-text="pendingVideoQuote?.amountUsd != null ? ' · $' + pendingVideoQuote.amountUsd.toFixed(2) + ' USD' : ''"></span><br>Order: <span class="mono-break" style="color:var(--ink-3)" x-text="pendingVideoQuote?.orderId || 'pending'"></span></div><div class="modal-actions"><button class="btn" @click="showVideoQuoteModal=false">Cancel</button><button class="btn btn-primary" @click="confirmVideoGen()" :disabled="vidGenBusy" x-text="vidGenBusy ? 'Generating…' : 'Pay & Generate'"></button></div></div></div>
+<div class="lightbox" :class="{open: videoLightbox}" @click.self="videoLightbox=null" @keydown.escape.window="videoLightbox=null" role="dialog" aria-modal="true">
+  <div class="lightbox-inner">
+    <video :src="videoLightbox && vidUrls[videoLightbox.id] ? vidUrls[videoLightbox.id] : ''" controls playsinline x-show="videoLightbox && vidUrls[videoLightbox.id]"></video>
+    <div class="lightbox-bar">
+      <span class="lightbox-path" x-text="videoLightbox?.path || videoLightbox?.id || ''"></span>
+      <div class="lightbox-actions">
+        <button class="btn btn-sm" @click="copyText(videoLightbox?.path)">Copy Path</button>
+        <a class="btn btn-sm" :href="videoLightbox && vidUrls[videoLightbox.id] ? vidUrls[videoLightbox.id] : '#'" target="_blank" rel="noopener" x-show="videoLightbox && vidUrls[videoLightbox.id]">Open ↗</a>
+        <template x-if="!videoLightboxConfirmDelete"><button class="btn btn-sm" style="color:var(--err)" @click="videoLightboxConfirmDelete=true">Delete</button></template>
+        <template x-if="videoLightboxConfirmDelete"><span style="display:flex;gap:6px;align-items:center;font-size:11.5px;color:var(--err)">Delete?<button class="btn btn-sm btn-primary" style="background:var(--err);border-color:var(--err)" @click="deleteVideo()">Yes</button><button class="btn btn-sm" @click="videoLightboxConfirmDelete=false">No</button></span></template>
+        <button class="btn btn-sm" @click="videoLightboxConfirmDelete=false;videoLightbox=null">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
 <template x-if="toastVisible"><div class="toast" :class="toastOk ? 'toast-ok' : 'toast-err'" x-text="toastMsg"></div></template>
 <template x-if="notify">
   <div class="tx-toast">
@@ -604,22 +671,27 @@ var QR=(()=>{var EC_PARAMS=[[],[26,7,1],[44,10,1],[70,15,1],[100,20,1],[134,26,1
 </script>
 <script>
 document.addEventListener('alpine:init',function(){Alpine.data('app',function(){return{
-token:(function(){var t=new URLSearchParams(window.location.search).get('token')||'';if(t)history.replaceState(null,'',window.location.pathname);return t})(),theme:localStorage.getItem('pt-theme')||'light',tab:'wallet',state:null,
+token:(function(){try{var t=new URLSearchParams(window.location.search).get('token')||'';if(t){sessionStorage.setItem('pt-token',t);history.replaceState(null,'',window.location.pathname)}return t||sessionStorage.getItem('pt-token')||''}catch(e){return ''}})(),theme:localStorage.getItem('pt-theme')||'light',tab:'wallet',state:null,
 rcvType:'bch',rcvCategory:'',rcvAmount:'',rcvView:null,rcvQrSvg:'',
 sendType:'bch',sendAmount:'',sendCurrency:'bch',sendAddress:'',sendCategory:'',sendTokenPreset:'__custom__',sendTokenAmount:'',sendError:'',sendSuccess:'',pendingSend:null,
 histType:'all',histRecords:[],histPage:1,histNumPages:1,histHasNext:false,histLoading:false,histNetwork:'mainnet',
 swapTokens:[{symbol:'LIFT',category:'5932b2fd4915d6a75d3ec53282cd49118149a2176ee67ed68b1111ff0786f7fc'},{symbol:'PUSD',category:'2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544'}],swapToken:'5932b2fd4915d6a75d3ec53282cd49118149a2176ee67ed68b1111ff0786f7fc',swapCustomCategory:'',swapDir:'buy',swapAmount:'',swapError:'',swapQuoteText:'',swapBusy:false,swapExecBusy:false,pendingSwap:null,
 pendingPurchase:null,purchaseBusy:false,purchaseMethod:'bch',purchaseError:'',liftQuote:null,liftQuoteBusy:false,liftQuoteError:'',showPurchaseModal:false,showSendModal:false,sendConfirmBusy:false,planSliderIdx:{},PLAN_STEPS:[0,15,30,60],
 pendingImageQuote:null,showImageQuoteModal:false,imgGenBusy:false,imgQuoteBusy:false,walletAction:null,aiAction:null,lightbox:null,lightboxConfirmDelete:false,imgUrls:{},
+pendingVideoQuote:null,showVideoQuoteModal:false,vidGenBusy:false,vidQuoteBusy:false,videoLightbox:null,videoLightboxConfirmDelete:false,vidUrls:{},vidPosters:{},
 refillModel:'',refillMinutesIdx:1,refillCapIdx:0,REFILL_MINUTES:[15,30,60],REFILL_CAPS:[2,4,8,-1],refillPayMethod:'bch',refillEditing:false,refillNotice:'',
 imgPrompt:'',imgModel:'bytedance-seed/seedream-5-0-pro',imgAspect:'1:1',imgQuality:'auto',
+vidPrompt:'',vidModel:'',vidDuration:'5',vidResolution:'720p',vidAspect:'16:9',vidAudio:'on',
 toastVisible:false,toastMsg:'',toastOk:true,
 ws:null,wsStatus:'connecting',wsAddress:null,wsSeen:{},wsReconnectTimer:null,wsPingTimer:null,wsRefreshTimer:null,wsLateTimer:null,notify:null,_ntid:0,
-async init(){document.documentElement.setAttribute('data-theme',this.theme);try{this.state=await this.api('GET','/api/wallet/state');this.loadHistory(1);this.loadImages();await this.onRcvChange();this.connectWatch()}catch(e){this.toast(e.message,true)}var self=this;document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible'&&self.state){if(!self.ws||self.ws.readyState!==1){if(self.wsReconnectTimer)clearTimeout(self.wsReconnectTimer);self.connectWatch()}}});window.addEventListener('online',function(){if(self.state){if(self.wsReconnectTimer)clearTimeout(self.wsReconnectTimer);self.connectWatch()}})},
-async load(){try{this.state=await this.api('GET','/api/wallet/state');this.onRcvChange();this.loadHistory(this.histPage);this.loadImages()}catch(e){this.toast(e.message,true)}},
+async init(){document.documentElement.setAttribute('data-theme',this.theme);try{this.state=await this.api('GET','/api/wallet/state');this.loadHistory(1);this.loadImages();this.loadVideos();await this.onRcvChange();this.connectWatch()}catch(e){this.toast(e.message,true)}var self=this;document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible'&&self.state){if(!self.ws||self.ws.readyState!==1){if(self.wsReconnectTimer)clearTimeout(self.wsReconnectTimer);self.connectWatch()}}});window.addEventListener('online',function(){if(self.state){if(self.wsReconnectTimer)clearTimeout(self.wsReconnectTimer);self.connectWatch()}})},
+async load(){try{this.state=await this.api('GET','/api/wallet/state');this.onRcvChange();this.loadHistory(this.histPage);this.loadImages();this.loadVideos()}catch(e){this.toast(e.message,true)}},
 loadImages(){var s=this;(this.state&&this.state.imageHistory||[]).forEach(function(h){if(h.status==='completed'&&h.filepath)s.loadImage(h.id)})},
 async loadImage(id){if(!id||this.imgUrls[id])return;try{var res=await fetch('/api/ai/images/'+id+'/file',{headers:{'X-Paytaca-Token':this.token}});if(!res.ok)return;var blob=await res.blob();this.imgUrls[id]=URL.createObjectURL(blob)}catch(e){}},
-async api(method,apipath,body){var opts={method:method,headers:{'X-Paytaca-Token':this.token,'Accept':'application/json'}};if(body!==undefined){opts.headers['Content-Type']='application/json';opts.body=JSON.stringify(body)}var res=await fetch(apipath,opts);if(!res.ok){var msg='Request failed ('+res.status+')';try{var j=await res.json();if(j.error)msg=j.error}catch(ex){}throw new Error(msg)}return res.json()},
+loadVideos(){var s=this;(this.state&&this.state.videoHistory||[]).forEach(function(h){if(h.filepath)s.loadVideo(h.id)})},
+async loadVideo(id){if(!id||this.vidUrls[id])return;try{var res=await fetch('/api/ai/videos/'+id+'/file',{headers:{'X-Paytaca-Token':this.token}});if(!res.ok)return;var blob=await res.blob();var url=URL.createObjectURL(blob);this.vidUrls[id]=url;this.makePoster(id,url)}catch(e){}},
+makePoster(id,url){if(this.vidPosters[id])return;var self=this;var v=document.createElement('video');v.muted=true;v.playsInline=true;v.preload='auto';v.src=url;var done=false;var draw=function(){if(done)return;done=true;try{var c=document.createElement('canvas');c.width=v.videoWidth||640;c.height=v.videoHeight||360;c.getContext('2d').drawImage(v,0,0,c.width,c.height);var next=Object.assign({},self.vidPosters);next[id]=c.toDataURL('image/jpeg',0.7);self.vidPosters=next}catch(e){}try{v.removeAttribute('src');v.load()}catch(e){}};v.addEventListener('loadeddata',function(){try{v.currentTime=Math.min(0.1,(v.duration||1)/2)}catch(e){draw()}});v.addEventListener('seeked',draw);v.addEventListener('error',draw);setTimeout(draw,4000)},
+async api(method,apipath,body){var opts={method:method,headers:{'X-Paytaca-Token':this.token,'Accept':'application/json'}};if(body!==undefined){opts.headers['Content-Type']='application/json';opts.body=JSON.stringify(body)}var res=await fetch(apipath,opts);if(!res.ok){var msg='Request failed ('+res.status+')';if(res.status===401)msg='Session expired or unauthorized — reopen the page via paytaca web';else{try{var j=await res.json();if(j.error)msg=j.error}catch(ex){}}throw new Error(msg)}return res.json()},
 fmtDuration(s){if(!s||s<=0)return '0m';var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h?h+'h '+m+'m':m+'m'},
 bchPriceLabel(p){if(!p)return '';return p.priceUsd!=null?'$'+p.priceUsd.toFixed(2)+' USD':((p.priceSats||0)/1e8).toFixed(8)+' BCH'},
 liftPriceLabel(p){if(!p)return '';var pct=(this.state&&this.state.liftDiscountPercent)||0;var f=1-pct/100;return p.priceUsd!=null?'$'+(p.priceUsd*f).toFixed(2)+' USD':(((p.priceSats||0)*f)/1e8).toFixed(8)+' BCH'},
@@ -668,7 +740,12 @@ async doImageQuote(){var prompt=(this.imgPrompt||'').trim();if(!prompt){this.toa
 async confirmImageGen(){if(!this.pendingImageQuote)return;this.imgGenBusy=true;try{var orderId=this.pendingImageQuote.orderId;var result=await this.api('POST','/api/ai/images/fulfill',{orderId:orderId});this.showImageQuoteModal=false;this.aiAction='images';if(result&&result.path){this.lightbox={id:orderId,path:result.path};this.toast('Image saved to ~/.paytaca/images')}else{this.toast((result&&result.error)||(result&&result.paid?'Payment received — image will appear in your gallery':'Image generation failed'),true)}this.load()}catch(e){this.toast(e.message,true)}this.imgGenBusy=false;this.pendingImageQuote=null},
 openImage(h){this.lightbox={id:h.id,path:h.filepath||('~/paytaca/images/'+h.id)};this.lightboxConfirmDelete=false;this.loadImage(h.id)},
 async deleteImage(){if(!this.lightbox)return;var id=this.lightbox.id;try{await this.api('DELETE','/api/ai/images/'+id);this.lightbox=null;this.lightboxConfirmDelete=false;this.toast('Image deleted');this.load()}catch(e){this.toast(e.message,true);this.lightboxConfirmDelete=false}},
-imgCaption(h){var t=h.prompt||h.model_display_name||h.model||h.id||'';return t.length>48?t.slice(0,48)+'…':t}
+imgCaption(h){var t=h.prompt||h.model_display_name||h.model||h.id||'';return t.length>48?t.slice(0,48)+'…':t},
+async doVideoQuote(){var prompt=(this.vidPrompt||'').trim();if(!prompt){this.toast('Enter a prompt',true);return}this.vidQuoteBusy=true;try{var quote=await this.api('POST','/api/ai/videos/quote',{prompt:prompt,model:this.vidModel||undefined,duration:Number(this.vidDuration),resolution:this.vidResolution,aspectRatio:this.vidAspect,generateAudio:this.vidAudio==='on'});this.pendingVideoQuote=quote;this.showVideoQuoteModal=true}catch(e){this.toast(e.message,true)}this.vidQuoteBusy=false},
+async confirmVideoGen(){if(!this.pendingVideoQuote)return;this.vidGenBusy=true;try{var orderId=this.pendingVideoQuote.orderId;var result=await this.api('POST','/api/ai/videos/fulfill',{orderId:orderId});this.showVideoQuoteModal=false;this.aiAction='video';if(result&&result.path){this.videoLightbox={id:orderId,path:result.path};this.toast('Video saved to ~/.paytaca/videos')}else{this.toast((result&&result.error)||(result&&result.paid?'Payment received — video will appear in your gallery':'Video generation failed'),true)}this.load()}catch(e){this.toast(e.message,true)}this.vidGenBusy=false;this.pendingVideoQuote=null},
+openVideo(h){this.videoLightbox={id:h.id,path:h.filepath||('~/paytaca/videos/'+h.id)};this.videoLightboxConfirmDelete=false;this.loadVideo(h.id)},
+async deleteVideo(){if(!this.videoLightbox)return;var id=this.videoLightbox.id;try{await this.api('DELETE','/api/ai/videos/'+id);this.videoLightbox=null;this.videoLightboxConfirmDelete=false;this.toast('Video deleted');this.load()}catch(e){this.toast(e.message,true);this.videoLightboxConfirmDelete=false}},
+videoCaption(h){var t=h.prompt||h.model_display_name||h.model||h.id||'';return t.length>48?t.slice(0,48)+'…':t}
 }})});
 </script>
 <script defer>${ALPINE_JS}</script>

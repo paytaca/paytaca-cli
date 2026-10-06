@@ -43,6 +43,14 @@ import {
   fulfillImageOrder,
   type ImageOrderQuote,
 } from '../ai/images.js'
+import {
+  listVideoModels,
+  getVideoHistory,
+  getVideoOrderStatus,
+  createVideoOrder,
+  fulfillVideoOrder,
+  type VideoOrderQuote,
+} from '../ai/videos.js'
 import { provisionApiKey } from '../ai/oauth.js'
 import { configureHarness, type ConfigureResult } from '../ai/configure.js'
 import { CLIENTS, type McpClient } from './mcp.js'
@@ -1003,6 +1011,267 @@ export function registerAiCommands(program: Command): void {
           console.log(chalk.dim(`   txid: ${result.txid}\n`))
         } else if (result.paid && !result.success) {
           console.log(chalk.yellow(`\n   Image generation is still processing (order ${result.orderId}).`))
+          console.log(chalk.dim('   Try again in a few seconds.\n'))
+        } else {
+          console.log(chalk.red(`\n   Error: ${result.error}\n`))
+        }
+      } catch (err: any) {
+        if (opts.json) outputJson({ error: err.message })
+        else console.log(chalk.red(`\nError: ${err.message}\n`))
+        process.exitCode = 1
+      }
+    })
+
+  // ── ai video ────────────────────────────────────────────────────────
+  const video = ai.command('video').description('Paytaca AI video generation')
+
+  video.command('models')
+    .description('List available video generation models')
+    .option('--search <term>', 'Filter models by name')
+    .option('--backend <url>', 'Override backend URL')
+    .option('--json', 'Output as JSON')
+    .action(async (opts) => {
+      try {
+        const models = await listVideoModels({
+          search: opts.search,
+          backendUrl: opts.backend,
+        })
+        if (opts.json) {
+          outputJson({ models })
+          return
+        }
+        console.log(chalk.bold('\n   Video Models\n'))
+        if (models.length === 0) {
+          console.log(chalk.dim('   No video models found.\n'))
+          return
+        }
+        const unitLabel: Record<string, string> = {
+          second: 'per second',
+          second_cents: 'per second',
+          token: 'per token',
+          megapixel_second_cents: 'per megapixel-second',
+        }
+        for (const m of models) {
+          const price =
+            m.cost_per_unit_usd !== undefined
+              ? `$${m.cost_per_unit_usd.toFixed(6)}`
+              : ''
+          const unit = unitLabel[m.pricing_unit ?? ''] ?? `per ${m.pricing_unit ?? 'unit'}`
+          const flags: string[] = []
+          if (m.generate_audio) flags.push('audio')
+          if (m.requires_video_input) flags.push('video-input only')
+          console.log(
+            `   ${chalk.bold(m.display_name || m.id)} ${chalk.dim(`(${m.id})`)}`
+          )
+          console.log(chalk.dim(`     ${price} ${unit}${flags.length ? ` · ${flags.join(' · ')}` : ''}`))
+          const specs: string[] = []
+          if (m.supported_durations?.length) specs.push(`durations ${m.supported_durations.join(', ')}s`)
+          if (m.supported_resolutions?.length) specs.push(`res ${m.supported_resolutions.join(', ')}`)
+          if (m.supported_aspect_ratios?.length) specs.push(`ratios ${m.supported_aspect_ratios.join(', ')}`)
+          if (specs.length) console.log(chalk.dim(`     ${specs.join(' · ')}`))
+        }
+        console.log()
+      } catch (err: any) {
+        if (opts.json) outputJson({ error: err.message })
+        else console.log(chalk.red(`\nError: ${err.message}\n`))
+        process.exitCode = 1
+      }
+    })
+
+  video.command('generate')
+    .description('Generate a video from a prompt (BCH payment)')
+    .argument('<prompt>', 'Video prompt')
+    .option('--model <model>', 'Video model id (defaults to the cheapest)')
+    .option('--duration <seconds>', 'Duration in seconds')
+    .option('--resolution <resolution>', 'Resolution, e.g. 720p, 1080p')
+    .option('--aspect-ratio <ratio>', 'Aspect ratio, e.g. 16:9, 9:16')
+    .option('--audio <mode>', 'Audio generation: on or off')
+    .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
+    .option('--backend <url>', 'Override backend URL')
+    .option('-y, --yes', 'Skip confirmation prompt')
+    .option('--json', 'Output as JSON')
+    .action(async (prompt: string, opts) => {
+      const json = Boolean(opts.json)
+      let duration: number | undefined
+      if (opts.duration !== undefined) {
+        duration = Number(opts.duration)
+        if (!Number.isFinite(duration) || duration <= 0) {
+          const message = 'Duration must be a positive number of seconds.'
+          if (json) outputJson({ error: message })
+          else console.log(chalk.red(`\nError: ${message}\n`))
+          process.exitCode = 1
+          return
+        }
+      }
+      let generateAudio: boolean | undefined
+      if (opts.audio !== undefined) {
+        const value = String(opts.audio).toLowerCase()
+        if (!['on', 'off', 'true', 'false'].includes(value)) {
+          const message = 'Audio must be "on" or "off".'
+          if (json) outputJson({ error: message })
+          else console.log(chalk.red(`\nError: ${message}\n`))
+          process.exitCode = 1
+          return
+        }
+        generateAudio = value === 'on' || value === 'true'
+      }
+
+      const orderOpts = {
+        prompt,
+        model: opts.model,
+        duration,
+        resolution: opts.resolution,
+        aspectRatio: opts.aspectRatio,
+        generateAudio,
+        isChipnet: Boolean(opts.chipnet),
+        backendUrl: opts.backend,
+      }
+
+      let quote: VideoOrderQuote
+      try {
+        quote = await createVideoOrder(orderOpts)
+      } catch (err: any) {
+        if (json) outputJson({ error: err.message })
+        else console.log(chalk.red(`\nError: ${err.message}\n`))
+        process.exitCode = 1
+        return
+      }
+
+      if (!opts.yes) {
+        const spec = [
+          quote.duration ? `${quote.duration}s` : null,
+          quote.resolution,
+          quote.aspectRatio,
+        ]
+          .filter(Boolean)
+          .join(' ')
+        if (json) {
+          outputJson({
+            error: 'Payment not confirmed. Re-run with --yes to execute.',
+            orderId: quote.orderId,
+            model: quote.model,
+            amountSats: quote.amountSats,
+            amountUsd: quote.amountUsd,
+          })
+          process.exitCode = 1
+          return
+        }
+        const proceed = await promptConfirmation(
+          `Generate a${spec ? ` ${spec}` : ''} video with ${
+            quote.model || 'the default model'
+          } for ${quote.amountSats} sats${
+            quote.amountUsd !== undefined ? ` (~$${quote.amountUsd})` : ''
+          }?`
+        )
+        if (!proceed) {
+          console.log(chalk.dim('\n   Cancelled.\n'))
+          process.exitCode = 1
+          return
+        }
+      }
+
+      const result = await fulfillVideoOrder(quote, orderOpts)
+
+      if (json) {
+        outputJson({ ...result, base64: undefined })
+        if (!result.success) process.exitCode = 1
+        return
+      }
+
+      if (!result.success) {
+        console.log(chalk.red(`\n   Error: ${result.error || 'Generation failed.'}\n`))
+        process.exitCode = 1
+        return
+      }
+      console.log(chalk.green(`\n   Video generated — ${result.path}`))
+      console.log(`   Order:  ${result.orderId}`)
+      console.log(`   Model:  ${result.model}`)
+      console.log(`   Cost:   ${result.amountSats} sats${result.amountUsd !== undefined ? ` (~$${result.amountUsd})` : ''}`)
+      if (result.txid) console.log(chalk.dim(`   txid:   ${result.txid}`))
+      console.log()
+    })
+
+  video.command('history')
+    .description('Show video generation order history')
+    .option('--page <page>', 'Page number', '1')
+    .option('--backend <url>', 'Override backend URL')
+    .option('--json', 'Output as JSON')
+    .action(async (opts) => {
+      const page = Number(opts.page)
+      if (!Number.isFinite(page) || page < 1) {
+        const message = 'Page must be a positive number.'
+        if (opts.json) outputJson({ error: message })
+        else console.log(chalk.red(`\nError: ${message}\n`))
+        process.exitCode = 1
+        return
+      }
+      try {
+        const history = await getVideoHistory({
+          page,
+          backendUrl: opts.backend,
+        })
+        if (opts.json) {
+          outputJson(history)
+          return
+        }
+        console.log(chalk.bold('\n   Video Order History\n'))
+        const rows = history.data ?? []
+        if (rows.length === 0) {
+          console.log(chalk.dim('   No orders found.\n'))
+          return
+        }
+        for (const row of rows) {
+          const date = row.created_at ? new Date(row.created_at).toLocaleString() : ''
+          const spec = [
+            row.duration ? `${row.duration}s` : null,
+            row.resolution,
+            row.generate_audio ? 'audio' : null,
+          ]
+            .filter(Boolean)
+            .join(' ')
+          console.log(`   ${chalk.bold(row.id)}`)
+          console.log(
+            chalk.dim(
+              `     ${row.status ?? 'unknown'} · ${row.model_display_name || row.model || ''}${spec ? ` · ${spec}` : ''} · ${row.price_sats ?? 0} sats${date ? ` · ${date}` : ''}`
+            )
+          )
+          if (row.prompt) console.log(chalk.dim(`     "${row.prompt}"`))
+          console.log()
+        }
+        if (history.count !== undefined) {
+          console.log(chalk.dim(`   ${history.count} total orders\n`))
+        }
+      } catch (err: any) {
+        if (opts.json) outputJson({ error: err.message })
+        else console.log(chalk.red(`\nError: ${err.message}\n`))
+        process.exitCode = 1
+      }
+    })
+
+  video.command('status')
+    .description('Poll a pending video generation order')
+    .argument('<order-id>', 'Video order ID to check')
+    .option('--chipnet', 'Use chipnet')
+    .option('--backend <url>', 'Override backend URL')
+    .option('--json', 'Output as JSON')
+    .action(async (orderId: string, opts) => {
+      try {
+        const result = await getVideoOrderStatus(orderId, {
+          isChipnet: Boolean(opts.chipnet),
+          backendUrl: opts.backend,
+        })
+        if (opts.json) {
+          outputJson({ ...result, base64: undefined })
+          return
+        }
+        if (result.success && result.path) {
+          console.log(chalk.green(`\n   Video ready (order ${result.orderId}).`))
+          console.log(`   Saved to: ${result.path}`)
+          console.log(chalk.dim(`   Model: ${result.model}`))
+          console.log(chalk.dim(`   Cost: ${result.amountSats} sats`))
+          console.log(chalk.dim(`   txid: ${result.txid}\n`))
+        } else if (result.paid && !result.success) {
+          console.log(chalk.yellow(`\n   Video generation is still processing (order ${result.orderId}).`))
           console.log(chalk.dim('   Try again in a few seconds.\n'))
         } else {
           console.log(chalk.red(`\n   Error: ${result.error}\n`))

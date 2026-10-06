@@ -37,6 +37,9 @@ const okRefill = { enabled: true, model: 'test', minutes: 30, maxMinutes: 100, p
 const okImageModels = [{ id: 'model-a', display_name: 'Model A' }] as any
 const okImageQuote = { orderId: 'order-1', prompt: 'a cat', contractAddress: 'bitcoincash:qq...', amountSats: 1000 } as any
 const okImageResult = { success: true, paid: true, orderId: 'order-1', status: 'completed', path: '/tmp/img.png', mediaType: 'image/png' } as any
+const okVideoModels = [{ id: 'video-a', display_name: 'Video A' }] as any
+const okVideoQuote = { orderId: 'vorder-1', prompt: 'a cat', contractAddress: 'bitcoincash:qq...', amountSats: 2000 } as any
+const okVideoResult = { success: true, paid: true, orderId: 'vorder-1', status: 'completed', path: '/tmp/v.mp4', mediaType: 'video/mp4' } as any
 
 function fakeDeps(): WebDeps {
   return {
@@ -50,6 +53,8 @@ function fakeDeps(): WebDeps {
       autoRefill: null,
       imageModels: [],
       imageHistory: [],
+      videoModels: [],
+      videoHistory: [],
     }),
     getWalletHistory: async () => ({ records: [], page: 1, numPages: 1, hasNext: false }),
     getReceiveView: async (opts) => ({
@@ -81,6 +86,15 @@ function fakeDeps(): WebDeps {
       return null
     },
     deleteImageFile: async (id) => id === 'exist',
+    getVideoModels: async () => okVideoModels,
+    getVideoHistory: async () => ({ data: [] }),
+    createVideoQuote: async () => okVideoQuote,
+    fulfillVideo: async () => okVideoResult,
+    serveVideoFile: async (id) => {
+      if (id === 'exist') return { filePath: '/dev/null', mediaType: 'video/mp4' }
+      return null
+    },
+    deleteVideoFile: async (id) => id === 'exist',
   }
 }
 
@@ -277,6 +291,63 @@ describe('web server AI routes', () => {
   it('GET /api/ai/images/missing/file returns 404', async () => {
     const res = await req(`http://127.0.0.1:${srv.port}/api/ai/images/missing/file`, srv.token)
     expect(res.status).toBe(404)
+  })
+
+  it('GET /api/ai/video-models returns models', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/video-models`, srv.token)
+    expect(res.status).toBe(200)
+    expect(Array.isArray(res.json.models)).toBe(true)
+  })
+
+  it('POST /api/ai/videos/quote succeeds', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/videos/quote`, srv.token, 'POST', {
+      prompt: 'a cat', duration: 5, resolution: '720p', aspectRatio: '16:9', generateAudio: true,
+    })
+    expect(res.status).toBe(200)
+    expect(res.json.orderId).toBe('vorder-1')
+  })
+
+  it('POST /api/ai/videos/quote rejects empty prompt', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/videos/quote`, srv.token, 'POST', {
+      prompt: '',
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('POST /api/ai/videos/quote rejects invalid duration', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/videos/quote`, srv.token, 'POST', {
+      prompt: 'a cat', duration: -1,
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('POST /api/ai/videos/fulfill succeeds', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/videos/fulfill`, srv.token, 'POST', {
+      orderId: 'vorder-1',
+    })
+    expect(res.status).toBe(200)
+    expect(res.json.status).toBe('completed')
+  })
+
+  it('GET /api/ai/videos/history returns data', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/videos/history`, srv.token)
+    expect(res.status).toBe(200)
+  })
+
+  it('GET /api/ai/videos/exist/file returns video', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/videos/exist/file`, srv.token)
+    expect(res.status).toBe(200)
+  })
+
+  it('GET /api/ai/videos/missing/file returns 404', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/videos/missing/file`, srv.token)
+    expect(res.status).toBe(404)
+  })
+
+  it('DELETE /api/ai/videos/exist deletes', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/videos/exist`, srv.token, 'DELETE')
+    expect(res.status).toBe(200)
+    expect(res.json.deleted).toBe(true)
   })
 })
 
