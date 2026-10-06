@@ -447,7 +447,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
             <div class="card">
               <div class="card-head"><div class="card-title">Time Credits</div><span class="pill pill-idle">MODEL-SPECIFIC</span></div>
               <template x-if="state?.usage?.length"><div class="metric"><div class="metric-value" x-text="activeCreditsTotal(state) > 0 ? fmtDuration(activeCreditsTotal(state)) : '0m'"></div><div class="metric-label">remaining · <span x-text="activeCreditsCount(state)"></span> active session(s) · each plan is tied to one model</div></div></template>
-              <template x-if="state && !state?.usage?.length"><div class="empty" x-text="state?.paygEnabled && Number(state.aiBalanceUsd) > 0 ? 'No active sessions — usage draws from your pay-as-you-go balance' : 'No active sessions'"></div></template>
+              <template x-if="state && !state?.usage?.length"><div class="empty" x-text="state?.paygEnabled && Number(state.aiBalanceUsd) > 0 ? 'No time credit plans purchased yet — usage draws from your pay-as-you-go balance' : 'No time credit plans purchased yet'"></div></template>
               <template x-if="!state"><div class="empty">Loading…</div></template>
               <template x-if="state"><div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn btn-sm btn-primary" @click="aiAction = aiAction==='buy' ? null : 'buy'">Buy Credits</button><button class="btn btn-sm" @click="openRefill('model')">Auto-refill</button></div></template>
               <div class="refill-line" x-show="state?.autoRefill && state?.autoRefill?.mode!=='payg'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg><span x-text="'Auto-refill ' + (state.autoRefill?.enabled ? 'ON' : 'PAUSED') + ' · ' + state.autoRefill?.minutes + 'm top-up'"></span></div>
@@ -461,7 +461,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
               <template x-if="state?.usage?.length"><div class="tbl-scroll"><table class="tbl"><thead><tr><th>Model</th><th>Status</th><th>Remaining</th><th>Used</th></tr></thead><tbody>
                 <template x-for="(s, i) in state?.usage || []" :key="i"><tr><td style="font-size:12.5px" x-text="s.displayName || s.model || 'Unknown'"></td><td><span class="pill pill-active" x-show="s.active">ACTIVE</span><span class="pill pill-idle" x-show="!s.active">IDLE</span></td><td class="tbl-num" x-text="fmtDuration(s.remainingSeconds)"></td><td class="tbl-num" x-text="fmtDuration(s.usedSeconds)"></td></tr></template>
               </tbody></table></div></template>
-              <template x-if="state && !state?.usage?.length"><div class="empty">No usage data</div></template>
+              <template x-if="state && !state?.usage?.length"><div class="empty">No time credit plans purchased yet</div></template>
               <template x-if="!state"><div class="empty">Loading…</div></template>
             </div>
           </div>

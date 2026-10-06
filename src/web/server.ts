@@ -182,14 +182,16 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
       try { bchPriceUsd = await getBchUsdPrice(isChipnet) } catch {}
 
       const lift = tokens.tokens.find((t: { category: string }) => t.category === LIFT_TOKEN_ID)
-      const sessions = getSessions(status).map((s) => ({
-        model: s.model_id || s.ai_model || null,
-        displayName: s.display_name || null,
-        active: s.model_active === true || s.session_active === true,
-        remainingSeconds: s.time_remaining_seconds ?? 0,
-        usedSeconds: s.time_used_seconds ?? 0,
-        creditsSeconds: s.time_credits_seconds ?? 0,
-      }))
+      const sessions = getSessions(status)
+        .filter((s) => s.model_id || s.ai_model || s.display_name)
+        .map((s) => ({
+          model: s.model_id || s.ai_model || null,
+          displayName: s.display_name || null,
+          active: s.model_active === true || s.session_active === true,
+          remainingSeconds: s.time_remaining_seconds ?? 0,
+          usedSeconds: s.time_used_seconds ?? 0,
+          creditsSeconds: s.time_credits_seconds ?? 0,
+        }))
 
       const plans = listPlans(config).map((p) => ({
         modelId: p.id,
