@@ -51,6 +51,18 @@ describe('getSessions', () => {
   it('wraps a bare status object', () => {
     expect(getSessions(active)).toEqual([active])
   })
+
+  it('returns no sessions for a flat payg-only status', () => {
+    const flat = {
+      session_active: false,
+      time_credits_seconds: 0,
+      time_used_seconds: 0,
+      time_remaining_seconds: 0,
+      balance_usd: 2.56,
+      payg_enabled: true,
+    } as unknown as WalletStatus
+    expect(getSessions(flat)).toEqual([])
+  })
 })
 
 describe('findSession', () => {
@@ -128,6 +140,16 @@ describe('summarizeAllCredits', () => {
 
   it('returns an empty array when there are no sessions', () => {
     expect(summarizeAllCredits(status([]))).toEqual([])
+  })
+
+  it('returns an empty array for a flat payg-only status', () => {
+    const flat = {
+      session_active: false,
+      time_remaining_seconds: 0,
+      balance_usd: 2.56,
+      payg_enabled: true,
+    } as unknown as WalletStatus
+    expect(summarizeAllCredits(flat)).toEqual([])
   })
 })
 

@@ -192,22 +192,36 @@ function clientName(server: McpServer): string {
   return server.server.getClientVersion()?.name ?? ''
 }
 
+interface PaygInfo {
+  balanceUsd: number
+  enabled: boolean
+}
+
+function paygLine(payg?: PaygInfo): string | null {
+  if (!payg?.enabled || payg.balanceUsd <= 0) return null
+  return (
+    `Pay-as-you-go balance: ${formatPriceUsd(payg.balanceUsd)} — used ` +
+    `automatically when a model has no active plan.`
+  )
+}
+
 function creditsResponse(
   server: McpServer,
   sessions: CreditsSummary[],
   hint: PurchaseHint | null,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  payg?: PaygInfo
 ): ToolResult {
   const name = clientName(server)
   if (name.startsWith('pi-mcp')) {
     return {
-      content: [{ type: 'text', text: creditsText(sessions, hint) }],
+      content: [{ type: 'text', text: creditsText(sessions, hint, payg) }],
       structuredContent: payload,
     }
   }
   if (name === 'opencode') {
     return {
-      content: [{ type: 'text', text: creditsMarkdown(sessions, hint) }],
+      content: [{ type: 'text', text: creditsMarkdown(sessions, hint, payg) }],
       structuredContent: payload,
     }
   }
@@ -224,10 +238,14 @@ function creditRows(sessions: CreditsSummary[]) {
   }))
 }
 
-function creditsText(sessions: CreditsSummary[], hint?: PurchaseHint | null): string {
+function creditsText(
+  sessions: CreditsSummary[],
+  hint?: PurchaseHint | null,
+  payg?: PaygInfo
+): string {
   const lines: string[] = ['Paytaca AI credits', '']
   if (sessions.length === 0) {
-    lines.push('No AI credit sessions found.')
+    lines.push('No time-credit plans found.')
   } else {
     const rows = creditRows(sessions)
     const width = (key: keyof (typeof rows)[number], header: string) =>
@@ -245,16 +263,22 @@ function creditsText(sessions: CreditsSummary[], hint?: PurchaseHint | null): st
       lines.push(row(r.name, r.status, r.remaining, r.used, r.limit))
     }
   }
+  const paygText = paygLine(payg)
+  if (paygText) lines.push('', paygText)
   if (hint) {
     lines.push('', hint.message)
   }
   return lines.join('\n')
 }
 
-function creditsMarkdown(sessions: CreditsSummary[], hint?: PurchaseHint | null): string {
+function creditsMarkdown(
+  sessions: CreditsSummary[],
+  hint?: PurchaseHint | null,
+  payg?: PaygInfo
+): string {
   const lines: string[] = ['## Paytaca AI credits', '']
   if (sessions.length === 0) {
-    lines.push('No AI credit sessions found.')
+    lines.push('No time-credit plans found.')
   } else {
     lines.push('| Model | Status | Remaining | Used | Token limit |')
     lines.push('| --- | --- | --- | --- | --- |')
@@ -262,6 +286,8 @@ function creditsMarkdown(sessions: CreditsSummary[], hint?: PurchaseHint | null)
       lines.push(`| ${r.name} | ${r.status} | ${r.remaining} | ${r.used} | ${r.limit} |`)
     }
   }
+  const paygText = paygLine(payg)
+  if (paygText) lines.push('', paygText)
   if (hint) {
     lines.push('', hint.message)
   }
@@ -657,6 +683,10 @@ export function registerTools(
         })
 
         const auto = readAutoRefillState()
+        const payg = {
+          balanceUsd: paygBalanceUsd(status),
+          enabled: paygEnabled(status),
+        }
         if (!model) {
           const sessions = summarizeAllCredits(status)
           const payload: Record<string, unknown> = {
@@ -692,7 +722,7 @@ export function registerTools(
               }
             }
           }
-          return creditsResponse(server, sessions, hint, payload)
+          return creditsResponse(server, sessions, hint, payload, payg)
         }
         const summary = summarizeCredits(status, model)
         const payload: Record<string, unknown> = {
@@ -717,7 +747,7 @@ export function registerTools(
             }
           }
         }
-        return creditsResponse(server, [summary], hint, payload)
+        return creditsResponse(server, [summary], hint, payload, payg)
       } catch (err) {
         return fail(err)
       }

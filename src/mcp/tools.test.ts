@@ -934,6 +934,18 @@ describe('MCP tools', () => {
       expect(body.purchaseHint).toBeUndefined()
       expect(body.resumeHint).toBeUndefined()
     })
+
+    it('shows the pay-as-you-go balance in the OpenCode markdown when there are no plans', async () => {
+      mocks.loadWalletRef.mockReturnValue({ walletHash: 'h', canSign: true })
+      mocks.getWalletStatus.mockResolvedValue({ balance_usd: 2.5, payg_enabled: true })
+      mocks.summarizeAllCredits.mockReturnValue([])
+      mocks.hasUsableCredits.mockReturnValue(true)
+      const c = await connect(false, 'opencode')
+      const result = await c.callTool({ name: 'get_credits', arguments: {} })
+      const body = text(result)
+      expect(body).toContain('No time-credit plans found.')
+      expect(body).toContain('Pay-as-you-go balance: $2.50')
+    })
   })
 
   describe('get_plans', () => {

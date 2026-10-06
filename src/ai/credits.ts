@@ -47,9 +47,13 @@ export interface CreditsSummary {
   tokenLimit: number | null
 }
 
+function hasSessionIdentity(session: WalletSession): boolean {
+  return Boolean(session.model_id || session.ai_model || session.display_name)
+}
+
 export function getSessions(status: WalletStatus): WalletSession[] {
   if (Array.isArray(status.sessions)) return status.sessions
-  return [status]
+  return hasSessionIdentity(status) ? [status] : []
 }
 
 function normalizeModelId(value: string): string {

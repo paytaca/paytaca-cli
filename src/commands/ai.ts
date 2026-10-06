@@ -457,9 +457,19 @@ export function registerAiCommands(program: Command): void {
         })
         if (opts.json) {
           if (opts.model) {
-            outputJson({ walletHash, ...summarizeCredits(status, opts.model) })
+            outputJson({
+              walletHash,
+              ...summarizeCredits(status, opts.model),
+              balance_usd: paygBalanceUsd(status),
+              payg_enabled: paygEnabled(status),
+            })
           } else {
-            outputJson({ walletHash, sessions: summarizeAllCredits(status) })
+            outputJson({
+              walletHash,
+              sessions: summarizeAllCredits(status),
+              balance_usd: paygBalanceUsd(status),
+              payg_enabled: paygEnabled(status),
+            })
           }
           return
         }
@@ -468,19 +478,28 @@ export function registerAiCommands(program: Command): void {
           : summarizeAllCredits(status)
         console.log(chalk.bold('\n   AI Credits\n'))
         if (summaries.length === 0) {
-          console.log(chalk.dim('   No sessions found.\n'))
-          return
+          console.log(chalk.dim('   No time-credit plans.\n'))
+        } else {
+          for (const summary of summaries) {
+            console.log(
+              `   ${chalk.bold(summary.displayName || summary.modelId || 'unknown')}`
+            )
+            console.log(`     Model:     ${summary.modelId || '(unknown)'}`)
+            console.log(`     Remaining: ${formatRemaining(summary.timeRemainingSeconds)}`)
+            console.log(`     Used:      ${formatRemaining(summary.timeUsedSeconds)}`)
+            console.log(`     Total:     ${formatRemaining(summary.timeCreditsSeconds)}`)
+            console.log(
+              `     Status:    ${summary.active ? chalk.green('active') : chalk.dim('inactive')}`
+            )
+            console.log()
+          }
         }
-        for (const summary of summaries) {
+        if (paygEnabled(status) && paygBalanceUsd(status) > 0) {
           console.log(
-            `   ${chalk.bold(summary.displayName || summary.modelId || 'unknown')}`
+            `   ${chalk.dim('Pay-as-you-go balance:')} ${formatUsd(paygBalanceUsd(status))}`
           )
-          console.log(`     Model:     ${summary.modelId || '(unknown)'}`)
-          console.log(`     Remaining: ${formatRemaining(summary.timeRemainingSeconds)}`)
-          console.log(`     Used:      ${formatRemaining(summary.timeUsedSeconds)}`)
-          console.log(`     Total:     ${formatRemaining(summary.timeCreditsSeconds)}`)
           console.log(
-            `     Status:    ${summary.active ? chalk.green('active') : chalk.dim('inactive')}`
+            chalk.dim('   Used automatically when a model has no active plan.')
           )
           console.log()
         }
