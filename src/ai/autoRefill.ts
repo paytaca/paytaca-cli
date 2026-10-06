@@ -7,6 +7,8 @@ import {
 
 export type PaymentMethod = 'bch' | 'lift'
 
+export type AutoRefillMode = 'model' | 'payg'
+
 export interface RefillLastEvent {
   action: 'refilled' | 'disarmed'
   reason: string | null
@@ -24,10 +26,15 @@ export interface RefillEvent extends RefillLastEvent {
 
 export interface AutoRefillState {
   enabled: boolean
+  mode?: AutoRefillMode
   model?: string
   minutes?: number
   maxMinutes?: number
   spentMinutes?: number
+  amountUsd?: number
+  thresholdUsd?: number
+  maxUsd?: number
+  spentUsd?: number
   refillCount?: number
   paymentMethod?: PaymentMethod
   startedAt?: string
@@ -75,9 +82,13 @@ export function deleteAutoRefill(file: string = AUTO_REFILL_FILE): boolean {
 }
 
 export interface ArmAutoRefillOptions {
+  mode?: AutoRefillMode
   model?: string
   minutes?: number
   maxMinutes?: number
+  amountUsd?: number
+  thresholdUsd?: number
+  maxUsd?: number
   paymentMethod?: PaymentMethod
 }
 
@@ -85,10 +96,15 @@ export function armAutoRefill(opts: ArmAutoRefillOptions): AutoRefillState {
   const existing = readAutoRefillState()
   const state: AutoRefillState = {
     enabled: true,
+    mode: opts.mode ?? existing?.mode,
     model: opts.model ?? existing?.model,
     minutes: opts.minutes ?? existing?.minutes,
     maxMinutes: opts.maxMinutes ?? existing?.maxMinutes,
     spentMinutes: existing?.spentMinutes ?? 0,
+    amountUsd: opts.amountUsd ?? existing?.amountUsd,
+    thresholdUsd: opts.thresholdUsd ?? existing?.thresholdUsd,
+    maxUsd: opts.maxUsd ?? existing?.maxUsd,
+    spentUsd: existing?.spentUsd ?? 0,
     refillCount: existing?.refillCount ?? 0,
     paymentMethod: opts.paymentMethod ?? existing?.paymentMethod ?? 'bch',
     startedAt: new Date().toISOString(),
@@ -113,6 +129,15 @@ export function disarmAutoRefill(): AutoRefillState {
 export function remainingBudget(state: AutoRefillState | null): number | null {
   if (!state || state.maxMinutes === undefined) return null
   return Math.max(0, state.maxMinutes - (state.spentMinutes ?? 0))
+}
+
+export function remainingUsdBudget(state: AutoRefillState | null): number | null {
+  if (!state || state.maxUsd === undefined) return null
+  return Math.max(0, state.maxUsd - (state.spentUsd ?? 0))
+}
+
+export function isPaygMode(state: AutoRefillState | null): boolean {
+  return state?.mode === 'payg'
 }
 
 export function autoRefillCanBuy(
@@ -167,10 +192,17 @@ export interface RefillBuyResult {
   error?: string
 }
 
+export interface RefillTopUpOptions {
+  amountUsd: number
+  paymentMethod: PaymentMethod
+}
+
 export interface RefillTickDeps {
   hasActiveCredits: (model: string) => Promise<boolean>
   buy: (opts: RefillBuyOptions) => Promise<RefillBuyResult>
   remainingSeconds?: (model: string) => Promise<number | null>
+  paygBalance?: () => Promise<number>
+  topUp?: (opts: RefillTopUpOptions) => Promise<RefillBuyResult>
   readState?: () => AutoRefillState | null
   writeState?: (state: AutoRefillState) => void
   appendEvent?: (event: RefillEvent) => void
@@ -225,6 +257,112 @@ export async function autoRefillTick(
 
   const state = read()
   if (!state || !state.enabled) return { action: 'idle' }
+
+  if (state.mode === 'payg') {
+    const amountUsd = state.amountUsd
+    const thresholdUsd = state.thresholdUsd ?? 0
+    if (!amountUsd || amountUsd <= 0 || thresholdUsd < 0) {
+      return disarmWithState(state, 'incomplete config')
+    }
+    const budget = remainingUsdBudget(state)
+    if (budget !== null && budget < amountUsd) {
+      return disarmWithState(state, 'budget exhausted')
+    }
+    if (!deps.paygBalance || !deps.topUp) {
+      return { action: 'skipped', reason: 'pay-as-you-go top-up unavailable' }
+    }
+
+    let balance: number
+    try {
+      balance = await deps.paygBalance()
+    } catch (err: any) {
+      return { action: 'skipped', reason: `balance check failed: ${err?.message || err}` }
+    }
+    if (balance > thresholdUsd) return { action: 'idle' }
+
+    const fresh = read()
+    if (!fresh || !fresh.enabled || fresh.mode !== 'payg') return { action: 'idle' }
+    if (fresh.lastRefillAt) {
+      const last = Date.parse(fresh.lastRefillAt)
+      if (Number.isFinite(last) && now - last < REFILL_COOLDOWN_MS) {
+        return { action: 'skipped', reason: 'cooldown: last top-up less than 5 minutes ago' }
+      }
+    }
+    const freshAmount = fresh.amountUsd
+    if (!freshAmount || freshAmount <= 0) {
+      return disarmWithState(fresh, 'incomplete config')
+    }
+    const freshBudget = remainingUsdBudget(fresh)
+    if (freshBudget !== null && freshBudget < freshAmount) {
+      return disarmWithState(fresh, 'budget exhausted')
+    }
+
+    let result: RefillBuyResult
+    try {
+      result = await deps.topUp({
+        amountUsd: freshAmount,
+        paymentMethod: fresh.paymentMethod || 'bch',
+      })
+    } catch (err: any) {
+      return { action: 'skipped', reason: `top-up failed: ${err?.message || err}` }
+    }
+    if (!result.success || !result.paid) {
+      return disarmWithState(fresh, result.error || 'top-up failed', {
+        priceSats: result.priceSats ?? null,
+        status: 'failed',
+      })
+    }
+
+    const at = new Date(now).toISOString()
+    const txid = result.txid ?? null
+    const next: AutoRefillState = {
+      ...fresh,
+      spentUsd: (fresh.spentUsd ?? 0) + freshAmount,
+      refillCount: (fresh.refillCount ?? 0) + 1,
+      lastRefillAt: at,
+      lastRefillTxid: txid,
+      lastEvent: { action: 'refilled', reason: null, at, txid, status: 'completed' },
+    }
+    const nextBudget = remainingUsdBudget(next)
+    let exhausted = false
+    if (nextBudget !== null && nextBudget < freshAmount) {
+      exhausted = true
+      next.enabled = false
+      next.lastEvent = {
+        action: 'disarmed',
+        reason: 'budget exhausted',
+        at,
+        txid,
+        status: 'completed',
+      }
+    }
+    write(next)
+    append({
+      action: 'refilled',
+      reason: null,
+      at,
+      model: null,
+      minutes: null,
+      txid,
+      priceSats: result.priceSats ?? null,
+      paymentMethod: fresh.paymentMethod ?? null,
+      status: 'completed',
+    })
+    if (exhausted) {
+      append({
+        action: 'disarmed',
+        reason: 'budget exhausted',
+        at,
+        model: null,
+        minutes: null,
+        txid,
+        priceSats: result.priceSats ?? null,
+        paymentMethod: fresh.paymentMethod ?? null,
+        status: 'completed',
+      })
+    }
+    return { action: 'refilled', state: next }
+  }
 
   const model = state.model
   const minutes = state.minutes

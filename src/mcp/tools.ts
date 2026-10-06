@@ -51,6 +51,7 @@ import {
   disarmAutoRefill,
   readAutoRefillState,
   remainingBudget,
+  remainingUsdBudget,
   type AutoRefillState,
   type RefillTickDeps,
   type RefillTickResult,
@@ -114,6 +115,28 @@ export function createRefillTickDeps(
         error: result.error,
       }
     },
+    paygBalance: async () => {
+      const wallet = loadWalletRef()
+      if (!wallet) throw new WalletNotConfiguredError()
+      const status = await getWalletStatus(wallet.walletHash, { backendUrl })
+      return paygBalanceUsd(status)
+    },
+    topUp: async (opts) => {
+      const result = await topUpBalance({
+        amountUsd: opts.amountUsd,
+        paymentMethod: opts.paymentMethod,
+        isChipnet,
+        backendUrl,
+        confirmed: true,
+      })
+      return {
+        success: result.success,
+        paid: result.paid,
+        txid: result.txid,
+        priceSats: result.priceSats,
+        error: result.error,
+      }
+    },
   }
 }
 
@@ -123,8 +146,10 @@ function tickSummary(tick: RefillTickResult): Record<string, unknown> {
   if (tick.action === 'refilled') {
     return {
       action: 'refilled',
+      mode: tick.state.mode ?? null,
       model: tick.state.model ?? null,
       minutes: tick.state.minutes ?? null,
+      amountUsd: tick.state.amountUsd ?? null,
       txid: tick.state.lastRefillTxid ?? null,
     }
   }
@@ -151,9 +176,13 @@ function autoRefillField(state: AutoRefillState | null): Record<string, unknown>
   if (!state) return null
   return {
     armed: Boolean(state.enabled),
+    mode: state.mode === 'payg' ? 'payg' : 'model',
     model: state.model ?? null,
     minutes: state.minutes ?? null,
     remainingMinutes: remainingBudget(state),
+    amountUsd: state.amountUsd ?? null,
+    thresholdUsd: state.thresholdUsd ?? null,
+    remainingUsd: remainingUsdBudget(state),
     refillCount: state.refillCount ?? 0,
     lastEvent: state.lastEvent ?? null,
   }
@@ -350,7 +379,7 @@ Paytaca AI:
   get_credits            Remaining AI time credits + pay-as-you-go balance
   buy_plan               Buy an AI plan with BCH or LIFT (spends funds)
   topup                  Add pay-as-you-go AI balance with BCH or LIFT (spends funds)
-  auto_refill            Arm/disarm/inspect automatic plan refills
+  auto_refill            Arm/disarm/inspect automatic refills (plans or pay-as-you-go)
   await_refill           Wait for armed auto-refill, then continue (no new spend)
 
 Image generation:
@@ -653,6 +682,14 @@ export function registerTools(
                   `(model "${auto.model}") to wait for the refill, then continue ` +
                   `the task automatically — no need to ask the user to top up.`,
               }
+            } else if (auto?.enabled && auto.mode === 'payg') {
+              payload.resumeHint = {
+                tool: 'await_refill',
+                message:
+                  'Pay-as-you-go auto-refill is armed. Call await_refill to wait ' +
+                  'for the top-up, then continue the task automatically — no need ' +
+                  'to ask the user to top up.',
+              }
             }
           }
           return creditsResponse(server, sessions, hint, payload)
@@ -766,12 +803,16 @@ export function registerTools(
     {
       title: 'Manage auto-refill',
       description:
-        'Arm, disarm, delete, or inspect automatic plan refills. Arming buys a plan silently when credits run out, up to max_minutes, and runs one immediate refill check (buys right away if the armed model has no active credits). Each execution is recorded in ~/.paytaca/auto-refill-events.jsonl and surfaced as lastEvent. delete=true removes the armed state (history is kept).',
+        'Arm, disarm, delete, or inspect automatic refills. Two modes: "model" (default) buys a plan silently when time credits run out, up to max_minutes; "payg" tops up the pay-as-you-go USD balance whenever it falls to threshold_usd, adding amount_usd each time up to an optional max_usd budget. Arming runs one immediate refill check. Each execution is recorded in ~/.paytaca/auto-refill-events.jsonl and surfaced as lastEvent. delete=true removes the armed state (history is kept).',
       inputSchema: {
         enabled: z.boolean().optional(),
+        mode: z.enum(['model', 'payg']).optional(),
         model: z.string().optional(),
         minutes: z.number().int().positive().optional(),
         max_minutes: z.number().int().positive().optional(),
+        amount_usd: z.number().positive().optional(),
+        threshold_usd: z.number().nonnegative().optional(),
+        max_usd: z.number().positive().optional(),
         payment_method: z.enum(['bch', 'lift']).optional(),
         chipnet: z.boolean().optional(),
         delete: z.boolean().optional(),
@@ -783,7 +824,19 @@ export function registerTools(
         openWorldHint: false,
       },
     },
-    async ({ enabled, model, minutes, max_minutes, payment_method, chipnet, delete: del }) => {
+    async ({
+      enabled,
+      mode,
+      model,
+      minutes,
+      max_minutes,
+      amount_usd,
+      threshold_usd,
+      max_usd,
+      payment_method,
+      chipnet,
+      delete: del,
+    }) => {
       try {
         if (del) {
           const existed = deleteAutoRefill()
@@ -795,19 +848,41 @@ export function registerTools(
         }
 
         if (enabled === true) {
-          if (!model || !minutes || !max_minutes) {
-            return fail(
-              new Error(
-                'Arming auto-refill requires model, minutes, and max_minutes.'
+          let state: AutoRefillState
+          if (mode === 'payg') {
+            if (amount_usd == null || amount_usd <= 0 || threshold_usd == null) {
+              return fail(
+                new Error(
+                  'Arming pay-as-you-go auto-refill requires amount_usd and threshold_usd.'
+                )
               )
-            )
+            }
+            if (max_usd != null && max_usd < amount_usd) {
+              return fail(new Error('max_usd must be at least amount_usd.'))
+            }
+            state = armAutoRefill({
+              mode: 'payg',
+              amountUsd: amount_usd,
+              thresholdUsd: threshold_usd,
+              maxUsd: max_usd,
+              paymentMethod: payment_method ?? 'bch',
+            })
+          } else {
+            if (!model || !minutes || !max_minutes) {
+              return fail(
+                new Error(
+                  'Arming auto-refill requires model, minutes, and max_minutes.'
+                )
+              )
+            }
+            state = armAutoRefill({
+              mode: 'model',
+              model,
+              minutes,
+              maxMinutes: max_minutes,
+              paymentMethod: payment_method ?? 'bch',
+            })
           }
-          const state = armAutoRefill({
-            model,
-            minutes,
-            maxMinutes: max_minutes,
-            paymentMethod: payment_method ?? 'bch',
-          })
           let initialTick: Record<string, unknown> | null = null
           const wallet = loadWalletRef()
           if (wallet?.canSign) {
@@ -825,7 +900,9 @@ export function registerTools(
         const state = readAutoRefillState()
         return json({
           armed: Boolean(state?.enabled),
+          mode: state?.mode === 'payg' ? 'payg' : 'model',
           remainingMinutes: remainingBudget(state),
+          remainingUsd: remainingUsdBudget(state),
           refillCount: state?.refillCount ?? 0,
           lastEvent: state?.lastEvent ?? null,
           state,
@@ -860,7 +937,57 @@ export function registerTools(
         const wallet = loadWalletRef()
         if (!wallet) throw new WalletNotConfiguredError()
         const state = readAutoRefillState()
-        if (!state?.enabled || !state.model) {
+        if (!state?.enabled) {
+          return json({ resumed: false, reason: 'Auto-refill is not armed.' })
+        }
+
+        if (state.mode === 'payg') {
+          const deps = createRefillTickDeps(cn(chipnet), backend)
+          let status = await getWalletStatus(wallet.walletHash, { backendUrl: backend })
+          if (hasUsableCredits(status)) {
+            return json({
+              resumed: true,
+              alreadyActive: true,
+              mode: 'payg',
+              balanceUsd: paygBalanceUsd(status),
+            })
+          }
+          let tick: Record<string, unknown> | null = null
+          if (wallet.canSign) {
+            try {
+              tick = tickSummary(await autoRefillTick(deps))
+            } catch (err: any) {
+              tick = { action: 'skipped', reason: err?.message || String(err) }
+            }
+          }
+          const paygTimeoutMs = Math.max(1, timeout_seconds ?? 120) * 1000
+          const paygDeadline = Date.now() + paygTimeoutMs
+          while (!hasUsableCredits(status)) {
+            const wait = paygDeadline - Date.now()
+            if (wait <= 0) break
+            await sleep(Math.min(3000, wait))
+            status = await getWalletStatus(wallet.walletHash, { backendUrl: backend })
+          }
+          if (!hasUsableCredits(status)) {
+            return json({
+              resumed: false,
+              reason: tick
+                ? 'Timed out waiting for the top-up to complete.'
+                : 'Wallet cannot sign; no top-up was attempted.',
+              mode: 'payg',
+              refillTick: tick,
+              balanceUsd: paygBalanceUsd(status),
+            })
+          }
+          return json({
+            resumed: true,
+            mode: 'payg',
+            refillTick: tick,
+            balanceUsd: paygBalanceUsd(status),
+          })
+        }
+
+        if (!state.model) {
           return json({ resumed: false, reason: 'Auto-refill is not armed.' })
         }
         const armedModel = state.model

@@ -46,7 +46,9 @@ import {
   disarmAutoRefill,
   deleteAutoRefill,
   remainingBudget,
+  remainingUsdBudget,
   autoRefillTick,
+  type AutoRefillMode,
   type RefillTickResult,
 } from '../ai/autoRefill.js'
 import { createRefillTickDeps } from '../mcp/tools.js'
@@ -126,9 +128,13 @@ export interface WebDeps {
   setAutoRefill(opts: {
     enabled: boolean
     delete?: boolean
+    mode?: AutoRefillMode
     model?: string
     minutes?: number
     maxMinutes?: number
+    amountUsd?: number
+    thresholdUsd?: number
+    maxUsd?: number
     paymentMethod?: string
   }): Promise<Record<string, unknown>>
   getImageModels(): Promise<ImageModel[]>
@@ -240,7 +246,12 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
         paygEnabled: paygEnabled(status),
         liftDiscountPercent: config.lift_payment_discount_percent ?? 0,
         autoRefill: autoRefill
-          ? { ...autoRefill, remainingMinutes: remainingBudget(autoRefill) }
+          ? {
+              ...autoRefill,
+              mode: autoRefill.mode === 'payg' ? 'payg' : 'model',
+              remainingMinutes: remainingBudget(autoRefill),
+              remainingUsd: remainingUsdBudget(autoRefill),
+            }
           : null,
         imageModels,
         imageHistory,
@@ -385,10 +396,31 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
         return { deleted: true, existed: deleteAutoRefill() }
       }
       if (opts.enabled) {
+        if (opts.mode === 'payg') {
+          if (
+            typeof opts.amountUsd !== 'number' ||
+            !(opts.amountUsd > 0) ||
+            typeof opts.thresholdUsd !== 'number'
+          ) {
+            throw new Error(
+              'Pay-as-you-go auto-refill requires amountUsd and thresholdUsd.'
+            )
+          }
+          if (
+            typeof opts.maxUsd === 'number' &&
+            opts.maxUsd < opts.amountUsd
+          ) {
+            throw new Error('maxUsd must be at least amountUsd.')
+          }
+        }
         const state = armAutoRefill({
+          mode: opts.mode,
           model: opts.model,
           minutes: opts.minutes,
           maxMinutes: opts.maxMinutes,
+          amountUsd: opts.amountUsd,
+          thresholdUsd: opts.thresholdUsd,
+          maxUsd: opts.maxUsd,
           paymentMethod: (opts.paymentMethod as 'bch' | 'lift') || 'bch',
         })
         let initialTick: RefillTickResult | null = null
@@ -849,12 +881,36 @@ export async function startWebServer(
         }
         const body = await readBody(req)
         const enabled = Boolean(body.enabled)
+        const mode =
+          body.mode === 'payg' || body.mode === 'model' ? body.mode : undefined
+        const amountUsd =
+          body.amountUsd != null ? Number(body.amountUsd) : undefined
+        const thresholdUsd =
+          body.thresholdUsd != null ? Number(body.thresholdUsd) : undefined
+        const maxUsd = body.maxUsd != null ? Number(body.maxUsd) : undefined
+        if (
+          (amountUsd != null && (!Number.isFinite(amountUsd) || amountUsd <= 0)) ||
+          (thresholdUsd != null && !Number.isFinite(thresholdUsd)) ||
+          (maxUsd != null && (!Number.isFinite(maxUsd) || maxUsd <= 0))
+        ) {
+          return json(res, 400, { error: 'Invalid auto-refill amounts' })
+        }
+        if (mode === 'payg' && enabled && amountUsd == null) {
+          return json(res, 400, { error: 'amountUsd is required' })
+        }
+        if (mode === 'payg' && enabled && thresholdUsd == null) {
+          return json(res, 400, { error: 'thresholdUsd is required' })
+        }
         const result = await deps.setAutoRefill({
           enabled,
           delete: Boolean(body.delete),
+          mode,
           model: body.model != null ? String(body.model) : undefined,
           minutes: body.minutes != null ? Number(body.minutes) : undefined,
           maxMinutes: body.maxMinutes != null ? Number(body.maxMinutes) : undefined,
+          amountUsd,
+          thresholdUsd,
+          maxUsd,
           paymentMethod: body.paymentMethod != null ? String(body.paymentMethod) : undefined,
         })
         return json(res, 200, result)

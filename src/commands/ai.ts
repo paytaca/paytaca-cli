@@ -62,6 +62,7 @@ import {
   deleteAutoRefill,
   readAutoRefillState,
   remainingBudget,
+  remainingUsdBudget,
   autoRefillTick,
   type RefillTickResult,
 } from '../ai/autoRefill.js'
@@ -848,7 +849,7 @@ export function registerAiCommands(program: Command): void {
 
   // ── ai auto-refill ──────────────────────────────────────────────────
   ai.command('auto-refill')
-    .description('Arm, disarm, or inspect automatic plan refills')
+    .description('Arm, disarm, or inspect automatic refills (plans or pay-as-you-go)')
     .option('--enable', 'Arm auto-refill')
     .option('--disable', 'Disarm auto-refill')
     .option('--delete', 'Delete the auto-refill configuration')
@@ -859,6 +860,10 @@ export function registerAiCommands(program: Command): void {
       '--max-minutes <minutes>',
       'Maximum total minutes to auto-buy (>= 2x --minutes, multiple of --minutes)'
     )
+    .option('--payg', 'Use pay-as-you-go balance auto-refill')
+    .option('--amount <usd>', 'PAYG: USD amount to top up per refill')
+    .option('--threshold <usd>', 'PAYG: top up when balance falls below this USD')
+    .option('--max-usd <usd>', 'PAYG: maximum total USD to spend on refills')
     .option('--lift', 'Pay refills with LIFT tokens')
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .option('--json', 'Output as JSON')
@@ -868,6 +873,62 @@ export function registerAiCommands(program: Command): void {
         if (opts.json) outputJson({ deleted: true, existed })
         else if (existed) console.log(chalk.dim('\n   Auto-refill configuration deleted.\n'))
         else console.log(chalk.dim('\n   No auto-refill configuration to delete.\n'))
+        return
+      }
+      if (opts.enable && opts.payg) {
+        const amountUsd = opts.amount !== undefined ? Number(opts.amount) : undefined
+        const thresholdUsd =
+          opts.threshold !== undefined ? Number(opts.threshold) : undefined
+        const maxUsd = opts.maxUsd !== undefined ? Number(opts.maxUsd) : undefined
+        let paygError: string | null = null
+        if (amountUsd === undefined || !Number.isFinite(amountUsd) || amountUsd <= 0) {
+          paygError = '--amount must be a positive USD value.'
+        } else if (
+          thresholdUsd === undefined ||
+          !Number.isFinite(thresholdUsd) ||
+          thresholdUsd < 0
+        ) {
+          paygError = '--threshold must be a non-negative USD value.'
+        } else if (
+          maxUsd !== undefined &&
+          (!Number.isFinite(maxUsd) || maxUsd < amountUsd)
+        ) {
+          paygError = '--max-usd must be at least --amount.'
+        }
+        if (paygError) {
+          if (opts.json) outputJson({ error: paygError })
+          else console.log(chalk.red(`\nError: ${paygError}\n`))
+          process.exitCode = 1
+          return
+        }
+        const state = armAutoRefill({
+          mode: 'payg',
+          amountUsd,
+          thresholdUsd,
+          maxUsd,
+          paymentMethod: opts.lift ? 'lift' : 'bch',
+        })
+        let tick: RefillTickResult | null = null
+        const wallet = loadWalletRef()
+        if (wallet?.canSign) {
+          try {
+            tick = await autoRefillTick(createRefillTickDeps(Boolean(opts.chipnet)))
+          } catch (err) {
+            tick = { action: 'skipped', reason: (err as Error).message }
+          }
+        }
+        if (opts.json) {
+          outputJson(tick ? { ...state, initialTick: tick } : state)
+        } else {
+          console.log(chalk.green('\n   Pay-as-you-go auto-refill armed.'))
+          console.log(
+            chalk.dim(
+              `   Top up ${formatUsd(state.amountUsd ?? 0)} when balance < ${formatUsd(state.thresholdUsd ?? 0)}.`
+            )
+          )
+          if (tick) console.log(chalk.dim(`   ${formatTickResult(tick)}`))
+          console.log()
+        }
         return
       }
       if (opts.enable) {
@@ -935,7 +996,12 @@ export function registerAiCommands(program: Command): void {
       }
       const state = readAutoRefillState()
       if (opts.json) {
-        outputJson({ state, remainingMinutes: remainingBudget(state) })
+        outputJson({
+          state,
+          mode: state?.mode === 'payg' ? 'payg' : 'model',
+          remainingMinutes: remainingBudget(state),
+          remainingUsd: remainingUsdBudget(state),
+        })
         return
       }
       console.log(chalk.bold('\n   Auto-Refill\n'))
@@ -944,11 +1010,21 @@ export function registerAiCommands(program: Command): void {
         return
       }
       console.log(`   Enabled:  ${state.enabled ? chalk.green('yes') : chalk.dim('no')}`)
-      console.log(`   Model:    ${state.model || '(any)'}`)
-      console.log(`   Plan:     ${state.minutes ? formatDuration(state.minutes) : '(any)'}`)
+      console.log(`   Mode:     ${state.mode === 'payg' ? 'pay-as-you-go' : 'plan'}`)
       console.log(`   Payment:  ${state.paymentMethod || 'bch'}`)
-      const budget = remainingBudget(state)
-      console.log(`   Budget:   ${budget === null ? '(unlimited)' : `${budget} min remaining`}`)
+      if (state.mode === 'payg') {
+        console.log(`   Amount:   ${formatUsd(state.amountUsd ?? 0)} per refill`)
+        console.log(`   Trigger:  balance < ${formatUsd(state.thresholdUsd ?? 0)}`)
+        const usdBudget = remainingUsdBudget(state)
+        console.log(
+          `   Budget:   ${usdBudget === null ? '(unlimited)' : `${formatUsd(usdBudget)} remaining`}`
+        )
+      } else {
+        console.log(`   Model:    ${state.model || '(any)'}`)
+        console.log(`   Plan:     ${state.minutes ? formatDuration(state.minutes) : '(any)'}`)
+        const budget = remainingBudget(state)
+        console.log(`   Budget:   ${budget === null ? '(unlimited)' : `${budget} min remaining`}`)
+      }
       console.log(`   Refills:  ${state.refillCount ?? 0}`)
       if (state.lastRefillAt) {
         const tx = state.lastRefillTxid ? ` (${state.lastRefillTxid.slice(0, 12)}…)` : ''

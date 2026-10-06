@@ -6,6 +6,7 @@ import type { AutoRefillState } from './autoRefill.js'
 import {
   autoRefillCanBuy,
   remainingBudget,
+  remainingUsdBudget,
   autoRefillTick,
   appendAutoRefillEvent,
   deleteAutoRefill,
@@ -40,6 +41,25 @@ describe('remainingBudget', () => {
   it('is null without state or maxMinutes', () => {
     expect(remainingBudget(null)).toBeNull()
     expect(remainingBudget({ enabled: true })).toBeNull()
+  })
+})
+
+describe('remainingUsdBudget', () => {
+  it('is maxUsd minus spentUsd', () => {
+    expect(
+      remainingUsdBudget({ enabled: true, mode: 'payg', maxUsd: 20, spentUsd: 5 })
+    ).toBe(15)
+  })
+
+  it('never goes negative', () => {
+    expect(
+      remainingUsdBudget({ enabled: true, mode: 'payg', maxUsd: 5, spentUsd: 9 })
+    ).toBe(0)
+  })
+
+  it('is null without state or maxUsd', () => {
+    expect(remainingUsdBudget(null)).toBeNull()
+    expect(remainingUsdBudget({ enabled: true, mode: 'payg' })).toBeNull()
   })
 })
 
@@ -303,6 +323,130 @@ describe('autoRefillTick', () => {
   it('skips without disarming when the credit check errors', async () => {
     const h = harness(state({ startedAt: new Date(NOW).toISOString() }))
     h.deps.hasActiveCredits = async () => {
+      throw new Error('offline')
+    }
+    expect(await autoRefillTick(h.deps)).toMatchObject({ action: 'skipped' })
+    expect(h.current()?.enabled).toBe(true)
+  })
+})
+
+describe('autoRefillTick pay-as-you-go', () => {
+  const NOW = Date.parse('2026-09-19T12:00:00.000Z')
+
+  function paygState(overrides: Partial<AutoRefillState> = {}): AutoRefillState {
+    return {
+      enabled: true,
+      mode: 'payg',
+      amountUsd: 5,
+      thresholdUsd: 1,
+      spentUsd: 0,
+      paymentMethod: 'bch',
+      ...overrides,
+    }
+  }
+
+  function harness(
+    initial: AutoRefillState | null,
+    cfg: {
+      balance?: number
+      topUpResult?: {
+        success: boolean
+        paid?: boolean
+        txid?: string
+        priceSats?: number
+        error?: string
+      }
+    } = {}
+  ) {
+    let stored = initial
+    const topUps: { amountUsd: number; paymentMethod: string }[] = []
+    const events: RefillEvent[] = []
+    const deps: RefillTickDeps = {
+      readState: () => stored,
+      writeState: (s) => {
+        stored = s
+      },
+      appendEvent: (e) => {
+        events.push(e)
+      },
+      now: () => NOW,
+      hasActiveCredits: async () => false,
+      buy: async () => ({ success: false }),
+      paygBalance: async () => cfg.balance ?? 0,
+      topUp: async (o) => {
+        topUps.push(o as { amountUsd: number; paymentMethod: string })
+        return cfg.topUpResult ?? { success: true, paid: true, txid: 'tx1' }
+      },
+    }
+    return { deps, topUps, events, current: () => stored }
+  }
+
+  it('idles when the balance is above the threshold', async () => {
+    const h = harness(paygState(), { balance: 2 })
+    expect(await autoRefillTick(h.deps)).toEqual({ action: 'idle' })
+    expect(h.topUps).toHaveLength(0)
+  })
+
+  it('tops up when the balance is at or below the threshold', async () => {
+    const h = harness(paygState(), { balance: 0.5 })
+    const result = await autoRefillTick(h.deps)
+    expect(h.topUps).toEqual([{ amountUsd: 5, paymentMethod: 'bch' }])
+    expect(result).toMatchObject({ action: 'refilled' })
+    expect(h.current()).toMatchObject({
+      spentUsd: 5,
+      refillCount: 1,
+      lastRefillAt: new Date(NOW).toISOString(),
+      enabled: true,
+    })
+  })
+
+  it('disarms when the USD budget is already exhausted', async () => {
+    const h = harness(paygState({ maxUsd: 5, spentUsd: 5 }), { balance: 0 })
+    expect(await autoRefillTick(h.deps)).toMatchObject({
+      action: 'disarmed',
+      reason: 'budget exhausted',
+    })
+    expect(h.topUps).toHaveLength(0)
+  })
+
+  it('disarms after the last affordable top-up exhausts the budget', async () => {
+    const h = harness(paygState({ maxUsd: 5 }), { balance: 0 })
+    expect((await autoRefillTick(h.deps)).action).toBe('refilled')
+    expect(h.current()?.enabled).toBe(false)
+  })
+
+  it('disarms on incomplete payg config', async () => {
+    const h = harness(paygState({ amountUsd: 0 }), { balance: 0 })
+    expect(await autoRefillTick(h.deps)).toMatchObject({
+      action: 'disarmed',
+      reason: 'incomplete config',
+    })
+  })
+
+  it('skips within the cooldown window without topping up', async () => {
+    const h = harness(
+      paygState({ lastRefillAt: new Date(NOW - 60_000).toISOString() }),
+      { balance: 0 }
+    )
+    expect(await autoRefillTick(h.deps)).toMatchObject({ action: 'skipped' })
+    expect(h.topUps).toHaveLength(0)
+  })
+
+  it('disarms when the top-up fails', async () => {
+    const h = harness(paygState(), {
+      balance: 0,
+      topUpResult: { success: false, paid: false, error: 'Insufficient balance' },
+    })
+    expect(await autoRefillTick(h.deps)).toMatchObject({
+      action: 'disarmed',
+      reason: 'Insufficient balance',
+    })
+    expect(h.current()?.enabled).toBe(false)
+  })
+
+  it('skips when the balance check errors', async () => {
+    const h = harness(paygState())
+    h.deps.paygBalance = async () => {
       throw new Error('offline')
     }
     expect(await autoRefillTick(h.deps)).toMatchObject({ action: 'skipped' })

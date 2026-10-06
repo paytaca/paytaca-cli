@@ -252,6 +252,48 @@ describe('web server AI routes', () => {
     expect(res.json.delete).toBe(true)
   })
 
+  it('POST /api/ai/auto-refill arms pay-as-you-go', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/auto-refill`, srv.token, 'POST', {
+      enabled: true,
+      mode: 'payg',
+      amountUsd: 5,
+      thresholdUsd: 1,
+      maxUsd: 20,
+    })
+    expect(res.status).toBe(200)
+    expect(res.json.mode).toBe('payg')
+    expect(res.json.amountUsd).toBe(5)
+    expect(res.json.thresholdUsd).toBe(1)
+    expect(res.json.maxUsd).toBe(20)
+  })
+
+  it('POST /api/ai/auto-refill payg requires amountUsd and thresholdUsd', async () => {
+    const missingAmount = await req(
+      `http://127.0.0.1:${srv.port}/api/ai/auto-refill`,
+      srv.token,
+      'POST',
+      { enabled: true, mode: 'payg', thresholdUsd: 1 }
+    )
+    expect(missingAmount.status).toBe(400)
+    const missingThreshold = await req(
+      `http://127.0.0.1:${srv.port}/api/ai/auto-refill`,
+      srv.token,
+      'POST',
+      { enabled: true, mode: 'payg', amountUsd: 5 }
+    )
+    expect(missingThreshold.status).toBe(400)
+  })
+
+  it('POST /api/ai/auto-refill rejects non-positive amounts', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/auto-refill`, srv.token, 'POST', {
+      enabled: true,
+      mode: 'payg',
+      amountUsd: -3,
+      thresholdUsd: 1,
+    })
+    expect(res.status).toBe(400)
+  })
+
   it('GET /api/ai/image-models returns models', async () => {
     const res = await req(`http://127.0.0.1:${srv.port}/api/ai/image-models`, srv.token)
     expect(res.status).toBe(200)

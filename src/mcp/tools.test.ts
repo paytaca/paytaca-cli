@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => ({
   disarmAutoRefill: vi.fn(),
   readAutoRefillState: vi.fn(),
   remainingBudget: vi.fn(),
+  remainingUsdBudget: vi.fn(),
   autoRefillTick: vi.fn(),
   deleteAutoRefill: vi.fn(),
 }))
@@ -107,6 +108,7 @@ vi.mock('../ai/autoRefill.js', () => ({
   disarmAutoRefill: mocks.disarmAutoRefill,
   readAutoRefillState: mocks.readAutoRefillState,
   remainingBudget: mocks.remainingBudget,
+  remainingUsdBudget: mocks.remainingUsdBudget,
   autoRefillTick: mocks.autoRefillTick,
   deleteAutoRefill: mocks.deleteAutoRefill,
 }))
@@ -1063,11 +1065,46 @@ describe('MCP tools', () => {
         },
       })
       expect(mocks.armAutoRefill).toHaveBeenCalledWith({
+        mode: 'model',
         model: 'm',
         minutes: 60,
         maxMinutes: 300,
         paymentMethod: 'lift',
       })
+    })
+
+    it('arms pay-as-you-go auto-refill', async () => {
+      mocks.armAutoRefill.mockReturnValue({ enabled: true, mode: 'payg' })
+      const c = await connect()
+      await c.callTool({
+        name: 'auto_refill',
+        arguments: {
+          enabled: true,
+          mode: 'payg',
+          amount_usd: 5,
+          threshold_usd: 1,
+          max_usd: 20,
+          payment_method: 'lift',
+        },
+      })
+      expect(mocks.armAutoRefill).toHaveBeenCalledWith({
+        mode: 'payg',
+        amountUsd: 5,
+        thresholdUsd: 1,
+        maxUsd: 20,
+        paymentMethod: 'lift',
+      })
+    })
+
+    it('requires amount_usd and threshold_usd to arm pay-as-you-go', async () => {
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'auto_refill',
+        arguments: { enabled: true, mode: 'payg', amount_usd: 5 },
+      })
+      expect(result.isError).toBe(true)
+      expect(text(result)).toMatch(/requires amount_usd and threshold_usd/)
+      expect(mocks.armAutoRefill).not.toHaveBeenCalled()
     })
 
     it('disarms auto-refill', async () => {
@@ -1094,6 +1131,7 @@ describe('MCP tools', () => {
       })
       expect(JSON.parse(text(result))).toEqual({
         armed: true,
+        mode: 'model',
         remainingMinutes: 7,
         refillCount: 0,
         lastEvent: null,
