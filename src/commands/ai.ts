@@ -10,7 +10,6 @@ import chalk from 'chalk'
 import readline from 'readline'
 import { WalletNotConfiguredError } from '../core/context.js'
 import { loadWalletRef } from '../wallet/index.js'
-import { getBalanceView, getTokenBalances } from '../core/wallet.js'
 import { formatSats, bchToSats } from '../utils/format.js'
 import { formatUsd } from '../utils/prices.js'
 import {
@@ -20,7 +19,7 @@ import {
   type AiModelConfig,
   type PriceTier,
 } from '../ai/client.js'
-import { resolveBackendUrl, LIFT_TOKEN_ID } from '../ai/config.js'
+import { resolveBackendUrl } from '../ai/config.js'
 import {
   listPlans,
   selectModel,
@@ -547,72 +546,35 @@ export function registerAiCommands(program: Command): void {
 
   // ── ai balance ──────────────────────────────────────────────────────
   ai.command('balance')
-    .description('Show wallet funds for AI purchases (BCH + LIFT) and prepaid AI balance')
+    .description('Show your pay-as-you-go AI balance')
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .option('--backend <url>', 'Override backend URL')
     .option('--json', 'Output as JSON')
     .action(async (opts) => {
       const isChipnet = Boolean(opts.chipnet)
+      const network = isChipnet ? 'chipnet' : 'mainnet'
       try {
-        const balance = await getBalanceView(isChipnet)
-        const tokens = await getTokenBalances(isChipnet)
-        const lift = tokens.tokens.find((t) => t.category === LIFT_TOKEN_ID)
-
-        let aiBalanceUsd: number | null = null
-        let payg = false
         const wallet = loadWalletRef()
-        if (wallet) {
-          try {
-            const status = await getWalletStatus(wallet.walletHash, {
-              backendUrl: opts.backend,
-            })
-            payg = paygEnabled(status)
-            aiBalanceUsd = paygBalanceUsd(status)
-          } catch {
-            // Prepaid balance is best-effort; wallet funds alone are still useful.
-          }
-        }
+        if (!wallet) throw new Error('No wallet configured.')
+        const status = await getWalletStatus(wallet.walletHash, {
+          backendUrl: opts.backend,
+        })
+        const payg = paygEnabled(status)
+        const aiBalanceUsd = paygBalanceUsd(status)
 
         if (opts.json) {
           outputJson({
-            network: balance.network,
-            bch: {
-              balance: balance.balanceBch,
-              spendable: balance.spendableBch,
-              sats: balance.spendableSats,
-              usd: balance.usd,
-            },
-            lift: lift
-              ? {
-                  category: lift.category,
-                  symbol: lift.symbol,
-                  displayBalance: lift.displayBalance,
-                  rawBalance: lift.rawBalance,
-                }
-              : null,
-            ai: {
-              payg_enabled: payg,
-              balance_usd: aiBalanceUsd,
-            },
+            network,
+            payg_enabled: payg,
+            balance_usd: aiBalanceUsd,
           })
           return
         }
-        console.log(chalk.bold(`\n   Funds for AI (${balance.network})\n`))
-        console.log(`   BCH:   ${balance.spendableBch} BCH ${chalk.dim(`(${formatSats(balance.spendableSats)} sats)`)}`)
-        if (balance.usd !== null) {
-          console.log(chalk.dim(`          ≈ ${formatUsd(balance.usd)}`))
-        }
-        if (lift) {
-          console.log(`   LIFT:  ${lift.displayBalance} ${lift.symbol || 'LIFT'}`)
+        console.log(chalk.bold(`\n   Pay-as-you-go balance (${network})\n`))
+        if (payg) {
+          console.log(`   AI:  ${formatUsd(aiBalanceUsd ?? 0)}`)
         } else {
-          console.log(chalk.dim('   LIFT:  none'))
-        }
-        if (aiBalanceUsd !== null) {
-          console.log(
-            `   AI:    ${formatUsd(aiBalanceUsd)} ${chalk.dim(
-              payg ? '(pay-as-you-go balance)' : '(pay-as-you-go unavailable)'
-            )}`
-          )
+          console.log(chalk.dim('   Pay-as-you-go is not enabled for this wallet.'))
         }
         console.log()
       } catch (err: any) {
