@@ -572,7 +572,7 @@ export function registerAiCommands(program: Command): void {
         }
         console.log(chalk.bold(`\n   Pay-as-you-go balance (${network})\n`))
         if (payg) {
-          console.log(`   AI:  ${formatUsd(aiBalanceUsd ?? 0)}`)
+          console.log(`   ${formatUsd(aiBalanceUsd ?? 0)}`)
         } else {
           console.log(chalk.dim('   Pay-as-you-go is not enabled for this wallet.'))
         }
