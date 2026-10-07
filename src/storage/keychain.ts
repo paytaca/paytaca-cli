@@ -31,8 +31,8 @@ export function setSecret(key: string, value: string): void {
  * Returns null if the key does not exist.
  */
 export function getSecret(key: string): string | null {
-  const entry = new Entry(SERVICE, key)
   try {
+    const entry = new Entry(SERVICE, key)
     return entry.getPassword()
   } catch {
     return null
@@ -43,8 +43,8 @@ export function getSecret(key: string): string | null {
  * Delete a value from the OS keychain.
  */
 export function deleteSecret(key: string): void {
-  const entry = new Entry(SERVICE, key)
   try {
+    const entry = new Entry(SERVICE, key)
     entry.deletePassword()
   } catch {
     // Key might not exist — ignore

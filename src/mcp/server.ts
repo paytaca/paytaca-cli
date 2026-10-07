@@ -26,10 +26,32 @@ export function createServer(opts: { defaultChipnet?: boolean } = {}): McpServer
 }
 
 export async function runMcpServer(opts: { defaultChipnet?: boolean } = {}): Promise<void> {
+  installProcessGuards()
+
   const server = createServer(opts)
   const transport = new StdioServerTransport()
   await server.connect(transport)
-  startRefillLoop(Boolean(opts.defaultChipnet))
+
+  setImmediate(() => {
+    try {
+      startRefillLoop(Boolean(opts.defaultChipnet))
+    } catch (error) {
+      console.error(`[paytaca] auto-refill bootstrap failed: ${describeError(error)}`)
+    }
+  })
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function installProcessGuards(): void {
+  process.on('uncaughtException', (error) => {
+    console.error(`[paytaca] uncaught exception: ${describeError(error)}`)
+  })
+  process.on('unhandledRejection', (reason) => {
+    console.error(`[paytaca] unhandled rejection: ${describeError(reason)}`)
+  })
 }
 
 function startRefillLoop(isChipnet: boolean): () => void {

@@ -82,6 +82,12 @@ export function registerMcpCommand(program: Command): void {
     .description('Run the Paytaca MCP server (stdio) for AI agents')
     .option('--chipnet', 'Default tools to chipnet (testnet) instead of mainnet')
     .action(async (opts) => {
-      await runMcpServer({ defaultChipnet: Boolean(opts.chipnet) })
+      try {
+        await runMcpServer({ defaultChipnet: Boolean(opts.chipnet) })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        console.error(`[paytaca] MCP server failed to start: ${message}`)
+        process.exitCode = 1
+      }
     })
 }
