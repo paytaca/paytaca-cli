@@ -11,7 +11,7 @@ import readline from 'readline'
 import { WalletNotConfiguredError } from '../core/context.js'
 import { loadWalletRef } from '../wallet/index.js'
 import { formatSats, bchToSats } from '../utils/format.js'
-import { formatUsd } from '../utils/prices.js'
+import { formatUsd, resolveSpendCost, formatSpendCost } from '../utils/prices.js'
 import {
   getConfig,
   getWalletStatus,
@@ -1147,6 +1147,10 @@ export function registerAiCommands(program: Command): void {
         return
       }
 
+      const cost = json
+        ? null
+        : await resolveSpendCost(quote.amountSats, quote.amountUsd, Boolean(opts.chipnet))
+
       if (!opts.yes) {
         if (json) {
           outputJson({
@@ -1154,15 +1158,16 @@ export function registerAiCommands(program: Command): void {
             orderId: quote.orderId,
             model: quote.model,
             amountSats: quote.amountSats,
+            amountBch: quote.amountSats / 1e8,
             amountUsd: quote.amountUsd,
           })
           process.exitCode = 1
           return
         }
         const proceed = await promptConfirmation(
-          `Generate an image with ${quote.model || 'the default model'} for ${quote.amountSats} sats${
-            quote.amountUsd !== undefined ? ` (~$${quote.amountUsd})` : ''
-          }?`
+          `Generate an image with ${quote.model || 'the default model'} for ${formatSpendCost(
+            cost!
+          )}?`
         )
         if (!proceed) {
           console.log(chalk.dim('\n   Cancelled.\n'))
@@ -1187,7 +1192,7 @@ export function registerAiCommands(program: Command): void {
       console.log(chalk.green(`\n   Image generated — ${result.path}`))
       console.log(`   Order:  ${result.orderId}`)
       console.log(`   Model:  ${result.model}`)
-      console.log(`   Cost:   ${result.amountSats} sats${result.amountUsd !== undefined ? ` (~$${result.amountUsd})` : ''}`)
+      console.log(`   Cost:   ${formatSpendCost(cost!)}`)
       if (result.txid) console.log(chalk.dim(`   txid:   ${result.txid}`))
       console.log()
     })
@@ -1392,6 +1397,10 @@ export function registerAiCommands(program: Command): void {
         return
       }
 
+      const cost = json
+        ? null
+        : await resolveSpendCost(quote.amountSats, quote.amountUsd, Boolean(opts.chipnet))
+
       if (!opts.yes) {
         const spec = [
           quote.duration ? `${quote.duration}s` : null,
@@ -1406,6 +1415,7 @@ export function registerAiCommands(program: Command): void {
             orderId: quote.orderId,
             model: quote.model,
             amountSats: quote.amountSats,
+            amountBch: quote.amountSats / 1e8,
             amountUsd: quote.amountUsd,
           })
           process.exitCode = 1
@@ -1414,9 +1424,7 @@ export function registerAiCommands(program: Command): void {
         const proceed = await promptConfirmation(
           `Generate a${spec ? ` ${spec}` : ''} video with ${
             quote.model || 'the default model'
-          } for ${quote.amountSats} sats${
-            quote.amountUsd !== undefined ? ` (~$${quote.amountUsd})` : ''
-          }?`
+          } for ${formatSpendCost(cost!)}?`
         )
         if (!proceed) {
           console.log(chalk.dim('\n   Cancelled.\n'))
@@ -1441,7 +1449,7 @@ export function registerAiCommands(program: Command): void {
       console.log(chalk.green(`\n   Video generated — ${result.path}`))
       console.log(`   Order:  ${result.orderId}`)
       console.log(`   Model:  ${result.model}`)
-      console.log(`   Cost:   ${result.amountSats} sats${result.amountUsd !== undefined ? ` (~$${result.amountUsd})` : ''}`)
+      console.log(`   Cost:   ${formatSpendCost(cost!)}`)
       if (result.txid) console.log(chalk.dim(`   txid:   ${result.txid}`))
       console.log()
     })
@@ -1638,6 +1646,10 @@ export function registerAiCommands(program: Command): void {
         return
       }
 
+      const cost = json
+        ? null
+        : await resolveSpendCost(quote.amountSats, quote.amountUsd, Boolean(opts.chipnet))
+
       if (!opts.yes) {
         if (json) {
           outputJson({
@@ -1645,6 +1657,7 @@ export function registerAiCommands(program: Command): void {
             orderId: quote.orderId,
             model: quote.model,
             amountSats: quote.amountSats,
+            amountBch: quote.amountSats / 1e8,
             amountUsd: quote.amountUsd,
           })
           process.exitCode = 1
@@ -1653,9 +1666,7 @@ export function registerAiCommands(program: Command): void {
         const proceed = await promptConfirmation(
           `Generate ${quote.voice ? `"${quote.voice} "` : ''}speech with ${
             quote.model || 'the default model'
-          } for ${quote.amountSats} sats${
-            quote.amountUsd !== undefined ? ` (~$${quote.amountUsd})` : ''
-          }?`
+          } for ${formatSpendCost(cost!)}?`
         )
         if (!proceed) {
           console.log(chalk.dim('\n   Cancelled.\n'))
@@ -1680,7 +1691,7 @@ export function registerAiCommands(program: Command): void {
       console.log(chalk.green(`\n   Audio generated — ${result.path}`))
       console.log(`   Order:  ${result.orderId}`)
       console.log(`   Model:  ${result.model}`)
-      console.log(`   Cost:   ${result.amountSats} sats${result.amountUsd !== undefined ? ` (~$${result.amountUsd})` : ''}`)
+      console.log(`   Cost:   ${formatSpendCost(cost!)}`)
       if (result.txid) console.log(chalk.dim(`   txid:   ${result.txid}`))
       console.log()
     })

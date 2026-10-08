@@ -123,3 +123,51 @@ export function formatUsd(usd: number): string {
   return `${formatted} USD`
 }
 
+/** Human-readable BCH amount derived from a sat price. */
+export function formatBch(sats: number): string {
+  return `${(sats / 1e8).toFixed(8)} BCH`
+}
+
+/** Format a USD cost, keeping precision for sub-cent amounts. */
+export function formatCostUsd(usd: number): string {
+  if (!isFinite(usd)) return '—'
+  return `$${usd.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 6,
+  })}`
+}
+
+export interface SpendCost {
+  amountSats: number
+  usd: number | null
+  bch: string
+}
+
+/**
+ * Resolve the cost of a sat-priced spend, preferring the backend's USD quote
+ * and falling back to the live BCH/USD rate so both USD and BCH are available
+ * before the user confirms.
+ */
+export async function resolveSpendCost(
+  amountSats: number,
+  amountUsd: number | undefined,
+  isChipnet: boolean = false
+): Promise<SpendCost> {
+  let usd: number | null =
+    typeof amountUsd === 'number' && isFinite(amountUsd) ? amountUsd : null
+  if (usd === null) {
+    try {
+      const price = await getBchUsdPrice(isChipnet)
+      if (price !== null) usd = (amountSats / 1e8) * price
+    } catch {
+      usd = null
+    }
+  }
+  return { amountSats, usd, bch: formatBch(amountSats) }
+}
+
+/** Format a resolved spend as "$0.50 (0.00012345 BCH)". */
+export function formatSpendCost(cost: SpendCost): string {
+  return cost.usd !== null ? `${formatCostUsd(cost.usd)} (${cost.bch})` : cost.bch
+}
+
