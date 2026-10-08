@@ -53,6 +53,14 @@ import {
   fulfillVideoOrder,
   type VideoOrderQuote,
 } from '../ai/videos.js'
+import {
+  listAudioModels,
+  getAudioHistory,
+  getAudioOrderStatus,
+  createAudioOrder,
+  fulfillAudioOrder,
+  type AudioOrderQuote,
+} from '../ai/audio.js'
 import { provisionApiKey } from '../ai/oauth.js'
 import { configureHarness, type ConfigureResult } from '../ai/configure.js'
 import { CLIENTS, type McpClient } from './mcp.js'
@@ -1519,6 +1527,244 @@ export function registerAiCommands(program: Command): void {
           console.log(chalk.dim(`   txid: ${result.txid}\n`))
         } else if (result.paid && !result.success) {
           console.log(chalk.yellow(`\n   Video generation is still processing (order ${result.orderId}).`))
+          console.log(chalk.dim('   Try again in a few seconds.\n'))
+        } else {
+          console.log(chalk.red(`\n   Error: ${result.error}\n`))
+        }
+      } catch (err: any) {
+        if (opts.json) outputJson({ error: err.message })
+        else console.log(chalk.red(`\nError: ${err.message}\n`))
+        process.exitCode = 1
+      }
+    })
+
+  // ── ai audio ────────────────────────────────────────────────────────
+  const audio = ai.command('audio').description('Paytaca AI audio (text-to-speech) generation')
+
+  audio.command('models')
+    .description('List available audio (text-to-speech) models')
+    .option('--search <term>', 'Filter models by name')
+    .option('--backend <url>', 'Override backend URL')
+    .option('--json', 'Output as JSON')
+    .action(async (opts) => {
+      try {
+        const models = await listAudioModels({
+          search: opts.search,
+          backendUrl: opts.backend,
+        })
+        if (opts.json) {
+          outputJson({ models })
+          return
+        }
+        console.log(chalk.bold('\n   Audio Models\n'))
+        if (models.length === 0) {
+          console.log(chalk.dim('   No audio models found.\n'))
+          return
+        }
+        for (const m of models) {
+          const price =
+            m.cost_per_unit_usd !== undefined
+              ? `$${m.cost_per_unit_usd.toFixed(6)} per character`
+              : ''
+          console.log(
+            `   ${chalk.bold(m.display_name || m.id)} ${chalk.dim(`(${m.id})`)}`
+          )
+          console.log(chalk.dim(`     ${price}`))
+          if (m.supported_voices?.length) {
+            const voices = m.supported_voices
+            const shown = voices.slice(0, 8).join(', ')
+            const more = voices.length > 8 ? `, +${voices.length - 8} more` : ''
+            console.log(chalk.dim(`     voices ${shown}${more}`))
+          }
+        }
+        console.log()
+      } catch (err: any) {
+        if (opts.json) outputJson({ error: err.message })
+        else console.log(chalk.red(`\nError: ${err.message}\n`))
+        process.exitCode = 1
+      }
+    })
+
+  audio.command('generate')
+    .description('Generate speech from text (BCH payment)')
+    .argument('<prompt>', 'Text to speak')
+    .option('--model <model>', 'Audio model id (defaults to the cheapest)')
+    .option('--voice <voice>', 'Voice id (defaults to the model default)')
+    .option('--format <format>', 'Audio format: mp3 or pcm', 'mp3')
+    .option('--speed <speed>', 'Playback speed, e.g. 1.0')
+    .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
+    .option('--backend <url>', 'Override backend URL')
+    .option('-y, --yes', 'Skip confirmation prompt')
+    .option('--json', 'Output as JSON')
+    .action(async (prompt: string, opts) => {
+      const json = Boolean(opts.json)
+      let speed: number | undefined
+      if (opts.speed !== undefined) {
+        speed = Number(opts.speed)
+        if (!Number.isFinite(speed) || speed <= 0) {
+          const message = 'Speed must be a positive number.'
+          if (json) outputJson({ error: message })
+          else console.log(chalk.red(`\nError: ${message}\n`))
+          process.exitCode = 1
+          return
+        }
+      }
+      const format = String(opts.format || 'mp3').toLowerCase()
+      if (!['mp3', 'pcm'].includes(format)) {
+        const message = 'Format must be "mp3" or "pcm".'
+        if (json) outputJson({ error: message })
+        else console.log(chalk.red(`\nError: ${message}\n`))
+        process.exitCode = 1
+        return
+      }
+
+      const orderOpts = {
+        prompt,
+        model: opts.model,
+        voice: opts.voice,
+        responseFormat: format,
+        speed,
+        isChipnet: Boolean(opts.chipnet),
+        backendUrl: opts.backend,
+      }
+
+      let quote: AudioOrderQuote
+      try {
+        quote = await createAudioOrder(orderOpts)
+      } catch (err: any) {
+        if (json) outputJson({ error: err.message })
+        else console.log(chalk.red(`\nError: ${err.message}\n`))
+        process.exitCode = 1
+        return
+      }
+
+      if (!opts.yes) {
+        if (json) {
+          outputJson({
+            error: 'Payment not confirmed. Re-run with --yes to execute.',
+            orderId: quote.orderId,
+            model: quote.model,
+            amountSats: quote.amountSats,
+            amountUsd: quote.amountUsd,
+          })
+          process.exitCode = 1
+          return
+        }
+        const proceed = await promptConfirmation(
+          `Generate ${quote.voice ? `"${quote.voice} "` : ''}speech with ${
+            quote.model || 'the default model'
+          } for ${quote.amountSats} sats${
+            quote.amountUsd !== undefined ? ` (~$${quote.amountUsd})` : ''
+          }?`
+        )
+        if (!proceed) {
+          console.log(chalk.dim('\n   Cancelled.\n'))
+          process.exitCode = 1
+          return
+        }
+      }
+
+      const result = await fulfillAudioOrder(quote, orderOpts)
+
+      if (json) {
+        outputJson({ ...result, base64: undefined })
+        if (!result.success) process.exitCode = 1
+        return
+      }
+
+      if (!result.success) {
+        console.log(chalk.red(`\n   Error: ${result.error || 'Generation failed.'}\n`))
+        process.exitCode = 1
+        return
+      }
+      console.log(chalk.green(`\n   Audio generated — ${result.path}`))
+      console.log(`   Order:  ${result.orderId}`)
+      console.log(`   Model:  ${result.model}`)
+      console.log(`   Cost:   ${result.amountSats} sats${result.amountUsd !== undefined ? ` (~$${result.amountUsd})` : ''}`)
+      if (result.txid) console.log(chalk.dim(`   txid:   ${result.txid}`))
+      console.log()
+    })
+
+  audio.command('history')
+    .description('Show audio generation order history')
+    .option('--page <page>', 'Page number', '1')
+    .option('--backend <url>', 'Override backend URL')
+    .option('--json', 'Output as JSON')
+    .action(async (opts) => {
+      const page = Number(opts.page)
+      if (!Number.isFinite(page) || page < 1) {
+        const message = 'Page must be a positive number.'
+        if (opts.json) outputJson({ error: message })
+        else console.log(chalk.red(`\nError: ${message}\n`))
+        process.exitCode = 1
+        return
+      }
+      try {
+        const history = await getAudioHistory({
+          page,
+          backendUrl: opts.backend,
+        })
+        if (opts.json) {
+          outputJson(history)
+          return
+        }
+        console.log(chalk.bold('\n   Audio Order History\n'))
+        const rows = history.data ?? []
+        if (rows.length === 0) {
+          console.log(chalk.dim('   No orders found.\n'))
+          return
+        }
+        for (const row of rows) {
+          const date = row.created_at ? new Date(row.created_at).toLocaleString() : ''
+          const spec = [
+            row.voice,
+            row.response_format,
+          ]
+            .filter(Boolean)
+            .join(' · ')
+          console.log(`   ${chalk.bold(row.id)}`)
+          console.log(
+            chalk.dim(
+              `     ${row.status ?? 'unknown'} · ${row.model_display_name || row.model || ''}${spec ? ` · ${spec}` : ''} · ${row.price_sats ?? 0} sats${date ? ` · ${date}` : ''}`
+            )
+          )
+          if (row.prompt) console.log(chalk.dim(`     "${row.prompt}"`))
+          console.log()
+        }
+        if (history.count !== undefined) {
+          console.log(chalk.dim(`   ${history.count} total orders\n`))
+        }
+      } catch (err: any) {
+        if (opts.json) outputJson({ error: err.message })
+        else console.log(chalk.red(`\nError: ${err.message}\n`))
+        process.exitCode = 1
+      }
+    })
+
+  audio.command('status')
+    .description('Poll a pending audio generation order')
+    .argument('<order-id>', 'Audio order ID to check')
+    .option('--chipnet', 'Use chipnet')
+    .option('--backend <url>', 'Override backend URL')
+    .option('--json', 'Output as JSON')
+    .action(async (orderId: string, opts) => {
+      try {
+        const result = await getAudioOrderStatus(orderId, {
+          isChipnet: Boolean(opts.chipnet),
+          backendUrl: opts.backend,
+        })
+        if (opts.json) {
+          outputJson({ ...result, base64: undefined })
+          return
+        }
+        if (result.success && result.path) {
+          console.log(chalk.green(`\n   Audio ready (order ${result.orderId}).`))
+          console.log(`   Saved to: ${result.path}`)
+          console.log(chalk.dim(`   Model: ${result.model}`))
+          console.log(chalk.dim(`   Cost: ${result.amountSats} sats`))
+          console.log(chalk.dim(`   txid: ${result.txid}\n`))
+        } else if (result.paid && !result.success) {
+          console.log(chalk.yellow(`\n   Audio generation is still processing (order ${result.orderId}).`))
           console.log(chalk.dim('   Try again in a few seconds.\n'))
         } else {
           console.log(chalk.red(`\n   Error: ${result.error}\n`))

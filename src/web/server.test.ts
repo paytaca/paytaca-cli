@@ -40,6 +40,9 @@ const okImageResult = { success: true, paid: true, orderId: 'order-1', status: '
 const okVideoModels = [{ id: 'video-a', display_name: 'Video A' }] as any
 const okVideoQuote = { orderId: 'vorder-1', prompt: 'a cat', contractAddress: 'bitcoincash:qq...', amountSats: 2000 } as any
 const okVideoResult = { success: true, paid: true, orderId: 'vorder-1', status: 'completed', path: '/tmp/v.mp4', mediaType: 'video/mp4' } as any
+const okAudioModels = [{ id: 'audio-a', display_name: 'Audio A' }] as any
+const okAudioQuote = { orderId: 'aorder-1', prompt: 'hello', contractAddress: 'bitcoincash:qq...', amountSats: 2000 } as any
+const okAudioResult = { success: true, paid: true, orderId: 'aorder-1', status: 'completed', path: '/tmp/a.mp3', mediaType: 'audio/mpeg' } as any
 
 function fakeDeps(): WebDeps {
   return {
@@ -55,6 +58,8 @@ function fakeDeps(): WebDeps {
       imageHistory: [],
       videoModels: [],
       videoHistory: [],
+      audioModels: [],
+      audioHistory: [],
     }),
     getWalletHistory: async () => ({ records: [], page: 1, numPages: 1, hasNext: false }),
     getReceiveView: async (opts) => ({
@@ -98,6 +103,15 @@ function fakeDeps(): WebDeps {
       return null
     },
     deleteVideoFile: async (id) => id === 'exist',
+    getAudioModels: async () => okAudioModels,
+    getAudioHistory: async () => ({ data: [] }),
+    createAudioQuote: async () => okAudioQuote,
+    fulfillAudio: async () => okAudioResult,
+    serveAudioFile: async (id) => {
+      if (id === 'exist') return { filePath: '/dev/null', mediaType: 'audio/mpeg' }
+      return null
+    },
+    deleteAudioFile: async (id) => id === 'exist',
   }
 }
 
@@ -391,6 +405,63 @@ describe('web server AI routes', () => {
 
   it('DELETE /api/ai/videos/exist deletes', async () => {
     const res = await req(`http://127.0.0.1:${srv.port}/api/ai/videos/exist`, srv.token, 'DELETE')
+    expect(res.status).toBe(200)
+    expect(res.json.deleted).toBe(true)
+  })
+
+  it('GET /api/ai/audio-models returns models', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/audio-models`, srv.token)
+    expect(res.status).toBe(200)
+    expect(Array.isArray(res.json.models)).toBe(true)
+  })
+
+  it('POST /api/ai/audios/quote succeeds', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/audios/quote`, srv.token, 'POST', {
+      prompt: 'hello', model: 'audio-a', voice: 'af_heart', responseFormat: 'mp3', speed: 1.25,
+    })
+    expect(res.status).toBe(200)
+    expect(res.json.orderId).toBe('aorder-1')
+  })
+
+  it('POST /api/ai/audios/quote rejects empty prompt', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/audios/quote`, srv.token, 'POST', {
+      prompt: '',
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('POST /api/ai/audios/quote rejects invalid speed', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/audios/quote`, srv.token, 'POST', {
+      prompt: 'hello', speed: -1,
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('POST /api/ai/audios/fulfill succeeds', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/audios/fulfill`, srv.token, 'POST', {
+      orderId: 'aorder-1',
+    })
+    expect(res.status).toBe(200)
+    expect(res.json.status).toBe('completed')
+  })
+
+  it('GET /api/ai/audios/history returns data', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/audios/history`, srv.token)
+    expect(res.status).toBe(200)
+  })
+
+  it('GET /api/ai/audios/exist/file returns audio', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/audios/exist/file`, srv.token)
+    expect(res.status).toBe(200)
+  })
+
+  it('GET /api/ai/audios/missing/file returns 404', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/audios/missing/file`, srv.token)
+    expect(res.status).toBe(404)
+  })
+
+  it('DELETE /api/ai/audios/exist deletes', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/audios/exist`, srv.token, 'DELETE')
     expect(res.status).toBe(200)
     expect(res.json.deleted).toBe(true)
   })

@@ -81,6 +81,18 @@ import {
   type VideoHistoryEntry,
 } from '../ai/videos.js'
 import {
+  listAudioModels,
+  createAudioOrder,
+  fulfillAudioOrder,
+  getAudioHistory,
+  AUDIO_DIR,
+  AUDIO_MEDIA_TYPE_EXTENSIONS,
+  type AudioModel,
+  type AudioOrderQuote,
+  type GenerateAudioResult,
+  type AudioHistoryEntry,
+} from '../ai/audio.js'
+import {
   estimateSwap,
   executeSwap,
   formatQuote,
@@ -167,6 +179,18 @@ export interface WebDeps {
   fulfillVideo(orderId: string): Promise<GenerateVideoResult>
   serveVideoFile(id: string): Promise<{ filePath: string; mediaType: string } | null>
   deleteVideoFile(id: string): Promise<boolean>
+  getAudioModels(): Promise<AudioModel[]>
+  getAudioHistory(page?: number): Promise<object>
+  createAudioQuote(opts: {
+    prompt: string
+    model?: string
+    voice?: string
+    responseFormat?: string
+    speed?: number
+  }): Promise<AudioOrderQuote>
+  fulfillAudio(orderId: string): Promise<GenerateAudioResult>
+  serveAudioFile(id: string): Promise<{ filePath: string; mediaType: string } | null>
+  deleteAudioFile(id: string): Promise<boolean>
 }
 
 function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
@@ -256,6 +280,18 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
         }))
       } catch {}
 
+      let audioModels: AudioModel[] = []
+      try { audioModels = await listAudioModels({ backendUrl }) } catch {}
+
+      let audioHistory: AudioHistoryEntry[] = []
+      try {
+        const hist = await getAudioHistory({ backendUrl, page: 1, pageSize: 20 })
+        audioHistory = (hist.data || []).map((e) => ({
+          ...e,
+          filepath: localAudioFile(e.id) ?? undefined,
+        }))
+      } catch {}
+
       return {
         walletHash,
         bchPriceUsd,
@@ -280,6 +316,8 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
         imageHistory,
         videoModels,
         videoHistory,
+        audioModels,
+        audioHistory,
       }
     },
 
@@ -581,6 +619,51 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
         return false
       }
     },
+
+    async getAudioModels() {
+      return listAudioModels({ backendUrl })
+    },
+
+    async getAudioHistory(page?: number) {
+      return getAudioHistory({ backendUrl, page, pageSize: 20 })
+    },
+
+    async createAudioQuote(opts) {
+      return createAudioOrder({
+        prompt: opts.prompt,
+        model: opts.model,
+        voice: opts.voice,
+        responseFormat: opts.responseFormat,
+        speed: opts.speed,
+        isChipnet,
+        backendUrl,
+      })
+    },
+
+    async fulfillAudio(orderId) {
+      throw new Error('Fulfillment requires the original quote. Use POST /api/ai/audios/fulfill with stored quote.')
+    },
+
+    async serveAudioFile(id) {
+      const filePath = localAudioFile(id)
+      if (!filePath) return null
+      const ext = filePath.split('.').pop() || ''
+      return {
+        filePath,
+        mediaType: AUDIO_EXT_TO_MEDIA[ext] || 'application/octet-stream',
+      }
+    },
+
+    async deleteAudioFile(id) {
+      const filePath = localAudioFile(id)
+      if (!filePath) return false
+      try {
+        fs.unlinkSync(filePath)
+        return true
+      } catch {
+        return false
+      }
+    },
   }
 }
 
@@ -606,6 +689,17 @@ function localVideoFile(id: string): string | null {
   }
 }
 
+function localAudioFile(id: string): string | null {
+  const safeId = id.replace(/[^a-zA-Z0-9_-]/g, '')
+  if (!safeId) return null
+  try {
+    const files = fs.readdirSync(AUDIO_DIR).filter((f) => f.startsWith(safeId + '.'))
+    return files.length ? path.join(AUDIO_DIR, files[0]) : null
+  } catch {
+    return null
+  }
+}
+
 const IMAGE_EXT_TO_MEDIA: Record<string, string> = Object.fromEntries(
   Object.entries(MEDIA_TYPE_EXTENSIONS).map(([mediaType, ext]) => [ext, mediaType])
 )
@@ -614,10 +708,15 @@ const VIDEO_EXT_TO_MEDIA: Record<string, string> = Object.fromEntries(
   Object.entries(VIDEO_MEDIA_TYPE_EXTENSIONS).map(([mediaType, ext]) => [ext, mediaType])
 )
 
+const AUDIO_EXT_TO_MEDIA: Record<string, string> = Object.fromEntries(
+  Object.entries(AUDIO_MEDIA_TYPE_EXTENSIONS).map(([mediaType, ext]) => [ext, mediaType])
+)
+
 function createDefaultDepsWithQuotes(isChipnet: boolean, backendUrl?: string): WebDeps {
   const base = defaultDeps(isChipnet, backendUrl)
   const quoteStore = new Map<string, ImageOrderQuote>()
   const videoQuoteStore = new Map<string, VideoOrderQuote>()
+  const audioQuoteStore = new Map<string, AudioOrderQuote>()
 
   async function withAmountUsd<T extends { amountSats: number; amountUsd?: number }>(
     quote: T
@@ -685,6 +784,31 @@ function createDefaultDepsWithQuotes(isChipnet: boolean, backendUrl?: string): W
       if (videoQuoteStore.size > 50) {
         const oldest = videoQuoteStore.keys().next().value
         if (oldest) videoQuoteStore.delete(oldest)
+      }
+      return withAmountUsd(quote)
+    },
+
+    async fulfillAudio(orderId) {
+      const quote = audioQuoteStore.get(orderId)
+      if (!quote) throw new Error('No quote found for order. Request a new quote first.')
+      audioQuoteStore.delete(orderId)
+      return fulfillAudioOrder(quote, { isChipnet, backendUrl })
+    },
+
+    async createAudioQuote(opts) {
+      const quote = await createAudioOrder({
+        prompt: opts.prompt,
+        model: opts.model,
+        voice: opts.voice,
+        responseFormat: opts.responseFormat,
+        speed: opts.speed,
+        isChipnet,
+        backendUrl,
+      })
+      audioQuoteStore.set(quote.orderId, quote)
+      if (audioQuoteStore.size > 50) {
+        const oldest = audioQuoteStore.keys().next().value
+        if (oldest) audioQuoteStore.delete(oldest)
       }
       return withAmountUsd(quote)
     },
@@ -1111,6 +1235,80 @@ export async function startWebServer(
         if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
         const id = decodeURIComponent(videoDeleteMatch[1])
         const deleted = await deps.deleteVideoFile(id)
+        return json(res, 200, { deleted })
+      }
+
+      if (pathname === '/api/ai/audio-models' && req.method === 'GET') {
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
+        const models = await deps.getAudioModels()
+        return json(res, 200, { models })
+      }
+
+      if (pathname === '/api/ai/audios/history' && req.method === 'GET') {
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
+        const page = url.searchParams.get('page') ? Number(url.searchParams.get('page')) : undefined
+        const result = await deps.getAudioHistory(page)
+        return json(res, 200, result)
+      }
+
+      if (pathname === '/api/ai/audios/quote' && req.method === 'POST') {
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
+        if (req.headers['content-type'] !== 'application/json') {
+          return json(res, 400, { error: 'Content-Type must be application/json' })
+        }
+        const body = await readBody(req)
+        const prompt = String(body.prompt || '').trim()
+        if (!prompt) return json(res, 400, { error: 'Missing prompt' })
+        let speed: number | undefined
+        if (body.speed != null && body.speed !== '') {
+          speed = Number(body.speed)
+          if (!Number.isFinite(speed) || speed <= 0) {
+            return json(res, 400, { error: 'Speed must be a positive number' })
+          }
+        }
+        const quote = await deps.createAudioQuote({
+          prompt,
+          model: body.model != null ? String(body.model) : undefined,
+          voice: body.voice != null ? String(body.voice) : undefined,
+          responseFormat: body.responseFormat != null ? String(body.responseFormat) : undefined,
+          speed,
+        })
+        return json(res, 200, quote)
+      }
+
+      if (pathname === '/api/ai/audios/fulfill' && req.method === 'POST') {
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
+        if (req.headers['content-type'] !== 'application/json') {
+          return json(res, 400, { error: 'Content-Type must be application/json' })
+        }
+        const body = await readBody(req)
+        const orderId = String(body.orderId || '')
+        if (!orderId) return json(res, 400, { error: 'Missing orderId' })
+        const result = await deps.fulfillAudio(orderId)
+        return json(res, 200, result)
+      }
+
+      const audioFileMatch = pathname.match(/^\/api\/ai\/audios\/([^/]+)\/file$/)
+      if (audioFileMatch && req.method === 'GET') {
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
+        const id = decodeURIComponent(audioFileMatch[1])
+        const file = await deps.serveAudioFile(id)
+        if (!file) return json(res, 404, { error: 'Audio not found' })
+        const data = fs.readFileSync(file.filePath)
+        res.writeHead(200, {
+          'Content-Type': file.mediaType,
+          'Content-Length': data.length,
+          'Cache-Control': 'public, max-age=3600',
+        })
+        res.end(data)
+        return
+      }
+
+      const audioDeleteMatch = pathname.match(/^\/api\/ai\/audios\/([^/]+)$/)
+      if (audioDeleteMatch && req.method === 'DELETE') {
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
+        const id = decodeURIComponent(audioDeleteMatch[1])
+        const deleted = await deps.deleteAudioFile(id)
         return json(res, 200, { deleted })
       }
 

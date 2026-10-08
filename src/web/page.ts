@@ -243,6 +243,8 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
 .gallery-item{margin:0;cursor:pointer;position:relative}
 .gallery-item img,.gallery-item video{display:block;width:100%;aspect-ratio:1;object-fit:cover;border:1px solid var(--line);border-radius:var(--r-sm);transition:border-color .15s ease,opacity .15s ease;background:var(--surface-2)}
 .gallery-item:hover img,.gallery-item:hover video{border-color:var(--accent)}
+.audio-tile{display:flex;align-items:center;justify-content:center;aspect-ratio:1;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface-2);color:var(--accent)}
+.gallery-item:hover .audio-tile{border-color:var(--accent)}
 .gallery-play{position:absolute;top:8px;right:8px;display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;background:rgba(15,25,35,0.55);color:#fff;pointer-events:none}
 .gallery-item:hover .gallery-play{background:var(--accent)}
 .gallery-item figcaption{display:flex;justify-content:space-between;gap:8px;margin-top:7px;font-family:var(--mono);font-size:10px;color:var(--ink-3)}
@@ -425,7 +427,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
       <div x-show="tab==='ai'">
         <div class="ai-head">
           <img class="ai-logo" src="${PAYTACA_AI_LOGO}" alt="">
-          <div><div class="ai-title">Paytaca AI</div><div class="ai-sub">Pay-as-you-go · Model time credits · Image &amp; video</div></div>
+          <div><div class="ai-title">Paytaca AI</div><div class="ai-sub">Pay-as-you-go · Model time credits · Image, video &amp; audio</div></div>
         </div>
         <div class="grid">
           <div class="span-6">
@@ -471,6 +473,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
           <button class="action-btn" :class="{active: aiAction==='refill'}" @click="openRefill('model')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>Auto-Refill</button>
           <button class="action-btn" :class="{active: aiAction==='images'}" @click="aiAction = aiAction==='images' ? null : 'images'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>Generate Images</button>
           <button class="action-btn" :class="{active: aiAction==='video'}" @click="aiAction = aiAction==='video' ? null : 'video'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>Generate Videos</button>
+          <button class="action-btn" :class="{active: aiAction==='audio'}" @click="aiAction = aiAction==='audio' ? null : 'audio'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>Generate Audio</button>
         </div>
         <div class="grid" x-show="aiAction==='buy' || aiAction==='refill'" style="margin-top:16px">
           <div class="span-12">
@@ -667,6 +670,52 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
             </div>
           </div>
         </div>
+        <div x-show="aiAction==='audio'" class="grid" style="margin-top:16px">
+          <div class="span-5">
+            <div class="card">
+              <div class="card-head"><div class="card-title">Audio Generation</div></div>
+              <div class="field"><label class="field-label">Text</label><textarea class="field-input" x-model="audPrompt" placeholder="Enter the text to convert to speech..."></textarea></div>
+              <template x-if="state?.audioModels?.length"><div class="field"><label class="field-label">Model</label><select class="field-input" x-model="audModel"><option value="">Default</option><template x-for="m in state?.audioModels || []" :key="m.id"><option :value="m.id" x-text="m.display_name || m.id"></option></template></select></div></template>
+              <div class="inline-row"><div class="field"><label class="field-label">Voice</label><input class="field-input" type="text" x-model="audVoice" placeholder="Default"></div><div class="field"><label class="field-label">Format</label><select class="field-input" x-model="audFormat"><option value="mp3">MP3</option><option value="pcm">PCM</option></select></div></div>
+              <div class="field"><label class="field-label">Speed</label><input class="field-input" type="number" min="0.25" max="4" step="0.05" x-model="audSpeed" placeholder="1.0"></div>
+              <button class="btn btn-primary" style="margin-top:14px;width:100%" @click="doAudioQuote()" :disabled="audQuoteBusy" x-text="audQuoteBusy ? 'Quoting…' : 'Get Quote'"></button>
+            </div>
+            <div class="card" style="margin-top:14px">
+              <div class="card-head"><div class="card-title">Order History</div></div>
+              <template x-for="h in (state?.audioHistory || []).slice(0,10)" :key="h.id">
+                <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line-2)">
+                  <span class="pill" :class="{'pill-ok':h.status==='completed'||h.status==='generation_complete','pill-fail':h.status==='failed','pill-wait':h.status==='processing'||h.status==='pending_payment','pill-idle':!h.status||(!['completed','generation_complete','failed','processing','pending_payment'].includes(h.status))}" x-text="(h.status||'unknown').toUpperCase()"></span>
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="h.model_display_name || h.model || 'Unknown'"></div>
+                    <div style="font-size:11px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="h.prompt || 'No text'"></div>
+                  </div>
+                  <div style="text-align:right;flex-shrink:0;font-family:var(--mono);font-size:10.5px;color:var(--ink-3)">
+                    <div x-text="(h.created_at || '').slice(0,10)"></div>
+                    <div x-show="h.price_usd != null || h.actual_cost_usd != null" x-text="'$' + (h.price_usd != null ? h.price_usd : h.actual_cost_usd).toFixed(2)"></div>
+                  </div>
+                  <template x-if="h.filepath"><button class="btn btn-sm btn-ghost" style="flex-shrink:0;padding:4px 6px" @click.stop="openAudio(h)" title="Play audio"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></button></template>
+                </div>
+              </template>
+              <template x-if="state && !(state?.audioHistory || []).length"><div class="empty">No orders yet</div></template>
+            </div>
+          </div>
+          <div class="span-7">
+            <div class="card">
+              <div class="card-head"><div class="card-title">Library</div><span class="pill pill-idle" x-show="(state?.audioHistory || []).filter(h => h.filepath).length" x-text="(state?.audioHistory || []).filter(h => h.filepath).length + ' SAVED'"></span></div>
+              <template x-if="(state?.audioHistory || []).filter(h => h.filepath).length"><div class="gallery">
+                <template x-for="h in (state?.audioHistory || []).filter(h => h.filepath)" :key="h.id">
+                  <figure class="gallery-item" @click="openAudio(h)">
+                    <div class="audio-tile"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>
+                    <figcaption><span class="cap" x-text="audioCaption(h)"></span><span x-text="(h.completed_at || '').slice(0,10)"></span></figcaption>
+                  </figure>
+                </template>
+              </div></template>
+              <template x-if="state && !(state?.audioHistory || []).some(h => h.filepath)"><div class="empty">No audio yet — generate your first clip</div></template>
+              <template x-if="!state"><div class="empty">Loading…</div></template>
+              <div style="font-size:10.5px;color:var(--ink-3);font-family:var(--mono);margin-top:16px" x-show="state">files saved in ~/.paytaca/audio · click a clip to play</div>
+            </div>
+          </div>
+        </div>
       </div>
     </main>
   </div>
@@ -705,9 +754,24 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
     </div>
   </div>
 </div>
+<div class="modal-backdrop" :class="{open: showAudioQuoteModal}" @click.self="showAudioQuoteModal=false"><div class="modal" role="dialog" aria-modal="true"><div class="modal-title">Audio Generation</div><div class="modal-body">Model: <strong x-text="pendingAudioQuote?.model || 'default'"></strong><br><span x-show="pendingAudioQuote?.voice || pendingAudioQuote?.responseFormat" x-text="(pendingAudioQuote?.voice ? 'Voice: ' + pendingAudioQuote.voice : '') + (pendingAudioQuote?.responseFormat ? ' · ' + pendingAudioQuote.responseFormat.toUpperCase() : '') + (pendingAudioQuote?.speed && pendingAudioQuote.speed !== 1 ? ' · ' + pendingAudioQuote.speed + '×' : '')"></span><br x-show="pendingAudioQuote?.voice || pendingAudioQuote?.responseFormat">Cost: <span class="tbl-num" x-text="pendingAudioQuote?.amountSats ? (pendingAudioQuote.amountSats / 1e8).toFixed(8) + ' BCH' : 'calculating...'"></span><span x-show="pendingAudioQuote?.amountUsd != null" x-text="pendingAudioQuote?.amountUsd != null ? ' · $' + pendingAudioQuote.amountUsd.toFixed(2) + ' USD' : ''"></span><br>Order: <span class="mono-break" style="color:var(--ink-3)" x-text="pendingAudioQuote?.orderId || 'pending'"></span></div><div class="modal-actions"><button class="btn" @click="showAudioQuoteModal=false">Cancel</button><button class="btn btn-primary" @click="confirmAudioGen()" :disabled="audGenBusy" x-text="audGenBusy ? 'Generating…' : 'Pay & Generate'"></button></div></div></div>
+<div class="lightbox" :class="{open: audioLightbox}" @click.self="audioLightbox=null" @keydown.escape.window="audioLightbox=null" role="dialog" aria-modal="true">
+  <div class="lightbox-inner">
+    <audio :src="audioLightbox && audUrls[audioLightbox.id] ? audUrls[audioLightbox.id] : ''" controls x-show="audioLightbox && audUrls[audioLightbox.id]" style="width:100%;max-width:520px;margin:0 auto;display:block"></audio>
+    <div class="lightbox-bar">
+      <span class="lightbox-path" x-text="audioLightbox?.path || audioLightbox?.id || ''"></span>
+      <div class="lightbox-actions">
+        <button class="btn btn-sm" @click="copyText(audioLightbox?.path)">Copy Path</button>
+        <a class="btn btn-sm" :href="audioLightbox && audUrls[audioLightbox.id] ? audUrls[audioLightbox.id] : '#'" target="_blank" rel="noopener" x-show="audioLightbox && audUrls[audioLightbox.id]">Open ↗</a>
+        <template x-if="!audioLightboxConfirmDelete"><button class="btn btn-sm" style="color:var(--err)" @click="audioLightboxConfirmDelete=true">Delete</button></template>
+        <template x-if="audioLightboxConfirmDelete"><span style="display:flex;gap:6px;align-items:center;font-size:11.5px;color:var(--err)">Delete?<button class="btn btn-sm btn-primary" style="background:var(--err);border-color:var(--err)" @click="deleteAudio()">Yes</button><button class="btn btn-sm" @click="audioLightboxConfirmDelete=false">No</button></span></template>
+        <button class="btn btn-sm" @click="audioLightboxConfirmDelete=false;audioLightbox=null">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
 <template x-if="toastVisible"><div class="toast" :class="toastOk ? 'toast-ok' : 'toast-err'" x-text="toastMsg"></div></template>
 <template x-if="notify">
-  <div class="tx-toast">
     <div class="t" x-text="notify.title"></div>
     <div class="a" x-text="notify.amountText"></div>
     <a :href="notify.explorer" target="_blank" rel="noopener" x-text="notify.txidShort"></a>
@@ -728,17 +792,21 @@ pendingPurchase:null,purchaseBusy:false,purchaseMethod:'bch',purchaseError:'',li
 showTopupModal:false,topupAmount:'',topupMethod:'bch',topupBusy:false,topupError:'',topupPresets:[1,5,10,25],
 pendingImageQuote:null,showImageQuoteModal:false,imgGenBusy:false,imgQuoteBusy:false,walletAction:null,aiAction:null,lightbox:null,lightboxConfirmDelete:false,imgUrls:{},
 pendingVideoQuote:null,showVideoQuoteModal:false,vidGenBusy:false,vidQuoteBusy:false,videoLightbox:null,videoLightboxConfirmDelete:false,vidUrls:{},vidPosters:{},
+pendingAudioQuote:null,showAudioQuoteModal:false,audGenBusy:false,audQuoteBusy:false,audioLightbox:null,audioLightboxConfirmDelete:false,audUrls:{},
 refillModel:'',refillMinutesIdx:1,refillCapIdx:0,REFILL_MINUTES:[15,30,60],REFILL_CAPS:[2,4,8,-1],refillPayMethod:'bch',refillEditing:false,refillEditKey:null,refillNotice:'',refillMode:'model',paygAmount:'5',paygThreshold:'1',paygMax:'',
 imgPrompt:'',imgModel:'bytedance-seed/seedream-5-0-pro',imgAspect:'1:1',imgQuality:'auto',
 vidPrompt:'',vidModel:'',vidDuration:'5',vidResolution:'720p',vidAspect:'16:9',vidAudio:'on',
+audPrompt:'',audModel:'',audVoice:'',audFormat:'mp3',audSpeed:'1',
 toastVisible:false,toastMsg:'',toastOk:true,
 ws:null,wsStatus:'connecting',wsAddress:null,wsSeen:{},wsReconnectTimer:null,wsPingTimer:null,wsRefreshTimer:null,wsLateTimer:null,notify:null,_ntid:0,
-async init(){document.documentElement.setAttribute('data-theme',this.theme);try{this.state=await this.api('GET','/api/wallet/state');this.loadHistory(1);this.loadImages();this.loadVideos();await this.onRcvChange();this.connectWatch()}catch(e){this.toast(e.message,true)}var self=this;document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible'&&self.state){if(!self.ws||self.ws.readyState!==1){if(self.wsReconnectTimer)clearTimeout(self.wsReconnectTimer);self.connectWatch()}}});window.addEventListener('online',function(){if(self.state){if(self.wsReconnectTimer)clearTimeout(self.wsReconnectTimer);self.connectWatch()}})},
-async load(){this.refreshing=true;try{this.state=await this.api('GET','/api/wallet/state');this.onRcvChange();await Promise.all([this.loadHistory(this.histPage),this.loadImages(),this.loadVideos()])}catch(e){this.toast(e.message,true)}finally{this.refreshing=false}},
+async init(){document.documentElement.setAttribute('data-theme',this.theme);try{this.state=await this.api('GET','/api/wallet/state');this.loadHistory(1);this.loadImages();this.loadVideos();this.loadAudios();await this.onRcvChange();this.connectWatch()}catch(e){this.toast(e.message,true)}var self=this;document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible'&&self.state){if(!self.ws||self.ws.readyState!==1){if(self.wsReconnectTimer)clearTimeout(self.wsReconnectTimer);self.connectWatch()}}});window.addEventListener('online',function(){if(self.state){if(self.wsReconnectTimer)clearTimeout(self.wsReconnectTimer);self.connectWatch()}})},
+async load(){this.refreshing=true;try{this.state=await this.api('GET','/api/wallet/state');this.onRcvChange();await Promise.all([this.loadHistory(this.histPage),this.loadImages(),this.loadVideos(),this.loadAudios()])}catch(e){this.toast(e.message,true)}finally{this.refreshing=false}},
 loadImages(){var s=this;(this.state&&this.state.imageHistory||[]).forEach(function(h){if(h.status==='completed'&&h.filepath)s.loadImage(h.id)})},
 async loadImage(id){if(!id||this.imgUrls[id])return;try{var res=await fetch('/api/ai/images/'+id+'/file',{headers:{'X-Paytaca-Token':this.token}});if(!res.ok)return;var blob=await res.blob();this.imgUrls[id]=URL.createObjectURL(blob)}catch(e){}},
 loadVideos(){var s=this;(this.state&&this.state.videoHistory||[]).forEach(function(h){if(h.filepath)s.loadVideo(h.id)})},
 async loadVideo(id){if(!id||this.vidUrls[id])return;try{var res=await fetch('/api/ai/videos/'+id+'/file',{headers:{'X-Paytaca-Token':this.token}});if(!res.ok)return;var blob=await res.blob();var url=URL.createObjectURL(blob);this.vidUrls[id]=url;this.makePoster(id,url)}catch(e){}},
+loadAudios(){var s=this;(this.state&&this.state.audioHistory||[]).forEach(function(h){if(h.filepath)s.loadAudio(h.id)})},
+async loadAudio(id){if(!id||this.audUrls[id])return;try{var res=await fetch('/api/ai/audios/'+id+'/file',{headers:{'X-Paytaca-Token':this.token}});if(!res.ok)return;var blob=await res.blob();this.audUrls[id]=URL.createObjectURL(blob)}catch(e){}},
 makePoster(id,url){if(this.vidPosters[id])return;var self=this;var v=document.createElement('video');v.muted=true;v.playsInline=true;v.preload='auto';v.src=url;var done=false;var draw=function(){if(done)return;done=true;try{var c=document.createElement('canvas');c.width=v.videoWidth||640;c.height=v.videoHeight||360;c.getContext('2d').drawImage(v,0,0,c.width,c.height);var next=Object.assign({},self.vidPosters);next[id]=c.toDataURL('image/jpeg',0.7);self.vidPosters=next}catch(e){}try{v.removeAttribute('src');v.load()}catch(e){}};v.addEventListener('loadeddata',function(){try{v.currentTime=Math.min(0.1,(v.duration||1)/2)}catch(e){draw()}});v.addEventListener('seeked',draw);v.addEventListener('error',draw);setTimeout(draw,4000)},
 async api(method,apipath,body){var opts={method:method,headers:{'X-Paytaca-Token':this.token,'Accept':'application/json'}};if(body!==undefined){opts.headers['Content-Type']='application/json';opts.body=JSON.stringify(body)}var res=await fetch(apipath,opts);if(!res.ok){var msg='Request failed ('+res.status+')';if(res.status===401)msg='Session expired or unauthorized — reopen the page via paytaca web';else{try{var j=await res.json();if(j.error)msg=j.error}catch(ex){}}throw new Error(msg)}return res.json()},
 fmtDuration(s){if(!s||s<=0)return '0m';var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h?h+'h '+m+'m':m+'m'},
@@ -808,7 +876,12 @@ async doVideoQuote(){var prompt=(this.vidPrompt||'').trim();if(!prompt){this.toa
 async confirmVideoGen(){if(!this.pendingVideoQuote)return;this.vidGenBusy=true;try{var orderId=this.pendingVideoQuote.orderId;var result=await this.api('POST','/api/ai/videos/fulfill',{orderId:orderId});this.showVideoQuoteModal=false;this.aiAction='video';if(result&&result.path){this.videoLightbox={id:orderId,path:result.path};this.toast('Video saved to ~/.paytaca/videos')}else{this.toast((result&&result.error)||(result&&result.paid?'Payment received — video will appear in your gallery':'Video generation failed'),true)}this.load()}catch(e){this.toast(e.message,true)}this.vidGenBusy=false;this.pendingVideoQuote=null},
 openVideo(h){this.videoLightbox={id:h.id,path:h.filepath||('~/paytaca/videos/'+h.id)};this.videoLightboxConfirmDelete=false;this.loadVideo(h.id)},
 async deleteVideo(){if(!this.videoLightbox)return;var id=this.videoLightbox.id;try{await this.api('DELETE','/api/ai/videos/'+id);this.videoLightbox=null;this.videoLightboxConfirmDelete=false;this.toast('Video deleted');this.load()}catch(e){this.toast(e.message,true);this.videoLightboxConfirmDelete=false}},
-videoCaption(h){var t=h.prompt||h.model_display_name||h.model||h.id||'';return t.length>48?t.slice(0,48)+'…':t}
+videoCaption(h){var t=h.prompt||h.model_display_name||h.model||h.id||'';return t.length>48?t.slice(0,48)+'…':t},
+async doAudioQuote(){var prompt=(this.audPrompt||'').trim();if(!prompt){this.toast('Enter some text',true);return}var speed=this.audSpeed!==''?Number(this.audSpeed):undefined;if(speed!=null&&(!isFinite(speed)||speed<=0)){this.toast('Speed must be a positive number',true);return}this.audQuoteBusy=true;try{var quote=await this.api('POST','/api/ai/audios/quote',{prompt:prompt,model:this.audModel||undefined,voice:this.audVoice||undefined,responseFormat:this.audFormat||undefined,speed:speed});this.pendingAudioQuote=quote;this.showAudioQuoteModal=true}catch(e){this.toast(e.message,true)}this.audQuoteBusy=false},
+async confirmAudioGen(){if(!this.pendingAudioQuote)return;this.audGenBusy=true;try{var orderId=this.pendingAudioQuote.orderId;var result=await this.api('POST','/api/ai/audios/fulfill',{orderId:orderId});this.showAudioQuoteModal=false;this.aiAction='audio';if(result&&result.path){this.audioLightbox={id:orderId,path:result.path};this.toast('Audio saved to ~/.paytaca/audio')}else{this.toast((result&&result.error)||(result&&result.paid?'Payment received — audio will appear in your library':'Audio generation failed'),true)}this.load()}catch(e){this.toast(e.message,true)}this.audGenBusy=false;this.pendingAudioQuote=null},
+openAudio(h){this.audioLightbox={id:h.id,path:h.filepath||('~/paytaca/audio/'+h.id)};this.audioLightboxConfirmDelete=false;this.loadAudio(h.id)},
+async deleteAudio(){if(!this.audioLightbox)return;var id=this.audioLightbox.id;try{await this.api('DELETE','/api/ai/audios/'+id);this.audioLightbox=null;this.audioLightboxConfirmDelete=false;this.toast('Audio deleted');this.load()}catch(e){this.toast(e.message,true);this.audioLightboxConfirmDelete=false}},
+audioCaption(h){var t=h.prompt||h.model_display_name||h.model||h.id||'';return t.length>48?t.slice(0,48)+'…':t}
 }})});
 </script>
 <script defer>${ALPINE_JS}</script>

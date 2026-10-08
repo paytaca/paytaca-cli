@@ -33,6 +33,11 @@ const mocks = vi.hoisted(() => ({
   getVideoOrderStatus: vi.fn(),
   isVideoStillProcessing: vi.fn(),
   listVideoModels: vi.fn(),
+  generateAudio: vi.fn(),
+  getAudioHistory: vi.fn(),
+  getAudioOrderStatus: vi.fn(),
+  isAudioStillProcessing: vi.fn(),
+  listAudioModels: vi.fn(),
   armAutoRefill: vi.fn(),
   disarmAutoRefill: vi.fn(),
   readAutoRefillState: vi.fn(),
@@ -101,6 +106,14 @@ vi.mock('../ai/videos.js', () => ({
   getVideoOrderStatus: mocks.getVideoOrderStatus,
   isStillProcessing: mocks.isVideoStillProcessing,
   listVideoModels: mocks.listVideoModels,
+}))
+
+vi.mock('../ai/audio.js', () => ({
+  generateAudio: mocks.generateAudio,
+  getAudioHistory: mocks.getAudioHistory,
+  getAudioOrderStatus: mocks.getAudioOrderStatus,
+  isStillProcessing: mocks.isAudioStillProcessing,
+  listAudioModels: mocks.listAudioModels,
 }))
 
 vi.mock('../ai/autoRefill.js', async (importOriginal) => {
@@ -174,6 +187,8 @@ describe('MCP tools', () => {
       expect(text(result)).toMatch(/get_image_status/)
       expect(text(result)).toMatch(/generate_video/)
       expect(text(result)).toMatch(/get_video_status/)
+      expect(text(result)).toMatch(/generate_audio/)
+      expect(text(result)).toMatch(/get_audio_status/)
       expect(text(result)).toMatch(/SPENDS REAL FUNDS|spend real funds/i)
     })
   })
@@ -550,6 +565,180 @@ describe('MCP tools', () => {
       const result = await c.callTool({
         name: 'get_video_status',
         arguments: { order_id: 'vorder-1' },
+      })
+      expect(result.isError).toBe(true)
+      expect(text(result)).toMatch(/boom/)
+    })
+  })
+
+  describe('audio tools', () => {
+    it('lists audio models', async () => {
+      mocks.listAudioModels.mockResolvedValue([
+        { id: 'audio-a', display_name: 'Audio A' },
+      ])
+      const c = await connect()
+      const result = await c.callTool({ name: 'get_audio_models', arguments: {} })
+      expect(result.isError).toBeFalsy()
+      expect(mocks.listAudioModels).toHaveBeenCalledWith({ backendUrl: undefined })
+      expect(JSON.parse(text(result))).toEqual([
+        { id: 'audio-a', display_name: 'Audio A' },
+      ])
+    })
+
+    it('passes pagination to get_audio_history', async () => {
+      mocks.getAudioHistory.mockResolvedValue({ count: 0, data: [] })
+      const c = await connect()
+      await c.callTool({
+        name: 'get_audio_history',
+        arguments: { page: 2, page_size: 5 },
+      })
+      expect(mocks.getAudioHistory).toHaveBeenCalledWith({
+        page: 2,
+        pageSize: 5,
+        backendUrl: undefined,
+      })
+    })
+
+    it('returns a saved path with structured content on success', async () => {
+      mocks.generateAudio.mockResolvedValue({
+        success: true,
+        paid: true,
+        orderId: 'aorder-1',
+        model: 'audio-a',
+        amountSats: 2000,
+        amountUsd: 0.02,
+        txid: 'txid-1',
+        status: 'completed',
+        path: '/tmp/aorder-1.mp3',
+        mediaType: 'audio/mpeg',
+      })
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'generate_audio',
+        arguments: { prompt: 'hello', model: 'audio-a', voice: 'af_heart', response_format: 'mp3', chipnet: false },
+      })
+      expect(result.isError).toBeFalsy()
+      expect(mocks.generateAudio).toHaveBeenCalledWith({
+        prompt: 'hello',
+        model: 'audio-a',
+        voice: 'af_heart',
+        responseFormat: 'mp3',
+        speed: undefined,
+        isChipnet: false,
+        backendUrl: undefined,
+      })
+      expect(text(result)).toMatch(/Saved to: \/tmp\/aorder-1\.mp3/)
+      expect((result.content as any[]).some((b) => b.type === 'image')).toBe(false)
+      expect(result.structuredContent).toMatchObject({
+        orderId: 'aorder-1',
+        path: '/tmp/aorder-1.mp3',
+        txid: 'txid-1',
+      })
+    })
+
+    it('returns an error result when generation fails', async () => {
+      mocks.generateAudio.mockResolvedValue({
+        success: false,
+        paid: true,
+        orderId: 'aorder-1',
+        txid: 'txid-1',
+        error: 'Payment was broadcast (txid txid-1) but the backend could not confirm it yet.',
+      })
+      mocks.isAudioStillProcessing.mockReturnValue(false)
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'generate_audio',
+        arguments: { prompt: 'hello' },
+      })
+      expect(result.isError).toBe(true)
+      expect(text(result)).toMatch(/could not confirm/)
+      expect(text(result)).toMatch(/txid-1/)
+    })
+
+    it('returns processing status when generation times out', async () => {
+      mocks.generateAudio.mockResolvedValue({
+        success: false,
+        paid: true,
+        orderId: 'aorder-1',
+        model: 'audio-a',
+        txid: 'txid-1',
+        amountSats: 2000,
+        amountUsd: 0.02,
+        error: 'Timed out waiting for audio generation (order aorder-1 is "processing").',
+      })
+      mocks.isAudioStillProcessing.mockReturnValue(true)
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'generate_audio',
+        arguments: { prompt: 'hello' },
+      })
+      expect(result.isError).toBeFalsy()
+      expect(text(result)).toMatch(/still processing/)
+      expect(text(result)).toMatch(/aorder-1/)
+      expect(text(result)).toMatch(/get_audio_status/)
+      expect(result.structuredContent).toMatchObject({
+        orderId: 'aorder-1',
+        status: 'processing',
+        txid: 'txid-1',
+      })
+    })
+
+    it('returns a saved path on get_audio_status when complete', async () => {
+      mocks.getAudioOrderStatus.mockResolvedValue({
+        success: true,
+        paid: true,
+        orderId: 'aorder-1',
+        model: 'audio-a',
+        amountSats: 2000,
+        amountUsd: 0.02,
+        txid: 'txid-1',
+        status: 'completed',
+        path: '/tmp/aorder-1.mp3',
+        mediaType: 'audio/mpeg',
+      })
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'get_audio_status',
+        arguments: { order_id: 'aorder-1' },
+      })
+      expect(result.isError).toBeFalsy()
+      expect(text(result)).toMatch(/Saved to: \/tmp\/aorder-1\.mp3/)
+      expect(result.structuredContent).toMatchObject({
+        orderId: 'aorder-1',
+        path: '/tmp/aorder-1.mp3',
+      })
+    })
+
+    it('returns processing status when still generating', async () => {
+      mocks.getAudioOrderStatus.mockResolvedValue({
+        success: false,
+        paid: true,
+        orderId: 'aorder-1',
+        error: 'Timed out waiting for audio generation',
+      })
+      mocks.isAudioStillProcessing.mockReturnValue(true)
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'get_audio_status',
+        arguments: { order_id: 'aorder-1' },
+      })
+      expect(result.isError).toBeFalsy()
+      expect(text(result)).toMatch(/still processing/)
+      expect(text(result)).toMatch(/aorder-1/)
+    })
+
+    it('returns error when get_audio_status fails', async () => {
+      mocks.getAudioOrderStatus.mockResolvedValue({
+        success: false,
+        paid: true,
+        orderId: 'aorder-1',
+        error: 'Audio generation failed: boom',
+      })
+      mocks.isAudioStillProcessing.mockReturnValue(false)
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'get_audio_status',
+        arguments: { order_id: 'aorder-1' },
       })
       expect(result.isError).toBe(true)
       expect(text(result)).toMatch(/boom/)

@@ -49,6 +49,10 @@ describe('paytaca MCP server', () => {
         'get_video_history',
         'get_video_models',
         'get_video_status',
+        'generate_audio',
+        'get_audio_history',
+        'get_audio_models',
+        'get_audio_status',
         'send',
         'topup',
       ].sort()
@@ -71,9 +75,11 @@ describe('paytaca MCP server', () => {
     const buy = tools.find((t) => t.name === 'buy_plan')
     const image = tools.find((t) => t.name === 'generate_image')
     const video = tools.find((t) => t.name === 'generate_video')
+    const audio = tools.find((t) => t.name === 'generate_audio')
     expect(send?.annotations?.destructiveHint).toBe(true)
     expect(buy?.annotations?.destructiveHint).toBe(true)
     expect(image?.annotations?.destructiveHint).toBe(true)
     expect(video?.annotations?.destructiveHint).toBe(true)
+    expect(audio?.annotations?.destructiveHint).toBe(true)
   })
 })

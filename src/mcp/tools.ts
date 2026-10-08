@@ -45,6 +45,13 @@ import {
   listVideoModels,
 } from '../ai/videos.js'
 import {
+  generateAudio,
+  getAudioHistory,
+  getAudioOrderStatus,
+  isStillProcessing as isAudioStillProcessing,
+  listAudioModels,
+} from '../ai/audio.js'
+import {
   armAutoRefill,
   autoRefillTickOne,
   deleteAutoRefill,
@@ -466,11 +473,17 @@ Video generation:
   get_video_models       List video generation models
   get_video_history      Video generation order history
 
+Audio generation:
+  generate_audio         Generate speech from text (spends funds)
+  get_audio_status       Poll/resume a pending audio generation order
+  get_audio_models       List audio (text-to-speech) models
+  get_audio_history      Audio generation order history
+
 Notes:
   - All tools accept an optional "chipnet" flag (default mainnet).
-  - send, buy_plan, topup, generate_image, and generate_video spend real funds
-    from the active wallet; the MCP host is responsible for asking the user for
-    approval before invoking them.
+  - send, buy_plan, topup, generate_image, generate_video, and generate_audio
+    spend real funds from the active wallet; the MCP host is responsible for
+    asking the user for approval before invoking them.
   - get_credits reports a pay-as-you-go "balance_usd" alongside plan sessions.
     When the balance covers usage, no purchaseHint is returned: the model is
     already usable, so just continue the task.
@@ -1607,6 +1620,218 @@ export function registerTools(
               type: 'text' as const,
               text: [
                 `Video generated (order ${result.orderId}).`,
+                `Saved to: ${result.path}`,
+                `Model: ${result.model}`,
+                `Cost: ${result.amountSats} sats`,
+                `txid: ${result.txid}`,
+              ].join('\n'),
+            },
+          ],
+          structuredContent: {
+            orderId: result.orderId,
+            model: result.model,
+            status: result.status,
+            path: result.path,
+            mediaType: result.mediaType,
+            amountSats: result.amountSats,
+            amountUsd: result.amountUsd,
+            txid: result.txid,
+          },
+        }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'get_audio_models',
+    {
+      title: 'List audio models',
+      description:
+        'List the audio (text-to-speech) models available through Paytaca AI.',
+      inputSchema: {
+        search: z.string().optional(),
+        backend: z.string().optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ search, backend }) => {
+      try {
+        return json(await listAudioModels({ search, backendUrl: backend }))
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'get_audio_history',
+    {
+      title: 'Get audio order history',
+      description: 'Return paginated Paytaca audio generation order history.',
+      inputSchema: {
+        page: z.number().int().positive().optional(),
+        page_size: z.number().int().positive().optional(),
+        backend: z.string().optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ page, page_size, backend }) => {
+      try {
+        return json(
+          await getAudioHistory({ page, pageSize: page_size, backendUrl: backend })
+        )
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'get_audio_status',
+    {
+      title: 'Poll audio generation status',
+      description:
+        'Poll an existing audio generation order by ID. If generation is complete, saves the audio to disk and returns its file path plus the model/cost. If still processing, returns the current status so you can retry later. Use this to resume after generate_audio returns a "processing" status.',
+      inputSchema: {
+        order_id: z.string().min(1),
+        chipnet: z.boolean().optional(),
+        backend: z.string().optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ order_id, chipnet, backend }) => {
+      try {
+        const result = await getAudioOrderStatus(order_id, {
+          isChipnet: cn(chipnet),
+          backendUrl: backend,
+        })
+
+        if (result.success && result.path) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: [
+                  `Audio ready (order ${result.orderId}).`,
+                  `Saved to: ${result.path}`,
+                  `Model: ${result.model}`,
+                  `Cost: ${result.amountSats} sats`,
+                  `txid: ${result.txid}`,
+                ].join('\n'),
+              },
+            ],
+            structuredContent: {
+              orderId: result.orderId,
+              model: result.model,
+              status: result.status,
+              path: result.path,
+              mediaType: result.mediaType,
+              amountSats: result.amountSats,
+              amountUsd: result.amountUsd,
+              txid: result.txid,
+            },
+          }
+        }
+
+        if (isAudioStillProcessing(result)) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: [
+                  `Audio generation is still processing (order ${result.orderId}).`,
+                  `Try again in a few seconds with get_audio_status.`,
+                ].join('\n'),
+              },
+            ],
+            structuredContent: {
+              orderId: result.orderId,
+              status: 'processing',
+            },
+          }
+        }
+
+        return fail(new Error(result.error || 'Audio generation failed.'))
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'generate_audio',
+    {
+      title: 'Generate speech from text',
+      description:
+        'Generate speech from a text prompt with a Paytaca AI audio (text-to-speech) model. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). Saves the audio to disk and returns its file path. The MCP host must obtain user approval before calling this.',
+      inputSchema: {
+        prompt: z.string().min(1),
+        model: z.string().optional(),
+        voice: z.string().optional(),
+        response_format: z.enum(['mp3', 'pcm']).optional(),
+        speed: z.number().positive().optional(),
+        chipnet: z.boolean().optional(),
+        backend: z.string().optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({ prompt, model, voice, response_format, speed, chipnet, backend }) => {
+      try {
+        const result = await generateAudio({
+          prompt,
+          model,
+          voice,
+          responseFormat: response_format,
+          speed,
+          isChipnet: cn(chipnet),
+          backendUrl: backend,
+        })
+
+        if (isAudioStillProcessing(result)) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: [
+                  `Audio generation is still processing (order ${result.orderId}).`,
+                  `The generation is running server-side — call get_audio_status with order_id "${result.orderId}" to retrieve the result.`,
+                  `Model: ${result.model}`,
+                  `Paid: ${result.amountSats} sats (txid: ${result.txid})`,
+                ].join('\n'),
+              },
+            ],
+            structuredContent: {
+              orderId: result.orderId,
+              model: result.model,
+              status: 'processing',
+              amountSats: result.amountSats,
+              amountUsd: result.amountUsd,
+              txid: result.txid,
+            },
+          }
+        }
+
+        if (!result.success || !result.path) {
+          return fail(new Error(result.error || 'Audio generation failed.'))
+        }
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: [
+                `Audio generated (order ${result.orderId}).`,
                 `Saved to: ${result.path}`,
                 `Model: ${result.model}`,
                 `Cost: ${result.amountSats} sats`,
