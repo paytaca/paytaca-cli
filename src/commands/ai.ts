@@ -26,6 +26,7 @@ import {
   selectTier,
   formatDuration,
   formatPriceUsd,
+  resolveModelId,
 } from '../ai/models.js'
 import {
   summarizeCredits,
@@ -59,10 +60,13 @@ import {
   armAutoRefill,
   disarmAutoRefill,
   deleteAutoRefill,
-  readAutoRefillState,
+  readAutoRefillStore,
+  listAutoRefillEntries,
+  normalizeModelKey,
   remainingBudget,
   remainingUsdBudget,
-  autoRefillTick,
+  autoRefillTickOne,
+  type AutoRefillTarget,
   type RefillTickResult,
 } from '../ai/autoRefill.js'
 import { createRefillTickDeps } from '../mcp/tools.js'
@@ -849,8 +853,24 @@ export function registerAiCommands(program: Command): void {
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .option('--json', 'Output as JSON')
     .action(async (opts) => {
+      const modelTarget = async (query: string): Promise<AutoRefillTarget> => {
+        let id = query
+        try {
+          const config = await getConfig({ backendUrl: opts.backend })
+          id = resolveModelId(config, query)
+        } catch {
+          id = query
+        }
+        return { mode: 'model', model: id }
+      }
+      const resolveTarget = async (): Promise<AutoRefillTarget | undefined> => {
+        if (opts.payg) return { mode: 'payg' }
+        if (opts.model) return modelTarget(opts.model)
+        return undefined
+      }
       if (opts.delete) {
-        const existed = deleteAutoRefill()
+        const target = await resolveTarget()
+        const existed = deleteAutoRefill(target)
         if (opts.json) outputJson({ deleted: true, existed })
         else if (existed) console.log(chalk.dim('\n   Auto-refill configuration deleted.\n'))
         else console.log(chalk.dim('\n   No auto-refill configuration to delete.\n'))
@@ -884,8 +904,8 @@ export function registerAiCommands(program: Command): void {
         }
         const state = armAutoRefill({
           mode: 'payg',
-          amountUsd,
-          thresholdUsd,
+          amountUsd: amountUsd as number,
+          thresholdUsd: thresholdUsd as number,
           maxUsd,
           paymentMethod: opts.lift ? 'lift' : 'bch',
         })
@@ -893,7 +913,9 @@ export function registerAiCommands(program: Command): void {
         const wallet = loadWalletRef()
         if (wallet?.canSign) {
           try {
-            tick = await autoRefillTick(createRefillTickDeps(Boolean(opts.chipnet)))
+            tick = await autoRefillTickOne(createRefillTickDeps(Boolean(opts.chipnet)), {
+              mode: 'payg',
+            })
           } catch (err) {
             tick = { action: 'skipped', reason: (err as Error).message }
           }
@@ -913,6 +935,13 @@ export function registerAiCommands(program: Command): void {
         return
       }
       if (opts.enable) {
+        if (!opts.model) {
+          const message = 'A plan auto-refill requires --model <id>.'
+          if (opts.json) outputJson({ error: message })
+          else console.log(chalk.red(`\nError: ${message}\n`))
+          process.exitCode = 1
+          return
+        }
         const minutes = opts.minutes !== undefined ? Number(opts.minutes) : undefined
         const maxMinutes =
           opts.maxMinutes !== undefined ? Number(opts.maxMinutes) : undefined
@@ -926,14 +955,16 @@ export function registerAiCommands(program: Command): void {
           process.exitCode = 1
           return
         }
-        const existing = readAutoRefillState()
+        const target = await modelTarget(opts.model)
+        const modelId = target.mode === 'model' ? target.model : opts.model
+        const existing = readAutoRefillStore().models[normalizeModelKey(modelId)]
         const effMinutes = minutes ?? existing?.minutes
         const effMaxMinutes = maxMinutes ?? existing?.maxMinutes
         let capError: string | null = null
-        if (effMaxMinutes !== undefined) {
-          if (effMinutes === undefined) {
-            capError = '--max-minutes requires --minutes (a top-up size).'
-          } else if (effMaxMinutes < effMinutes * 2) {
+        if (effMinutes === undefined) {
+          capError = '--minutes is required to arm a plan auto-refill.'
+        } else if (effMaxMinutes !== undefined) {
+          if (effMaxMinutes < effMinutes * 2) {
             capError = `--max-minutes must be at least twice --minutes (${effMinutes * 2}).`
           } else if (effMaxMinutes % effMinutes !== 0) {
             capError = `--max-minutes must be a multiple of --minutes (${effMinutes}).`
@@ -946,16 +977,20 @@ export function registerAiCommands(program: Command): void {
           return
         }
         const state = armAutoRefill({
-          model: opts.model,
-          minutes,
-          maxMinutes,
+          mode: 'model',
+          model: modelId,
+          minutes: effMinutes as number,
+          maxMinutes: effMaxMinutes,
           paymentMethod: opts.lift ? 'lift' : 'bch',
         })
         let tick: RefillTickResult | null = null
         const wallet = loadWalletRef()
         if (wallet?.canSign) {
           try {
-            tick = await autoRefillTick(createRefillTickDeps(Boolean(opts.chipnet)))
+            tick = await autoRefillTickOne(createRefillTickDeps(Boolean(opts.chipnet)), {
+              mode: 'model',
+              model: modelId,
+            })
           } catch (err) {
             tick = { action: 'skipped', reason: (err as Error).message }
           }
@@ -963,59 +998,73 @@ export function registerAiCommands(program: Command): void {
         if (opts.json) {
           outputJson(tick ? { ...state, initialTick: tick } : state)
         } else {
-          console.log(chalk.green(`\n   Auto-refill armed${state.model ? ` for ${state.model}` : ''}.`))
+          console.log(chalk.green(`\n   Auto-refill armed for ${state.model}.`))
           if (tick) console.log(chalk.dim(`   ${formatTickResult(tick)}`))
           console.log()
         }
         return
       }
       if (opts.disable) {
-        const state = disarmAutoRefill()
-        if (opts.json) outputJson(state)
+        const target = await resolveTarget()
+        disarmAutoRefill(target)
+        if (opts.json) outputJson(readAutoRefillStore())
         else console.log(chalk.dim('\n   Auto-refill disarmed.\n'))
         return
       }
-      const state = readAutoRefillState()
+      const store = readAutoRefillStore()
+      const entries = listAutoRefillEntries(store)
       if (opts.json) {
         outputJson({
-          state,
-          mode: state?.mode === 'payg' ? 'payg' : 'model',
-          remainingMinutes: remainingBudget(state),
-          remainingUsd: remainingUsdBudget(state),
+          refills: entries.map((e) => ({
+            key: e.key,
+            mode: e.mode,
+            state: e.state,
+            remainingMinutes: remainingBudget(e.state),
+            remainingUsd: remainingUsdBudget(e.state),
+          })),
+          state: entries[0]?.state ?? null,
+          mode: entries[0]?.mode ?? null,
+          remainingMinutes: remainingBudget(entries[0]?.state ?? null),
+          remainingUsd: remainingUsdBudget(entries[0]?.state ?? null),
         })
         return
       }
       console.log(chalk.bold('\n   Auto-Refill\n'))
-      if (!state) {
+      if (entries.length === 0) {
         console.log(chalk.dim('   Not configured.\n'))
         return
       }
-      console.log(`   Enabled:  ${state.enabled ? chalk.green('yes') : chalk.dim('no')}`)
-      console.log(`   Mode:     ${state.mode === 'payg' ? 'pay-as-you-go' : 'plan'}`)
-      console.log(`   Payment:  ${state.paymentMethod || 'bch'}`)
-      if (state.mode === 'payg') {
-        console.log(`   Amount:   ${formatUsd(state.amountUsd ?? 0)} per refill`)
-        console.log(`   Trigger:  balance < ${formatUsd(state.thresholdUsd ?? 0)}`)
-        const usdBudget = remainingUsdBudget(state)
+      entries.forEach((entry, i) => {
+        const state = entry.state
+        if (i > 0) console.log()
         console.log(
-          `   Budget:   ${usdBudget === null ? '(unlimited)' : `${formatUsd(usdBudget)} remaining`}`
+          chalk.bold(`   ${entry.mode === 'payg' ? 'Pay-as-you-go' : state.model ?? entry.key}`)
         )
-      } else {
-        console.log(`   Model:    ${state.model || '(any)'}`)
-        console.log(`   Plan:     ${state.minutes ? formatDuration(state.minutes) : '(any)'}`)
-        const budget = remainingBudget(state)
-        console.log(`   Budget:   ${budget === null ? '(unlimited)' : `${budget} min remaining`}`)
-      }
-      console.log(`   Refills:  ${state.refillCount ?? 0}`)
-      if (state.lastRefillAt) {
-        const tx = state.lastRefillTxid ? ` (${state.lastRefillTxid.slice(0, 12)}…)` : ''
-        console.log(`   Last:     ${new Date(state.lastRefillAt).toLocaleString()}${tx}`)
-      }
-      if (state.lastEvent) {
-        const ev = state.lastEvent
-        const reason = ev.reason ? ` — ${ev.reason}` : ''
-        console.log(`   Event:    ${ev.action}/${ev.status}${reason} @ ${new Date(ev.at).toLocaleString()}`)
-      }
+        console.log(`   Enabled:  ${state.enabled ? chalk.green('yes') : chalk.dim('no')}`)
+        console.log(`   Payment:  ${state.paymentMethod || 'bch'}`)
+        if (entry.mode === 'payg') {
+          console.log(`   Amount:   ${formatUsd(state.amountUsd ?? 0)} per refill`)
+          console.log(`   Trigger:  balance < ${formatUsd(state.thresholdUsd ?? 0)}`)
+          const usdBudget = remainingUsdBudget(state)
+          console.log(
+            `   Budget:   ${usdBudget === null ? '(unlimited)' : `${formatUsd(usdBudget)} remaining`}`
+          )
+        } else {
+          console.log(`   Plan:     ${state.minutes ? formatDuration(state.minutes) : '(any)'}`)
+          const budget = remainingBudget(state)
+          console.log(`   Budget:   ${budget === null ? '(unlimited)' : `${budget} min remaining`}`)
+        }
+        console.log(`   Refills:  ${state.refillCount ?? 0}`)
+        if (state.lastRefillAt) {
+          const tx = state.lastRefillTxid ? ` (${state.lastRefillTxid.slice(0, 12)}…)` : ''
+          console.log(`   Last:     ${new Date(state.lastRefillAt).toLocaleString()}${tx}`)
+        }
+        if (state.lastEvent) {
+          const ev = state.lastEvent
+          const reason = ev.reason ? ` — ${ev.reason}` : ''
+          console.log(`   Event:    ${ev.action}/${ev.status}${reason} @ ${new Date(ev.at).toLocaleString()}`)
+        }
+      })
       console.log()
     })
 

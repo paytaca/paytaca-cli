@@ -14,7 +14,7 @@ import { WalletNotConfiguredError } from '../core/context.js'
 import { loadWalletRef } from '../wallet/index.js'
 import { getConfig } from '../ai/client.js'
 import type { PriceTier } from '../ai/client.js'
-import { listModels, listPlans, selectModel, formatPriceUsd, formatDuration } from '../ai/models.js'
+import { listModels, listPlans, selectModel, formatPriceUsd, formatDuration, resolveModelId } from '../ai/models.js'
 import type { PlanView } from '../ai/models.js'
 import {
   getWalletStatus,
@@ -46,13 +46,17 @@ import {
 } from '../ai/videos.js'
 import {
   armAutoRefill,
-  autoRefillTick,
+  autoRefillTickOne,
   deleteAutoRefill,
   disarmAutoRefill,
-  readAutoRefillState,
+  readAutoRefillStore,
+  listAutoRefillEntries,
+  normalizeModelKey,
   remainingBudget,
   remainingUsdBudget,
+  type AutoRefillEntry,
   type AutoRefillState,
+  type AutoRefillTarget,
   type RefillTickDeps,
   type RefillTickResult,
 } from '../ai/autoRefill.js'
@@ -172,9 +176,13 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function autoRefillField(state: AutoRefillState | null): Record<string, unknown> | null {
+function autoRefillField(
+  state: AutoRefillState | null,
+  key?: string
+): Record<string, unknown> | null {
   if (!state) return null
   return {
+    key: key ?? (state.mode === 'payg' ? 'payg' : normalizeModelKey(state.model ?? '')),
     armed: Boolean(state.enabled),
     mode: state.mode === 'payg' ? 'payg' : 'model',
     model: state.model ?? null,
@@ -185,6 +193,44 @@ function autoRefillField(state: AutoRefillState | null): Record<string, unknown>
     remainingUsd: remainingUsdBudget(state),
     refillCount: state.refillCount ?? 0,
     lastEvent: state.lastEvent ?? null,
+  }
+}
+
+function autoRefillFields(): Record<string, unknown>[] {
+  return listAutoRefillEntries(readAutoRefillStore()).map(
+    (entry) => autoRefillField(entry.state, entry.key)!
+  )
+}
+
+function pickAutoRefill(
+  entries: AutoRefillEntry[],
+  model?: string
+): AutoRefillState | null {
+  if (model) {
+    return (
+      entries.find(
+        (e) => e.mode === 'model' && sameModelId(e.state.model ?? '', model)
+      )?.state ?? null
+    )
+  }
+  return (
+    entries.find((e) => e.mode === 'payg')?.state ?? entries[0]?.state ?? null
+  )
+}
+
+async function resolveTargetModel(
+  mode: 'model' | 'payg' | undefined,
+  model: string | undefined,
+  backend?: string
+): Promise<AutoRefillTarget | undefined> {
+  if (mode === 'payg') return { mode: 'payg' }
+  if (!model) return undefined
+  if (!backend) return { mode: 'model', model: normalizeModelKey(model) }
+  try {
+    const config = await getConfig({ backendUrl: backend })
+    return { mode: 'model', model: resolveModelId(config, model) }
+  } catch {
+    return { mode: 'model', model: normalizeModelKey(model) }
   }
 }
 
@@ -682,7 +728,8 @@ export function registerTools(
           backendUrl: backend,
         })
 
-        const auto = readAutoRefillState()
+        const entries = listAutoRefillEntries(readAutoRefillStore())
+        const auto = pickAutoRefill(entries, model)
         const payg = {
           balanceUsd: paygBalanceUsd(status),
           enabled: paygEnabled(status),
@@ -696,6 +743,8 @@ export function registerTools(
           }
           const autoField = autoRefillField(auto)
           if (autoField) payload.autoRefill = autoField
+          const allFields = autoRefillFields()
+          if (allFields.length > 0) payload.autoRefills = allFields
           let hint: PurchaseHint | null = null
           if (!hasUsableCredits(status)) {
             hint = await resolvePurchaseHint(
@@ -732,6 +781,8 @@ export function registerTools(
         }
         const autoField = autoRefillField(auto)
         if (autoField) payload.autoRefill = autoField
+        const allFields = autoRefillFields()
+        if (allFields.length > 0) payload.autoRefills = allFields
         let hint: PurchaseHint | null = null
         if (!hasUsableCredits(status, model)) {
           hint = await resolvePurchaseHint(model, backend)
@@ -845,6 +896,7 @@ export function registerTools(
         max_usd: z.number().positive().optional(),
         payment_method: z.enum(['bch', 'lift']).optional(),
         chipnet: z.boolean().optional(),
+        backend: z.string().optional(),
         delete: z.boolean().optional(),
       },
       annotations: {
@@ -865,20 +917,29 @@ export function registerTools(
       max_usd,
       payment_method,
       chipnet,
+      backend,
       delete: del,
     }) => {
       try {
+        const wallet = loadWalletRef()
+        const target = await resolveTargetModel(mode, model, backend)
+
         if (del) {
-          const existed = deleteAutoRefill()
+          const existed = deleteAutoRefill(target)
           return json({ deleted: true, existed })
         }
 
         if (enabled === false) {
-          return json(disarmAutoRefill())
+          const store = disarmAutoRefill(target)
+          return json({
+            disarmed: target ? (target.mode === 'payg' ? 'payg' : target.model) : 'all',
+            store,
+          })
         }
 
         if (enabled === true) {
           let state: AutoRefillState
+          let tickTarget: AutoRefillTarget
           if (mode === 'payg') {
             if (amount_usd == null || amount_usd <= 0 || threshold_usd == null) {
               return fail(
@@ -897,28 +958,46 @@ export function registerTools(
               maxUsd: max_usd,
               paymentMethod: payment_method ?? 'bch',
             })
+            tickTarget = { mode: 'payg' }
           } else {
-            if (!model || !minutes || !max_minutes) {
+            if (!model || !minutes) {
+              return fail(new Error('Arming auto-refill requires model and minutes.'))
+            }
+            const resolved = await resolveTargetModel('model', model, backend)
+            const modelId =
+              resolved && resolved.mode === 'model'
+                ? resolved.model
+                : normalizeModelKey(model)
+            const existing = readAutoRefillStore().models[normalizeModelKey(modelId)]
+            const effMinutes = minutes ?? existing?.minutes
+            if (effMinutes == null) {
+              return fail(new Error('Arming auto-refill requires minutes.'))
+            }
+            if (
+              max_minutes != null &&
+              (max_minutes < effMinutes * 2 || max_minutes % effMinutes !== 0)
+            ) {
               return fail(
-                new Error(
-                  'Arming auto-refill requires model, minutes, and max_minutes.'
-                )
+                new Error('max_minutes must be at least twice minutes and a multiple of it.')
               )
             }
             state = armAutoRefill({
               mode: 'model',
-              model,
-              minutes,
+              model: modelId,
+              minutes: effMinutes,
               maxMinutes: max_minutes,
               paymentMethod: payment_method ?? 'bch',
             })
+            tickTarget = { mode: 'model', model: modelId }
           }
           let initialTick: Record<string, unknown> | null = null
-          const wallet = loadWalletRef()
           if (wallet?.canSign) {
             try {
               initialTick = tickSummary(
-                await autoRefillTick(createRefillTickDeps(cn(chipnet)))
+                await autoRefillTickOne(
+                  createRefillTickDeps(cn(chipnet), backend),
+                  tickTarget
+                )
               )
             } catch (err: any) {
               initialTick = { action: 'skipped', reason: err?.message || String(err) }
@@ -927,15 +1006,20 @@ export function registerTools(
           return json({ ...state, initialTick })
         }
 
-        const state = readAutoRefillState()
+        const entries = listAutoRefillEntries(readAutoRefillStore())
+        const fields = entries
+          .map((e) => autoRefillField(e.state, e.key))
+          .filter((f): f is Record<string, unknown> => f != null)
+        const primary = pickAutoRefill(entries, model)
         return json({
-          armed: Boolean(state?.enabled),
-          mode: state?.mode === 'payg' ? 'payg' : 'model',
-          remainingMinutes: remainingBudget(state),
-          remainingUsd: remainingUsdBudget(state),
-          refillCount: state?.refillCount ?? 0,
-          lastEvent: state?.lastEvent ?? null,
-          state,
+          autoRefills: fields,
+          armed: Boolean(primary?.enabled),
+          mode: primary?.mode === 'payg' ? 'payg' : 'model',
+          remainingMinutes: remainingBudget(primary),
+          remainingUsd: remainingUsdBudget(primary),
+          refillCount: primary?.refillCount ?? 0,
+          lastEvent: primary?.lastEvent ?? null,
+          state: primary,
         })
       } catch (err) {
         return fail(err)
@@ -966,12 +1050,34 @@ export function registerTools(
       try {
         const wallet = loadWalletRef()
         if (!wallet) throw new WalletNotConfiguredError()
-        const state = readAutoRefillState()
-        if (!state?.enabled) {
+        const entries = listAutoRefillEntries(readAutoRefillStore())
+        const paygEntry = entries.find((e) => e.mode === 'payg')
+        let entry: AutoRefillEntry | undefined
+        if (model) {
+          entry = entries.find(
+            (e) => e.mode === 'model' && sameModelId(e.state.model ?? '', model)
+          )
+          if (!entry) entry = paygEntry
+          if (!entry) {
+            const armed = entries.find((e) => e.mode === 'model')
+            if (armed) {
+              return json({
+                resumed: false,
+                reason: `Auto-refill is armed for ${armed.state.model}, not ${model}.`,
+                model: armed.state.model,
+              })
+            }
+          }
+        } else {
+          entry = paygEntry ?? entries[0]
+        }
+        if (!entry?.state.enabled) {
           return json({ resumed: false, reason: 'Auto-refill is not armed.' })
         }
+        const state = entry.state
 
-        if (state.mode === 'payg') {
+        if (entry.mode === 'payg') {
+          const tickTarget: AutoRefillTarget = { mode: 'payg' }
           const deps = createRefillTickDeps(cn(chipnet), backend)
           let status = await getWalletStatus(wallet.walletHash, { backendUrl: backend })
           if (hasUsableCredits(status)) {
@@ -985,7 +1091,7 @@ export function registerTools(
           let tick: Record<string, unknown> | null = null
           if (wallet.canSign) {
             try {
-              tick = tickSummary(await autoRefillTick(deps))
+              tick = tickSummary(await autoRefillTickOne(deps, tickTarget))
             } catch (err: any) {
               tick = { action: 'skipped', reason: err?.message || String(err) }
             }
@@ -1046,7 +1152,9 @@ export function registerTools(
         let tick: Record<string, unknown> | null = null
         if (wallet.canSign) {
           try {
-            tick = tickSummary(await autoRefillTick(deps))
+            tick = tickSummary(
+              await autoRefillTickOne(deps, { mode: 'model', model: armedModel })
+            )
           } catch (err: any) {
             tick = { action: 'skipped', reason: err?.message || String(err) }
           }

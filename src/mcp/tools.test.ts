@@ -103,15 +103,30 @@ vi.mock('../ai/videos.js', () => ({
   listVideoModels: mocks.listVideoModels,
 }))
 
-vi.mock('../ai/autoRefill.js', () => ({
-  armAutoRefill: mocks.armAutoRefill,
-  disarmAutoRefill: mocks.disarmAutoRefill,
-  readAutoRefillState: mocks.readAutoRefillState,
-  remainingBudget: mocks.remainingBudget,
-  remainingUsdBudget: mocks.remainingUsdBudget,
-  autoRefillTick: mocks.autoRefillTick,
-  deleteAutoRefill: mocks.deleteAutoRefill,
-}))
+vi.mock('../ai/autoRefill.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../ai/autoRefill.js')>()
+  const wrapState = (s: any) => {
+    if (!s) return { version: 2 as const, payg: null, models: {} }
+    if (s.mode === 'payg') return { version: 2 as const, payg: s, models: {} }
+    const key = actual.normalizeModelKey(s.model ?? '')
+    return { version: 2 as const, payg: null, models: { [key]: s } }
+  }
+  return {
+    ...actual,
+    armAutoRefill: mocks.armAutoRefill,
+    disarmAutoRefill: mocks.disarmAutoRefill,
+    readAutoRefillState: mocks.readAutoRefillState,
+    readAutoRefillStore: () => wrapState(mocks.readAutoRefillState()),
+    remainingBudget: mocks.remainingBudget,
+    remainingUsdBudget: mocks.remainingUsdBudget,
+    autoRefillTick: mocks.autoRefillTick,
+    autoRefillTickOne: async (deps: any, target?: any) => {
+      const r: any = await mocks.autoRefillTick(deps, target)
+      return Array.isArray(r) ? r[0]?.result ?? { action: 'idle' } : r
+    },
+    deleteAutoRefill: mocks.deleteAutoRefill,
+  }
+})
 
 import { createServer } from './server.js'
 
@@ -1052,14 +1067,14 @@ describe('MCP tools', () => {
   })
 
   describe('auto_refill', () => {
-    it('requires model, minutes and max_minutes to arm', async () => {
+    it('requires model and minutes to arm', async () => {
       const c = await connect()
       const result = await c.callTool({
         name: 'auto_refill',
         arguments: { enabled: true, model: 'm' },
       })
       expect(result.isError).toBe(true)
-      expect(text(result)).toMatch(/requires model, minutes, and max_minutes/)
+      expect(text(result)).toMatch(/requires model and minutes/)
       expect(mocks.armAutoRefill).not.toHaveBeenCalled()
     })
 
@@ -1141,7 +1156,7 @@ describe('MCP tools', () => {
         name: 'auto_refill',
         arguments: {},
       })
-      expect(JSON.parse(text(result))).toEqual({
+      expect(JSON.parse(text(result))).toMatchObject({
         armed: true,
         mode: 'model',
         remainingMinutes: 7,

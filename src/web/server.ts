@@ -28,6 +28,7 @@ import {
   selectModel,
   selectTier,
   formatDuration,
+  resolveModelId,
 } from '../ai/models.js'
 import {
   formatRemaining,
@@ -41,14 +42,17 @@ import {
   type PaymentMethod,
 } from '../ai/purchase.js'
 import {
-  readAutoRefillState,
+  readAutoRefillStore,
+  listAutoRefillEntries,
+  normalizeModelKey,
   armAutoRefill,
   disarmAutoRefill,
   deleteAutoRefill,
   remainingBudget,
   remainingUsdBudget,
-  autoRefillTick,
-  type AutoRefillMode,
+  autoRefillTickOne,
+  type AutoRefillStore,
+  type AutoRefillTarget,
   type RefillTickResult,
 } from '../ai/autoRefill.js'
 import { createRefillTickDeps } from '../mcp/tools.js'
@@ -128,8 +132,9 @@ export interface WebDeps {
   setAutoRefill(opts: {
     enabled: boolean
     delete?: boolean
-    mode?: AutoRefillMode
+    mode?: 'model' | 'payg'
     model?: string
+    key?: string
     minutes?: number
     maxMinutes?: number
     amountUsd?: number
@@ -203,7 +208,29 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
           priceSats: t.price_sats,
         })),
       }))
-      const autoRefill = readAutoRefillState()
+      const autoRefills = listAutoRefillEntries(readAutoRefillStore()).map((entry) => ({
+        key: entry.key,
+        mode: entry.mode,
+        armed: Boolean(entry.state.enabled),
+        enabled: Boolean(entry.state.enabled),
+        model: entry.state.model ?? null,
+        minutes: entry.state.minutes ?? null,
+        maxMinutes: entry.state.maxMinutes ?? null,
+        amountUsd: entry.state.amountUsd ?? null,
+        thresholdUsd: entry.state.thresholdUsd ?? null,
+        maxUsd: entry.state.maxUsd ?? null,
+        paymentMethod: entry.state.paymentMethod ?? 'bch',
+        refillCount: entry.state.refillCount ?? 0,
+        spentMinutes: entry.state.spentMinutes ?? 0,
+        spentUsd: entry.state.spentUsd ?? 0,
+        remainingMinutes: remainingBudget(entry.state),
+        remainingUsd: remainingUsdBudget(entry.state),
+        lastRefillAt: entry.state.lastRefillAt ?? null,
+        lastRefillTxid: entry.state.lastRefillTxid ?? null,
+        lastEvent: entry.state.lastEvent ?? null,
+      }))
+      const autoRefill =
+        autoRefills.find((e) => e.mode === 'payg') ?? autoRefills[0] ?? null
 
       let imageModels: ImageModel[] = []
       try { imageModels = await listImageModels({ backendUrl }) } catch {}
@@ -247,14 +274,8 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
         aiBalanceUsd: paygBalanceUsd(status),
         paygEnabled: paygEnabled(status),
         liftDiscountPercent: config.lift_payment_discount_percent ?? 0,
-        autoRefill: autoRefill
-          ? {
-              ...autoRefill,
-              mode: autoRefill.mode === 'payg' ? 'payg' : 'model',
-              remainingMinutes: remainingBudget(autoRefill),
-              remainingUsd: remainingUsdBudget(autoRefill),
-            }
-          : null,
+        autoRefill,
+        autoRefills,
         imageModels,
         imageHistory,
         videoModels,
@@ -394,8 +415,36 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
     },
 
     async setAutoRefill(opts) {
+      const targetFromOpts = (): AutoRefillTarget | undefined => {
+        if (opts.key === 'payg' || opts.mode === 'payg') return { mode: 'payg' }
+        const query = opts.key ?? opts.model
+        if (!query) return undefined
+        return { mode: 'model', model: normalizeModelKey(query) }
+      }
+      const resolveModelIdFor = async (query: string): Promise<string> => {
+        try {
+          const cfg = await getConfig({ backendUrl })
+          return resolveModelId(cfg, query)
+        } catch {
+          return normalizeModelKey(query)
+        }
+      }
+      const tickNow = async (
+        target: AutoRefillTarget
+      ): Promise<RefillTickResult | null> => {
+        const wallet = loadWalletRef()
+        if (!wallet?.canSign) return null
+        try {
+          return await autoRefillTickOne(
+            createRefillTickDeps(isChipnet, backendUrl),
+            target
+          )
+        } catch {
+          return null
+        }
+      }
       if (opts.delete) {
-        return { deleted: true, existed: deleteAutoRefill() }
+        return { deleted: true, existed: deleteAutoRefill(targetFromOpts()) }
       }
       if (opts.enabled) {
         if (opts.mode === 'payg') {
@@ -414,29 +463,32 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
           ) {
             throw new Error('maxUsd must be at least amountUsd.')
           }
+          const state = armAutoRefill({
+            mode: 'payg',
+            amountUsd: opts.amountUsd,
+            thresholdUsd: opts.thresholdUsd,
+            maxUsd: opts.maxUsd,
+            paymentMethod: (opts.paymentMethod as 'bch' | 'lift') || 'bch',
+          })
+          const initialTick = await tickNow({ mode: 'payg' })
+          return initialTick ? { ...state, initialTick } : { ...state }
         }
+        if (!opts.model || opts.minutes == null) {
+          throw new Error('A plan auto-refill requires model and minutes.')
+        }
+        const modelId = await resolveModelIdFor(opts.model)
         const state = armAutoRefill({
-          mode: opts.mode,
-          model: opts.model,
+          mode: 'model',
+          model: modelId,
           minutes: opts.minutes,
           maxMinutes: opts.maxMinutes,
-          amountUsd: opts.amountUsd,
-          thresholdUsd: opts.thresholdUsd,
-          maxUsd: opts.maxUsd,
           paymentMethod: (opts.paymentMethod as 'bch' | 'lift') || 'bch',
         })
-        let initialTick: RefillTickResult | null = null
-        const wallet = loadWalletRef()
-        if (wallet?.canSign) {
-          try {
-            initialTick = await autoRefillTick(createRefillTickDeps(isChipnet))
-          } catch {
-            initialTick = null
-          }
-        }
+        const initialTick = await tickNow({ mode: 'model', model: modelId })
         return initialTick ? { ...state, initialTick } : { ...state }
       }
-      return { ...disarmAutoRefill() }
+      disarmAutoRefill(targetFromOpts())
+      return { store: readAutoRefillStore() }
     },
 
     async getImageModels() {
@@ -908,6 +960,7 @@ export async function startWebServer(
           delete: Boolean(body.delete),
           mode,
           model: body.model != null ? String(body.model) : undefined,
+          key: body.key != null ? String(body.key) : undefined,
           minutes: body.minutes != null ? Number(body.minutes) : undefined,
           maxMinutes: body.maxMinutes != null ? Number(body.maxMinutes) : undefined,
           amountUsd,

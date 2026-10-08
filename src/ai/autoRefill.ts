@@ -18,6 +18,7 @@ export interface RefillLastEvent {
 }
 
 export interface RefillEvent extends RefillLastEvent {
+  key?: string
   model: string | null
   minutes: number | null
   priceSats: number | null
@@ -43,24 +44,106 @@ export interface AutoRefillState {
   lastEvent?: RefillLastEvent
 }
 
-export function readAutoRefillState(): AutoRefillState | null {
+export interface AutoRefillStore {
+  version: 2
+  payg: AutoRefillState | null
+  models: Record<string, AutoRefillState>
+}
+
+export type AutoRefillTarget =
+  | { mode: 'payg' }
+  | { mode: 'model'; model: string }
+
+export interface AutoRefillEntry {
+  key: string
+  mode: AutoRefillMode
+  state: AutoRefillState
+}
+
+export function normalizeModelKey(model: string): string {
+  const trimmed = String(model || '').trim().toLowerCase()
+  const slash = trimmed.lastIndexOf('/')
+  return slash >= 0 ? trimmed.slice(slash + 1) : trimmed
+}
+
+function emptyStore(): AutoRefillStore {
+  return { version: 2, payg: null, models: {} }
+}
+
+function migrateLegacy(parsed: any): AutoRefillStore {
+  const store = emptyStore()
+  const state = parsed as AutoRefillState
+  if (state.mode === 'payg') {
+    store.payg = state
+  } else if (state.model) {
+    store.models[normalizeModelKey(state.model)] = state
+  }
+  return store
+}
+
+export function readAutoRefillStore(
+  file: string = AUTO_REFILL_FILE
+): AutoRefillStore {
   try {
-    const raw = fs.readFileSync(AUTO_REFILL_FILE, 'utf8')
+    const raw = fs.readFileSync(file, 'utf8')
     const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object') return null
-    return parsed as AutoRefillState
+    if (!parsed || typeof parsed !== 'object') return emptyStore()
+    if (parsed.version === 2) {
+      return {
+        version: 2,
+        payg: parsed.payg ?? null,
+        models:
+          parsed.models && typeof parsed.models === 'object'
+            ? parsed.models
+            : {},
+      }
+    }
+    if (typeof parsed.enabled === 'boolean') return migrateLegacy(parsed)
+    return emptyStore()
   } catch {
-    return null
+    return emptyStore()
   }
 }
 
-export function writeAutoRefillState(state: AutoRefillState): void {
+export function writeAutoRefillStore(
+  store: AutoRefillStore,
+  file: string = AUTO_REFILL_FILE
+): void {
   fs.mkdirSync(PAYTACA_DIR, { recursive: true, mode: 0o700 })
-  const tmp = `${AUTO_REFILL_FILE}.tmp`
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2), {
+  const tmp = `${file}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify(store, null, 2), {
     mode: 0o600,
   })
-  fs.renameSync(tmp, AUTO_REFILL_FILE)
+  fs.renameSync(tmp, file)
+}
+
+function targetKey(target: AutoRefillTarget): string {
+  return target.mode === 'payg' ? 'payg' : normalizeModelKey(target.model)
+}
+
+function getSlot(store: AutoRefillStore, key: string): AutoRefillState | null {
+  return key === 'payg' ? store.payg : store.models[key] ?? null
+}
+
+function setSlot(
+  store: AutoRefillStore,
+  key: string,
+  state: AutoRefillState | null
+): void {
+  if (key === 'payg') store.payg = state
+  else if (state) store.models[key] = state
+  else delete store.models[key]
+}
+
+export function listAutoRefillEntries(
+  store: AutoRefillStore
+): AutoRefillEntry[] {
+  const entries: AutoRefillEntry[] = []
+  if (store.payg) entries.push({ key: 'payg', mode: 'payg', state: store.payg })
+  for (const [key, state] of Object.entries(store.models)) {
+    if (state) entries.push({ key, mode: 'model', state })
+  }
+  return entries
 }
 
 export function appendAutoRefillEvent(
@@ -71,39 +154,60 @@ export function appendAutoRefillEvent(
   fs.appendFileSync(file, `${JSON.stringify(event)}\n`, { mode: 0o600 })
 }
 
-export function deleteAutoRefill(file: string = AUTO_REFILL_FILE): boolean {
-  try {
-    fs.unlinkSync(file)
-    return true
-  } catch (err: any) {
-    if (err?.code === 'ENOENT') return false
-    throw err
+export function deleteAutoRefill(
+  target?: AutoRefillTarget,
+  file: string = AUTO_REFILL_FILE
+): boolean {
+  if (!target) {
+    try {
+      fs.unlinkSync(file)
+      return true
+    } catch (err: any) {
+      if (err?.code === 'ENOENT') return false
+      throw err
+    }
   }
+  const store = readAutoRefillStore(file)
+  const key = targetKey(target)
+  if (!getSlot(store, key)) return false
+  setSlot(store, key, null)
+  writeAutoRefillStore(store, file)
+  return true
 }
 
-export interface ArmAutoRefillOptions {
-  mode?: AutoRefillMode
-  model?: string
-  minutes?: number
-  maxMinutes?: number
-  amountUsd?: number
-  thresholdUsd?: number
-  maxUsd?: number
-  paymentMethod?: PaymentMethod
-}
+export type ArmAutoRefillOptions =
+  | {
+      mode: 'payg'
+      amountUsd: number
+      thresholdUsd: number
+      maxUsd?: number
+      paymentMethod?: PaymentMethod
+    }
+  | {
+      mode: 'model'
+      model: string
+      minutes: number
+      maxMinutes?: number
+      paymentMethod?: PaymentMethod
+    }
 
-export function armAutoRefill(opts: ArmAutoRefillOptions): AutoRefillState {
-  const existing = readAutoRefillState()
+export function armAutoRefill(
+  opts: ArmAutoRefillOptions,
+  file: string = AUTO_REFILL_FILE
+): AutoRefillState {
+  const store = readAutoRefillStore(file)
+  const key = opts.mode === 'payg' ? 'payg' : normalizeModelKey(opts.model)
+  const existing = getSlot(store, key)
   const state: AutoRefillState = {
     enabled: true,
-    mode: opts.mode ?? existing?.mode,
-    model: opts.model ?? existing?.model,
-    minutes: opts.minutes ?? existing?.minutes,
-    maxMinutes: opts.maxMinutes ?? existing?.maxMinutes,
+    mode: opts.mode,
+    model: opts.mode === 'model' ? opts.model : undefined,
+    minutes: opts.mode === 'model' ? opts.minutes : undefined,
+    maxMinutes: opts.mode === 'model' ? opts.maxMinutes : undefined,
     spentMinutes: existing?.spentMinutes ?? 0,
-    amountUsd: opts.amountUsd ?? existing?.amountUsd,
-    thresholdUsd: opts.thresholdUsd ?? existing?.thresholdUsd,
-    maxUsd: opts.maxUsd ?? existing?.maxUsd,
+    amountUsd: opts.mode === 'payg' ? opts.amountUsd : undefined,
+    thresholdUsd: opts.mode === 'payg' ? opts.thresholdUsd : undefined,
+    maxUsd: opts.mode === 'payg' ? opts.maxUsd : undefined,
     spentUsd: existing?.spentUsd ?? 0,
     refillCount: existing?.refillCount ?? 0,
     paymentMethod: opts.paymentMethod ?? existing?.paymentMethod ?? 'bch',
@@ -112,18 +216,25 @@ export function armAutoRefill(opts: ArmAutoRefillOptions): AutoRefillState {
     lastRefillTxid: existing?.lastRefillTxid ?? null,
     lastEvent: existing?.lastEvent,
   }
-  writeAutoRefillState(state)
+  setSlot(store, key, state)
+  writeAutoRefillStore(store, file)
   return state
 }
 
-export function disarmAutoRefill(): AutoRefillState {
-  const existing = readAutoRefillState()
-  const state: AutoRefillState = {
-    ...(existing || {}),
-    enabled: false,
+export function disarmAutoRefill(
+  target?: AutoRefillTarget,
+  file: string = AUTO_REFILL_FILE
+): AutoRefillStore {
+  const store = readAutoRefillStore(file)
+  const keys = target
+    ? [targetKey(target)]
+    : listAutoRefillEntries(store).map((e) => e.key)
+  for (const key of keys) {
+    const state = getSlot(store, key)
+    if (state) setSlot(store, key, { ...state, enabled: false })
   }
-  writeAutoRefillState(state)
-  return state
+  writeAutoRefillStore(store, file)
+  return store
 }
 
 export function remainingBudget(state: AutoRefillState | null): number | null {
@@ -203,8 +314,8 @@ export interface RefillTickDeps {
   remainingSeconds?: (model: string) => Promise<number | null>
   paygBalance?: () => Promise<number>
   topUp?: (opts: RefillTopUpOptions) => Promise<RefillBuyResult>
-  readState?: () => AutoRefillState | null
-  writeState?: (state: AutoRefillState) => void
+  readStore?: () => AutoRefillStore
+  writeStore?: (store: AutoRefillStore) => void
   appendEvent?: (event: RefillEvent) => void
   now?: () => number
 }
@@ -215,14 +326,21 @@ export type RefillTickResult =
   | { action: 'refilled'; state: AutoRefillState }
   | { action: 'disarmed'; reason: string; state: AutoRefillState }
 
-export async function autoRefillTick(
-  deps: RefillTickDeps
-): Promise<RefillTickResult> {
-  const read = deps.readState ?? readAutoRefillState
-  const write = deps.writeState ?? writeAutoRefillState
-  const append = deps.appendEvent ?? appendAutoRefillEvent
-  const now = deps.now ? deps.now() : Date.now()
+export interface RefillTickOutcome {
+  key: string
+  mode: AutoRefillMode
+  result: RefillTickResult
+}
 
+async function tickSlotBody(
+  deps: RefillTickDeps,
+  key: string,
+  mode: AutoRefillMode,
+  read: () => AutoRefillState | null,
+  write: (state: AutoRefillState | null) => void,
+  append: (event: RefillEvent) => void,
+  now: number
+): Promise<RefillTickResult> {
   const disarmWithState = (
     current: AutoRefillState,
     reason: string,
@@ -245,6 +363,7 @@ export async function autoRefillTick(
       action: 'disarmed',
       reason,
       at,
+      key,
       model: current.model ?? null,
       minutes: current.minutes ?? null,
       txid: extra?.txid ?? null,
@@ -258,7 +377,7 @@ export async function autoRefillTick(
   const state = read()
   if (!state || !state.enabled) return { action: 'idle' }
 
-  if (state.mode === 'payg') {
+  if (mode === 'payg') {
     const amountUsd = state.amountUsd
     const thresholdUsd = state.thresholdUsd ?? 0
     if (!amountUsd || amountUsd <= 0 || thresholdUsd < 0) {
@@ -341,6 +460,7 @@ export async function autoRefillTick(
       action: 'refilled',
       reason: null,
       at,
+      key,
       model: null,
       minutes: null,
       txid,
@@ -353,6 +473,7 @@ export async function autoRefillTick(
         action: 'disarmed',
         reason: 'budget exhausted',
         at,
+        key,
         model: null,
         minutes: null,
         txid,
@@ -482,6 +603,7 @@ export async function autoRefillTick(
       action: 'disarmed',
       reason: 'budget exhausted',
       at,
+      key,
       model: freshModel,
       minutes: freshMinutes,
       txid,
@@ -493,9 +615,48 @@ export async function autoRefillTick(
   return { action: 'refilled', state: next }
 }
 
+export async function autoRefillTick(
+  deps: RefillTickDeps,
+  target?: AutoRefillTarget
+): Promise<RefillTickOutcome[]> {
+  const readStore = deps.readStore ?? readAutoRefillStore
+  const writeStore = deps.writeStore ?? writeAutoRefillStore
+  const append = deps.appendEvent ?? appendAutoRefillEvent
+  const now = deps.now ? deps.now() : Date.now()
+
+  const store = readStore()
+  let entries = listAutoRefillEntries(store)
+  if (target) {
+    const key = targetKey(target)
+    entries = entries.filter((e) => e.key === key)
+  }
+
+  const outcomes: RefillTickOutcome[] = []
+  for (const entry of entries) {
+    const key = entry.key
+    const read = () => getSlot(readStore(), key)
+    const write = (next: AutoRefillState | null) => {
+      const fresh = readStore()
+      setSlot(fresh, key, next)
+      writeStore(fresh)
+    }
+    const result = await tickSlotBody(deps, key, entry.mode, read, write, append, now)
+    outcomes.push({ key, mode: entry.mode, result })
+  }
+  return outcomes
+}
+
+export async function autoRefillTickOne(
+  deps: RefillTickDeps,
+  target?: AutoRefillTarget
+): Promise<RefillTickResult> {
+  const outcomes = await autoRefillTick(deps, target)
+  return outcomes[0]?.result ?? { action: 'idle' }
+}
+
 export interface RefillLoopOptions extends RefillTickDeps {
   intervalMs?: number
-  onEvent?: (result: RefillTickResult) => void
+  onEvent?: (outcome: RefillTickOutcome) => void
 }
 
 export function startAutoRefillLoop(opts: RefillLoopOptions): () => void {
@@ -505,10 +666,16 @@ export function startAutoRefillLoop(opts: RefillLoopOptions): () => void {
     if (running) return
     running = true
     try {
-      const result = await autoRefillTick(opts)
-      if (result.action !== 'idle') opts.onEvent?.(result)
+      const outcomes = await autoRefillTick(opts)
+      for (const outcome of outcomes) {
+        if (outcome.result.action !== 'idle') opts.onEvent?.(outcome)
+      }
     } catch (err: any) {
-      opts.onEvent?.({ action: 'skipped', reason: err?.message || String(err) })
+      opts.onEvent?.({
+        key: '',
+        mode: 'payg',
+        result: { action: 'skipped', reason: err?.message || String(err) },
+      })
     } finally {
       running = false
     }

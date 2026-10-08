@@ -53,6 +53,11 @@ export function listModels(config: AiConfig): AiModelConfig[] {
   return Array.isArray(config.models) ? config.models : []
 }
 
+export function resolveModelId(config: AiConfig, query: string): string {
+  const model = selectModel(listModels(config), query)
+  return model?.id ?? query
+}
+
 export function listPlans(
   config: AiConfig,
   modelQuery?: string

@@ -65,15 +65,20 @@ function startRefillLoop(isChipnet: boolean): () => void {
 
   return startAutoRefillLoop({
     ...createRefillTickDeps(isChipnet),
-    onEvent: (result) => {
+    onEvent: (outcome) => {
+      const result = outcome.result
       if (result.action === 'refilled') {
-        console.error(
-          `[paytaca] auto-refill: bought ${result.state.minutes} min of ${result.state.model}`
-        )
+        const desc =
+          result.state.mode === 'payg'
+            ? `topped up ${result.state.amountUsd ?? ''} USD of pay-as-you-go balance`
+            : `bought ${result.state.minutes} min of ${result.state.model}`
+        console.error(`[paytaca] auto-refill (${outcome.key}): ${desc}`)
       } else if (result.action === 'disarmed') {
-        console.error(`[paytaca] auto-refill disarmed: ${result.reason}`)
+        console.error(`[paytaca] auto-refill disarmed (${outcome.key}): ${result.reason}`)
       } else if (result.action === 'skipped') {
-        console.error(`[paytaca] auto-refill skipped: ${result.reason}`)
+        console.error(
+          `[paytaca] auto-refill skipped (${outcome.key || 'unknown'}): ${result.reason}`
+        )
       }
     },
   })
