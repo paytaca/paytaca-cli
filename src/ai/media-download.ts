@@ -37,14 +37,30 @@ export interface DownloadedMedia {
   mediaType: string
 }
 
+export interface FetchedMedia {
+  data: Buffer
+  mediaType: string
+}
+
+export interface FetchMediaOptions {
+  baseUrl: string
+  token: string
+  /** Backend content path (from the status `content_path`), or a fallback. */
+  contentPath: string
+  /** Media type reported by the status response; preferred over the HTTP header. */
+  mediaType?: string
+  allowedMediaTypes: Set<string>
+  timeoutMs: number
+}
+
 /**
- * Stream a generated media file from the backend content endpoint to disk.
- * Validates the media type before and after the request, then writes the raw
- * bytes to `<dir>/<safeOrderId>.<ext>` with 0600 permissions.
+ * Fetch a generated media file from the backend content endpoint into memory.
+ * Validates the media type before and after the request so callers never
+ * receive bytes of an unexpected kind.
  */
-export async function downloadMedia(
-  opts: DownloadMediaOptions
-): Promise<DownloadedMedia> {
+export async function fetchMedia(
+  opts: FetchMediaOptions
+): Promise<FetchedMedia> {
   const declaredType = normalizeMediaType(opts.mediaType || '')
   if (declaredType && !opts.allowedMediaTypes.has(declaredType)) {
     throw new Error(
@@ -94,11 +110,30 @@ export async function downloadMedia(
     throw new Error('Backend returned an empty media payload.')
   }
 
+  return { data: buffer, mediaType }
+}
+
+/**
+ * Stream a generated media file from the backend content endpoint to disk.
+ * Writes the raw bytes to `<dir>/<safeOrderId>.<ext>` with 0600 permissions.
+ */
+export async function downloadMedia(
+  opts: DownloadMediaOptions
+): Promise<DownloadedMedia> {
+  const { data, mediaType } = await fetchMedia({
+    baseUrl: opts.baseUrl,
+    token: opts.token,
+    contentPath: opts.contentPath,
+    mediaType: opts.mediaType,
+    allowedMediaTypes: opts.allowedMediaTypes,
+    timeoutMs: opts.timeoutMs,
+  })
+
   const ext = opts.extensionByMediaType[mediaType] ?? opts.defaultExtension
   mkdirSync(opts.dir, { recursive: true })
   const safeId = opts.orderId.replace(/[^a-zA-Z0-9_-]/g, '')
   const filePath = path.join(opts.dir, `${safeId}.${ext}`)
-  writeFileSync(filePath, buffer)
+  writeFileSync(filePath, data)
   chmodSync(filePath, 0o600)
   return { path: filePath, mediaType }
 }

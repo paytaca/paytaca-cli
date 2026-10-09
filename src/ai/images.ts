@@ -17,7 +17,7 @@ import {
 } from './oauth.js'
 import { AiApiError } from './client.js'
 import { resolveBackendUrl, apiUrl, PAYTACA_DIR } from './config.js'
-import { downloadMedia } from './media-download.js'
+import { downloadMedia, fetchMedia, type FetchedMedia } from './media-download.js'
 
 export const IMAGE_DIR = path.join(PAYTACA_DIR, 'images')
 
@@ -404,6 +404,35 @@ function imageContentPath(orderId: string, status: ImageOrderStatus): string {
   return (
     status.content_path ?? `/v1/images/${encodeURIComponent(orderId)}/content`
   )
+}
+
+/**
+ * Fetch a generated image's bytes from the backend content endpoint (no disk
+ * write). Returns null when the wallet is unavailable or the image is gone.
+ */
+export async function fetchImageContent(
+  orderId: string,
+  opts: { isChipnet?: boolean; backendUrl?: string } = {}
+): Promise<FetchedMedia | null> {
+  const baseUrl = resolveBackendUrl(opts.backendUrl)
+  let token: string
+  try {
+    const ctx = requireWallet(Boolean(opts.isChipnet))
+    token = await mintAccessToken(ctx, baseUrl)
+  } catch {
+    return null
+  }
+  try {
+    return await fetchMedia({
+      baseUrl,
+      token,
+      contentPath: imageContentPath(orderId, {} as ImageOrderStatus),
+      allowedMediaTypes: ALLOWED_MEDIA_TYPES,
+      timeoutMs: MEDIA_REQUEST_TIMEOUT_MS,
+    })
+  } catch {
+    return null
+  }
 }
 
 /**

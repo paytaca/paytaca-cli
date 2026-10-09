@@ -61,6 +61,7 @@ import {
   createImageOrder,
   fulfillImageOrder,
   getImageHistory,
+  fetchImageContent,
   IMAGE_DIR,
   MEDIA_TYPE_EXTENSIONS,
   type ImageModel,
@@ -73,6 +74,7 @@ import {
   createVideoOrder,
   fulfillVideoOrder,
   getVideoHistory,
+  fetchVideoContent,
   VIDEO_DIR,
   VIDEO_MEDIA_TYPE_EXTENSIONS,
   type VideoModel,
@@ -85,6 +87,7 @@ import {
   createAudioOrder,
   fulfillAudioOrder,
   getAudioHistory,
+  fetchAudioContent,
   AUDIO_DIR,
   AUDIO_MEDIA_TYPE_EXTENSIONS,
   type AudioModel,
@@ -165,6 +168,7 @@ export interface WebDeps {
   }): Promise<ImageOrderQuote>
   fulfillImage(orderId: string): Promise<GenerateImageResult>
   serveImageFile(id: string): Promise<{ filePath: string; mediaType: string } | null>
+  fetchImageContent(id: string): Promise<{ data: Buffer; mediaType: string } | null>
   deleteImageFile(id: string): Promise<boolean>
   getVideoModels(): Promise<VideoModel[]>
   getVideoHistory(page?: number): Promise<object>
@@ -178,6 +182,7 @@ export interface WebDeps {
   }): Promise<VideoOrderQuote>
   fulfillVideo(orderId: string): Promise<GenerateVideoResult>
   serveVideoFile(id: string): Promise<{ filePath: string; mediaType: string } | null>
+  fetchVideoContent(id: string): Promise<{ data: Buffer; mediaType: string } | null>
   deleteVideoFile(id: string): Promise<boolean>
   getAudioModels(): Promise<AudioModel[]>
   getAudioHistory(page?: number): Promise<object>
@@ -190,6 +195,7 @@ export interface WebDeps {
   }): Promise<AudioOrderQuote>
   fulfillAudio(orderId: string): Promise<GenerateAudioResult>
   serveAudioFile(id: string): Promise<{ filePath: string; mediaType: string } | null>
+  fetchAudioContent(id: string): Promise<{ data: Buffer; mediaType: string } | null>
   deleteAudioFile(id: string): Promise<boolean>
 }
 
@@ -563,6 +569,11 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
       }
     },
 
+    async fetchImageContent(id) {
+      const content = await fetchImageContent(id, { isChipnet, backendUrl })
+      return content ? { data: content.data, mediaType: content.mediaType } : null
+    },
+
     async deleteImageFile(id) {
       const filePath = localImageFile(id)
       if (!filePath) return false
@@ -609,6 +620,11 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
       }
     },
 
+    async fetchVideoContent(id) {
+      const content = await fetchVideoContent(id, { isChipnet, backendUrl })
+      return content ? { data: content.data, mediaType: content.mediaType } : null
+    },
+
     async deleteVideoFile(id) {
       const filePath = localVideoFile(id)
       if (!filePath) return false
@@ -652,6 +668,11 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
         filePath,
         mediaType: AUDIO_EXT_TO_MEDIA[ext] || 'application/octet-stream',
       }
+    },
+
+    async fetchAudioContent(id) {
+      const content = await fetchAudioContent(id, { isChipnet, backendUrl })
+      return content ? { data: content.data, mediaType: content.mediaType } : null
     },
 
     async deleteAudioFile(id) {
@@ -842,6 +863,22 @@ function json(res: http.ServerResponse, status: number, data: unknown): void {
   const body = JSON.stringify(data)
   res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) })
   res.end(body)
+}
+
+function writeMediaResponse(
+  res: http.ServerResponse,
+  content: { data: Buffer; mediaType: string },
+  download: boolean,
+  filename = 'media'
+): void {
+  const disposition = download ? 'attachment' : 'inline'
+  res.writeHead(200, {
+    'Content-Type': content.mediaType,
+    'Content-Length': content.data.length,
+    'Cache-Control': 'no-store',
+    'Content-Disposition': `${disposition}; filename="${filename}"`,
+  })
+  res.end(content.data)
 }
 
 function getClientHost(req: http.IncomingMessage): string {
@@ -1154,6 +1191,16 @@ export async function startWebServer(
         return
       }
 
+      const imageContentMatch = pathname.match(/^\/api\/ai\/images\/([^/]+)\/content$/)
+      if (imageContentMatch && req.method === 'GET') {
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
+        const id = decodeURIComponent(imageContentMatch[1])
+        const content = await deps.fetchImageContent(id)
+        if (!content) return json(res, 404, { error: 'Image content not available' })
+        writeMediaResponse(res, content, url.searchParams.get('download') === '1')
+        return
+      }
+
       const imageDeleteMatch = pathname.match(/^\/api\/ai\/images\/([^/]+)$/)
       if (imageDeleteMatch && req.method === 'DELETE') {
         if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
@@ -1230,6 +1277,16 @@ export async function startWebServer(
         return
       }
 
+      const videoContentMatch = pathname.match(/^\/api\/ai\/videos\/([^/]+)\/content$/)
+      if (videoContentMatch && req.method === 'GET') {
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
+        const id = decodeURIComponent(videoContentMatch[1])
+        const content = await deps.fetchVideoContent(id)
+        if (!content) return json(res, 404, { error: 'Video content not available' })
+        writeMediaResponse(res, content, url.searchParams.get('download') === '1')
+        return
+      }
+
       const videoDeleteMatch = pathname.match(/^\/api\/ai\/videos\/([^/]+)$/)
       if (videoDeleteMatch && req.method === 'DELETE') {
         if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
@@ -1301,6 +1358,16 @@ export async function startWebServer(
           'Cache-Control': 'public, max-age=3600',
         })
         res.end(data)
+        return
+      }
+
+      const audioContentMatch = pathname.match(/^\/api\/ai\/audios\/([^/]+)\/content$/)
+      if (audioContentMatch && req.method === 'GET') {
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
+        const id = decodeURIComponent(audioContentMatch[1])
+        const content = await deps.fetchAudioContent(id)
+        if (!content) return json(res, 404, { error: 'Audio content not available' })
+        writeMediaResponse(res, content, url.searchParams.get('download') === '1')
         return
       }
 

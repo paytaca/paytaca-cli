@@ -599,7 +599,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
                     <div x-text="(h.created_at || '').slice(0,10)"></div>
                     <div x-show="h.price_usd != null || h.actual_cost_usd != null" x-text="'$' + (h.price_usd != null ? h.price_usd : h.actual_cost_usd).toFixed(2)"></div>
                   </div>
-                  <template x-if="h.status==='completed' && h.filepath"><button class="btn btn-sm btn-ghost" style="flex-shrink:0;padding:4px 6px" @click.stop="openImage(h)" title="View image"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></button></template>
+                  <template x-if="h.status==='completed'"><button class="btn btn-sm btn-ghost" style="flex-shrink:0;padding:4px 6px" @click.stop="openImage(h)" title="View image"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></button></template>
                 </div>
               </template>
               <template x-if="state && !(state?.imageHistory || []).length"><div class="empty">No orders yet</div></template>
@@ -607,16 +607,17 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
           </div>
           <div class="span-7">
             <div class="card">
-              <div class="card-head"><div class="card-title">Gallery</div><span class="pill pill-idle" x-show="(state?.imageHistory || []).filter(h => h.status === 'completed' && h.filepath).length" x-text="(state?.imageHistory || []).filter(h => h.status === 'completed' && h.filepath).length + ' SAVED'"></span></div>
-              <template x-if="(state?.imageHistory || []).filter(h => h.status === 'completed' && h.filepath).length"><div class="gallery">
-                <template x-for="h in (state?.imageHistory || []).filter(h => h.status === 'completed' && h.filepath)" :key="h.id">
+              <div class="card-head"><div class="card-title">Gallery</div><span class="pill pill-idle" x-show="(state?.imageHistory || []).filter(h => h.status === 'completed').length" x-text="(state?.imageHistory || []).filter(h => h.status === 'completed').length + ' ITEMS'"></span></div>
+              <template x-if="(state?.imageHistory || []).filter(h => h.status === 'completed').length"><div class="gallery">
+                <template x-for="h in (state?.imageHistory || []).filter(h => h.status === 'completed')" :key="h.id">
                   <figure class="gallery-item" @click="openImage(h)">
                     <img :src="imgUrls[h.id] || ''" :alt="h.prompt || 'Generated image'" loading="lazy" x-show="imgUrls[h.id]">
+                    <div class="audio-tile" x-show="!imgUrls[h.id]"><span style="font-size:10px;color:var(--ink-3)">Unavailable</span></div>
                     <figcaption><span class="cap" x-text="imgCaption(h)"></span><span x-text="(h.completed_at || '').slice(0,10)"></span></figcaption>
                   </figure>
                 </template>
               </div></template>
-              <template x-if="state && !(state?.imageHistory || []).some(h => h.status === 'completed' && h.filepath)"><div class="empty">No images yet — generate your first one</div></template>
+              <template x-if="state && !(state?.imageHistory || []).some(h => h.status === 'completed')"><div class="empty">No images yet — generate your first one</div></template>
               <template x-if="!state"><div class="empty">Loading…</div></template>
               <div style="font-size:10.5px;color:var(--ink-3);font-family:var(--mono);margin-top:16px" x-show="state">files saved in ~/.paytaca/images · click an image to view</div>
             </div>
@@ -645,7 +646,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
                     <div x-text="(h.created_at || '').slice(0,10)"></div>
                     <div x-show="h.price_usd != null || h.actual_cost_usd != null" x-text="'$' + (h.price_usd != null ? h.price_usd : h.actual_cost_usd).toFixed(2)"></div>
                   </div>
-                  <template x-if="h.filepath"><button class="btn btn-sm btn-ghost" style="flex-shrink:0;padding:4px 6px" @click.stop="openVideo(h)" title="View video"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg></button></template>
+                  <template x-if="h.status==='completed'||h.status==='generation_complete'"><button class="btn btn-sm btn-ghost" style="flex-shrink:0;padding:4px 6px" @click.stop="openVideo(h)" title="View video"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg></button></template>
                 </div>
               </template>
               <template x-if="state && !(state?.videoHistory || []).length"><div class="empty">No orders yet</div></template>
@@ -653,18 +654,19 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
           </div>
           <div class="span-7">
             <div class="card">
-              <div class="card-head"><div class="card-title">Gallery</div><span class="pill pill-idle" x-show="(state?.videoHistory || []).filter(h => h.filepath).length" x-text="(state?.videoHistory || []).filter(h => h.filepath).length + ' SAVED'"></span></div>
-              <template x-if="(state?.videoHistory || []).filter(h => h.filepath).length"><div class="gallery">
-                <template x-for="h in (state?.videoHistory || []).filter(h => h.filepath)" :key="h.id">
+              <div class="card-head"><div class="card-title">Gallery</div><span class="pill pill-idle" x-show="(state?.videoHistory || []).filter(h => h.status === 'completed' || h.status === 'generation_complete').length" x-text="(state?.videoHistory || []).filter(h => h.status === 'completed' || h.status === 'generation_complete').length + ' ITEMS'"></span></div>
+              <template x-if="(state?.videoHistory || []).filter(h => h.status === 'completed' || h.status === 'generation_complete').length"><div class="gallery">
+                <template x-for="h in (state?.videoHistory || []).filter(h => h.status === 'completed' || h.status === 'generation_complete')" :key="h.id">
                   <figure class="gallery-item" @click="openVideo(h)">
                     <img :src="vidPosters[h.id] || ''" :alt="h.prompt || 'Generated video'" x-show="vidPosters[h.id]">
                     <video :src="vidUrls[h.id] || ''" muted playsinline preload="metadata" x-show="!vidPosters[h.id] && vidUrls[h.id]"></video>
-                    <span class="gallery-play"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
+                    <div class="audio-tile" x-show="!vidUrls[h.id]"><span style="font-size:10px;color:var(--ink-3)">Unavailable</span></div>
+                    <span class="gallery-play" x-show="vidUrls[h.id]"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
                     <figcaption><span class="cap" x-text="videoCaption(h)"></span><span x-text="(h.completed_at || '').slice(0,10)"></span></figcaption>
                   </figure>
                 </template>
               </div></template>
-              <template x-if="state && !(state?.videoHistory || []).some(h => h.filepath)"><div class="empty">No videos yet — generate your first one</div></template>
+              <template x-if="state && !(state?.videoHistory || []).some(h => h.status === 'completed' || h.status === 'generation_complete')"><div class="empty">No videos yet — generate your first one</div></template>
               <template x-if="!state"><div class="empty">Loading…</div></template>
               <div style="font-size:10.5px;color:var(--ink-3);font-family:var(--mono);margin-top:16px" x-show="state">files saved in ~/.paytaca/videos · click a video to play</div>
             </div>
@@ -693,7 +695,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
                     <div x-text="(h.created_at || '').slice(0,10)"></div>
                     <div x-show="h.price_usd != null || h.actual_cost_usd != null" x-text="'$' + (h.price_usd != null ? h.price_usd : h.actual_cost_usd).toFixed(2)"></div>
                   </div>
-                  <template x-if="h.filepath"><button class="btn btn-sm btn-ghost" style="flex-shrink:0;padding:4px 6px" @click.stop="openAudio(h)" title="Play audio"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></button></template>
+                  <template x-if="h.status==='completed'||h.status==='generation_complete'"><button class="btn btn-sm btn-ghost" style="flex-shrink:0;padding:4px 6px" @click.stop="openAudio(h)" title="Play audio"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></button></template>
                 </div>
               </template>
               <template x-if="state && !(state?.audioHistory || []).length"><div class="empty">No orders yet</div></template>
@@ -701,16 +703,16 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
           </div>
           <div class="span-7">
             <div class="card">
-              <div class="card-head"><div class="card-title">Library</div><span class="pill pill-idle" x-show="(state?.audioHistory || []).filter(h => h.filepath).length" x-text="(state?.audioHistory || []).filter(h => h.filepath).length + ' SAVED'"></span></div>
-              <template x-if="(state?.audioHistory || []).filter(h => h.filepath).length"><div class="gallery">
-                <template x-for="h in (state?.audioHistory || []).filter(h => h.filepath)" :key="h.id">
+              <div class="card-head"><div class="card-title">Library</div><span class="pill pill-idle" x-show="(state?.audioHistory || []).filter(h => h.status === 'completed' || h.status === 'generation_complete').length" x-text="(state?.audioHistory || []).filter(h => h.status === 'completed' || h.status === 'generation_complete').length + ' ITEMS'"></span></div>
+              <template x-if="(state?.audioHistory || []).filter(h => h.status === 'completed' || h.status === 'generation_complete').length"><div class="gallery">
+                <template x-for="h in (state?.audioHistory || []).filter(h => h.status === 'completed' || h.status === 'generation_complete')" :key="h.id">
                   <figure class="gallery-item" @click="openAudio(h)">
                     <div class="audio-tile"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>
                     <figcaption><span class="cap" x-text="audioCaption(h)"></span><span x-text="(h.completed_at || '').slice(0,10)"></span></figcaption>
                   </figure>
                 </template>
               </div></template>
-              <template x-if="state && !(state?.audioHistory || []).some(h => h.filepath)"><div class="empty">No audio yet — generate your first clip</div></template>
+              <template x-if="state && !(state?.audioHistory || []).some(h => h.status === 'completed' || h.status === 'generation_complete')"><div class="empty">No audio yet — generate your first clip</div></template>
               <template x-if="!state"><div class="empty">Loading…</div></template>
               <div style="font-size:10.5px;color:var(--ink-3);font-family:var(--mono);margin-top:16px" x-show="state">files saved in ~/.paytaca/audio · click a clip to play</div>
             </div>
@@ -731,6 +733,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
       <div class="lightbox-actions">
         <button class="btn btn-sm" @click="copyText(lightbox?.path)">Copy Path</button>
         <a class="btn btn-sm" :href="lightbox && imgUrls[lightbox.id] ? imgUrls[lightbox.id] : '#'" target="_blank" rel="noopener" x-show="lightbox && imgUrls[lightbox.id]">Open ↗</a>
+        <a class="btn btn-sm" :href="lightbox && imgUrls[lightbox.id] ? imgUrls[lightbox.id] : '#'" :download="(lightbox?.id || 'image') + '.png'" x-show="lightbox && imgUrls[lightbox.id]">Download</a>
         <template x-if="!lightboxConfirmDelete"><button class="btn btn-sm" style="color:var(--err)" @click="lightboxConfirmDelete=true">Delete</button></template>
         <template x-if="lightboxConfirmDelete"><span style="display:flex;gap:6px;align-items:center;font-size:11.5px;color:var(--err)">Delete?<button class="btn btn-sm btn-primary" style="background:var(--err);border-color:var(--err)" @click="deleteImage()">Yes</button><button class="btn btn-sm" @click="lightboxConfirmDelete=false">No</button></span></template>
         <button class="btn btn-sm" @click="lightboxConfirmDelete=false;lightbox=null">Close</button>
@@ -747,6 +750,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
       <div class="lightbox-actions">
         <button class="btn btn-sm" @click="copyText(videoLightbox?.path)">Copy Path</button>
         <a class="btn btn-sm" :href="videoLightbox && vidUrls[videoLightbox.id] ? vidUrls[videoLightbox.id] : '#'" target="_blank" rel="noopener" x-show="videoLightbox && vidUrls[videoLightbox.id]">Open ↗</a>
+        <a class="btn btn-sm" :href="videoLightbox && vidUrls[videoLightbox.id] ? vidUrls[videoLightbox.id] : '#'" :download="(videoLightbox?.id || 'video') + '.mp4'" x-show="videoLightbox && vidUrls[videoLightbox.id]">Download</a>
         <template x-if="!videoLightboxConfirmDelete"><button class="btn btn-sm" style="color:var(--err)" @click="videoLightboxConfirmDelete=true">Delete</button></template>
         <template x-if="videoLightboxConfirmDelete"><span style="display:flex;gap:6px;align-items:center;font-size:11.5px;color:var(--err)">Delete?<button class="btn btn-sm btn-primary" style="background:var(--err);border-color:var(--err)" @click="deleteVideo()">Yes</button><button class="btn btn-sm" @click="videoLightboxConfirmDelete=false">No</button></span></template>
         <button class="btn btn-sm" @click="videoLightboxConfirmDelete=false;videoLightbox=null">Close</button>
@@ -763,6 +767,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
       <div class="lightbox-actions">
         <button class="btn btn-sm" @click="copyText(audioLightbox?.path)">Copy Path</button>
         <a class="btn btn-sm" :href="audioLightbox && audUrls[audioLightbox.id] ? audUrls[audioLightbox.id] : '#'" target="_blank" rel="noopener" x-show="audioLightbox && audUrls[audioLightbox.id]">Open ↗</a>
+        <a class="btn btn-sm" :href="audioLightbox && audUrls[audioLightbox.id] ? audUrls[audioLightbox.id] : '#'" :download="(audioLightbox?.id || 'audio') + '.mp3'" x-show="audioLightbox && audUrls[audioLightbox.id]">Download</a>
         <template x-if="!audioLightboxConfirmDelete"><button class="btn btn-sm" style="color:var(--err)" @click="audioLightboxConfirmDelete=true">Delete</button></template>
         <template x-if="audioLightboxConfirmDelete"><span style="display:flex;gap:6px;align-items:center;font-size:11.5px;color:var(--err)">Delete?<button class="btn btn-sm btn-primary" style="background:var(--err);border-color:var(--err)" @click="deleteAudio()">Yes</button><button class="btn btn-sm" @click="audioLightboxConfirmDelete=false">No</button></span></template>
         <button class="btn btn-sm" @click="audioLightboxConfirmDelete=false;audioLightbox=null">Close</button>
@@ -801,12 +806,12 @@ toastVisible:false,toastMsg:'',toastOk:true,
 ws:null,wsStatus:'connecting',wsAddress:null,wsSeen:{},wsReconnectTimer:null,wsPingTimer:null,wsRefreshTimer:null,wsLateTimer:null,notify:null,_ntid:0,
 async init(){document.documentElement.setAttribute('data-theme',this.theme);try{this.state=await this.api('GET','/api/wallet/state');this.loadHistory(1);this.loadImages();this.loadVideos();this.loadAudios();await this.onRcvChange();this.connectWatch()}catch(e){this.toast(e.message,true)}var self=this;document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible'&&self.state){if(!self.ws||self.ws.readyState!==1){if(self.wsReconnectTimer)clearTimeout(self.wsReconnectTimer);self.connectWatch()}}});window.addEventListener('online',function(){if(self.state){if(self.wsReconnectTimer)clearTimeout(self.wsReconnectTimer);self.connectWatch()}})},
 async load(){this.refreshing=true;try{this.state=await this.api('GET','/api/wallet/state');this.onRcvChange();await Promise.all([this.loadHistory(this.histPage),this.loadImages(),this.loadVideos(),this.loadAudios()])}catch(e){this.toast(e.message,true)}finally{this.refreshing=false}},
-loadImages(){var s=this;(this.state&&this.state.imageHistory||[]).forEach(function(h){if(h.status==='completed'&&h.filepath)s.loadImage(h.id)})},
-async loadImage(id){if(!id||this.imgUrls[id])return;try{var res=await fetch('/api/ai/images/'+id+'/file',{headers:{'X-Paytaca-Token':this.token}});if(!res.ok)return;var blob=await res.blob();this.imgUrls[id]=URL.createObjectURL(blob)}catch(e){}},
-loadVideos(){var s=this;(this.state&&this.state.videoHistory||[]).forEach(function(h){if(h.filepath)s.loadVideo(h.id)})},
-async loadVideo(id){if(!id||this.vidUrls[id])return;try{var res=await fetch('/api/ai/videos/'+id+'/file',{headers:{'X-Paytaca-Token':this.token}});if(!res.ok)return;var blob=await res.blob();var url=URL.createObjectURL(blob);this.vidUrls[id]=url;this.makePoster(id,url)}catch(e){}},
-loadAudios(){var s=this;(this.state&&this.state.audioHistory||[]).forEach(function(h){if(h.filepath)s.loadAudio(h.id)})},
-async loadAudio(id,retries){if(!id||this.audUrls[id])return;retries=retries==null?3:retries;var self=this;try{var res=await fetch('/api/ai/audios/'+id+'/file',{headers:{'X-Paytaca-Token':this.token}});if(!res.ok){if(retries>0)setTimeout(function(){self.loadAudio(id,retries-1)},700);return}var blob=await res.blob();this.audUrls[id]=URL.createObjectURL(blob)}catch(e){if(retries>0)setTimeout(function(){self.loadAudio(id,retries-1)},700)}},
+loadImages(){var s=this;(this.state&&this.state.imageHistory||[]).forEach(function(h){if(h.status==='completed')s.loadImage(h.id)})},
+async loadImage(id){if(!id||this.imgUrls[id])return;var t=this.token;try{var res=await fetch('/api/ai/images/'+id+'/file',{headers:{'X-Paytaca-Token':t}});if(!res.ok)res=await fetch('/api/ai/images/'+id+'/content',{headers:{'X-Paytaca-Token':t}});if(!res.ok)return;var blob=await res.blob();this.imgUrls[id]=URL.createObjectURL(blob)}catch(e){}},
+loadVideos(){var s=this;(this.state&&this.state.videoHistory||[]).forEach(function(h){if(h.status==='completed'||h.status==='generation_complete')s.loadVideo(h.id)})},
+async loadVideo(id){if(!id||this.vidUrls[id])return;var t=this.token;try{var res=await fetch('/api/ai/videos/'+id+'/file',{headers:{'X-Paytaca-Token':t}});if(!res.ok)res=await fetch('/api/ai/videos/'+id+'/content',{headers:{'X-Paytaca-Token':t}});if(!res.ok)return;var blob=await res.blob();var url=URL.createObjectURL(blob);this.vidUrls[id]=url;this.makePoster(id,url)}catch(e){}},
+loadAudios(){var s=this;(this.state&&this.state.audioHistory||[]).forEach(function(h){if(h.status==='completed'||h.status==='generation_complete')s.loadAudio(h.id)})},
+async loadAudio(id,retries){if(!id||this.audUrls[id])return;retries=retries==null?3:retries;var self=this;var t=this.token;try{var res=await fetch('/api/ai/audios/'+id+'/file',{headers:{'X-Paytaca-Token':t}});if(!res.ok)res=await fetch('/api/ai/audios/'+id+'/content',{headers:{'X-Paytaca-Token':t}});if(!res.ok){if(retries>0)setTimeout(function(){self.loadAudio(id,retries-1)},700);return}var blob=await res.blob();this.audUrls[id]=URL.createObjectURL(blob)}catch(e){if(retries>0)setTimeout(function(){self.loadAudio(id,retries-1)},700)}},
 makePoster(id,url){if(this.vidPosters[id])return;var self=this;var v=document.createElement('video');v.muted=true;v.playsInline=true;v.preload='auto';v.src=url;var done=false;var draw=function(){if(done)return;done=true;try{var c=document.createElement('canvas');c.width=v.videoWidth||640;c.height=v.videoHeight||360;c.getContext('2d').drawImage(v,0,0,c.width,c.height);var next=Object.assign({},self.vidPosters);next[id]=c.toDataURL('image/jpeg',0.7);self.vidPosters=next}catch(e){}try{v.removeAttribute('src');v.load()}catch(e){}};v.addEventListener('loadeddata',function(){try{v.currentTime=Math.min(0.1,(v.duration||1)/2)}catch(e){draw()}});v.addEventListener('seeked',draw);v.addEventListener('error',draw);setTimeout(draw,4000)},
 async api(method,apipath,body){var opts={method:method,headers:{'X-Paytaca-Token':this.token,'Accept':'application/json'}};if(body!==undefined){opts.headers['Content-Type']='application/json';opts.body=JSON.stringify(body)}var res=await fetch(apipath,opts);if(!res.ok){var msg='Request failed ('+res.status+')';if(res.status===401)msg='Session expired or unauthorized — reopen the page via paytaca web';else{try{var j=await res.json();if(j.error)msg=j.error}catch(ex){}}throw new Error(msg)}return res.json()},
 fmtDuration(s){if(!s||s<=0)return '0m';var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h?h+'h '+m+'m':m+'m'},

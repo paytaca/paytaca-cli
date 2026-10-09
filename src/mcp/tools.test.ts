@@ -189,6 +189,8 @@ describe('MCP tools', () => {
       expect(text(result)).toMatch(/get_video_status/)
       expect(text(result)).toMatch(/generate_audio/)
       expect(text(result)).toMatch(/get_audio_status/)
+      expect(text(result)).toMatch(/Media downloads:/)
+      expect(text(result)).toMatch(/paytaca ai image status/)
       expect(text(result)).toMatch(/SPENDS REAL FUNDS|spend real funds/i)
     })
   })

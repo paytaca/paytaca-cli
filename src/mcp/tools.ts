@@ -479,6 +479,14 @@ Audio generation:
   get_audio_models       List audio (text-to-speech) models
   get_audio_history      Audio generation order history
 
+Media downloads:
+  Generated images, videos, and audio are NOT returned inline. generate_* and
+  get_*_status return metadata only (order id, media type, size, ready). To get
+  the actual file, run "paytaca ai image status <order_id>" (or video/audio) in
+  a terminal; it streams the content to ~/.paytaca and prints the saved path.
+  Content is cached server-side for a limited time, so download it promptly;
+  call get_*_status again if it was already delivered or expired.
+
 Notes:
   - All tools accept an optional "chipnet" flag (default mainnet).
   - send, buy_plan, topup, generate_image, generate_video, and generate_audio

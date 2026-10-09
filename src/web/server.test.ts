@@ -93,6 +93,10 @@ function fakeDeps(): WebDeps {
       if (id === 'exist') return { filePath: '/dev/null', mediaType: 'image/png' }
       return null
     },
+    fetchImageContent: async (id) => {
+      if (id === 'exist') return { data: Buffer.from('hi'), mediaType: 'image/png' }
+      return null
+    },
     deleteImageFile: async (id) => id === 'exist',
     getVideoModels: async () => okVideoModels,
     getVideoHistory: async () => ({ data: [] }),
@@ -102,6 +106,10 @@ function fakeDeps(): WebDeps {
       if (id === 'exist') return { filePath: '/dev/null', mediaType: 'video/mp4' }
       return null
     },
+    fetchVideoContent: async (id) => {
+      if (id === 'exist') return { data: Buffer.from('hi'), mediaType: 'video/mp4' }
+      return null
+    },
     deleteVideoFile: async (id) => id === 'exist',
     getAudioModels: async () => okAudioModels,
     getAudioHistory: async () => ({ data: [] }),
@@ -109,6 +117,10 @@ function fakeDeps(): WebDeps {
     fulfillAudio: async () => okAudioResult,
     serveAudioFile: async (id) => {
       if (id === 'exist') return { filePath: '/dev/null', mediaType: 'audio/mpeg' }
+      return null
+    },
+    fetchAudioContent: async (id) => {
+      if (id === 'exist') return { data: Buffer.from('hi'), mediaType: 'audio/mpeg' }
       return null
     },
     deleteAudioFile: async (id) => id === 'exist',
@@ -352,6 +364,17 @@ describe('web server AI routes', () => {
     expect(res.status).toBe(404)
   })
 
+  it('GET /api/ai/images/exist/content streams content', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/images/exist/content`, srv.token)
+    expect(res.status).toBe(200)
+    expect(res.json).toBe('hi')
+  })
+
+  it('GET /api/ai/images/missing/content returns 404', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/images/missing/content`, srv.token)
+    expect(res.status).toBe(404)
+  })
+
   it('GET /api/ai/video-models returns models', async () => {
     const res = await req(`http://127.0.0.1:${srv.port}/api/ai/video-models`, srv.token)
     expect(res.status).toBe(200)
@@ -400,6 +423,17 @@ describe('web server AI routes', () => {
 
   it('GET /api/ai/videos/missing/file returns 404', async () => {
     const res = await req(`http://127.0.0.1:${srv.port}/api/ai/videos/missing/file`, srv.token)
+    expect(res.status).toBe(404)
+  })
+
+  it('GET /api/ai/videos/exist/content streams content', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/videos/exist/content`, srv.token)
+    expect(res.status).toBe(200)
+    expect(res.json).toBe('hi')
+  })
+
+  it('GET /api/ai/videos/missing/content returns 404', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/videos/missing/content`, srv.token)
     expect(res.status).toBe(404)
   })
 
@@ -457,6 +491,17 @@ describe('web server AI routes', () => {
 
   it('GET /api/ai/audios/missing/file returns 404', async () => {
     const res = await req(`http://127.0.0.1:${srv.port}/api/ai/audios/missing/file`, srv.token)
+    expect(res.status).toBe(404)
+  })
+
+  it('GET /api/ai/audios/exist/content streams content', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/audios/exist/content`, srv.token)
+    expect(res.status).toBe(200)
+    expect(res.json).toBe('hi')
+  })
+
+  it('GET /api/ai/audios/missing/content returns 404', async () => {
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/audios/missing/content`, srv.token)
     expect(res.status).toBe(404)
   })
 

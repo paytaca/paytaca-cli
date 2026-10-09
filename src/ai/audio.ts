@@ -18,7 +18,7 @@ import {
 } from './oauth.js'
 import { AiApiError } from './client.js'
 import { resolveBackendUrl, apiUrl, PAYTACA_DIR } from './config.js'
-import { downloadMedia } from './media-download.js'
+import { downloadMedia, fetchMedia, type FetchedMedia } from './media-download.js'
 
 export const AUDIO_DIR = path.join(PAYTACA_DIR, 'audio')
 
@@ -419,6 +419,35 @@ function audioContentPath(orderId: string, status: AudioOrderStatus): string {
   return (
     status.content_path ?? `/v1/audio/${encodeURIComponent(orderId)}/content`
   )
+}
+
+/**
+ * Fetch a generated audio clip's bytes from the backend content endpoint (no
+ * disk write). Returns null when the wallet is unavailable or the clip is gone.
+ */
+export async function fetchAudioContent(
+  orderId: string,
+  opts: { isChipnet?: boolean; backendUrl?: string } = {}
+): Promise<FetchedMedia | null> {
+  const baseUrl = resolveBackendUrl(opts.backendUrl)
+  let token: string
+  try {
+    const ctx = requireWallet(Boolean(opts.isChipnet))
+    token = await mintAccessToken(ctx, baseUrl)
+  } catch {
+    return null
+  }
+  try {
+    return await fetchMedia({
+      baseUrl,
+      token,
+      contentPath: audioContentPath(orderId, {} as AudioOrderStatus),
+      allowedMediaTypes: ALLOWED_MEDIA_TYPES,
+      timeoutMs: MEDIA_REQUEST_TIMEOUT_MS,
+    })
+  } catch {
+    return null
+  }
 }
 
 /**
