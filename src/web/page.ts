@@ -595,6 +595,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
                   <div style="flex:1;min-width:0">
                     <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="h.model_display_name || h.model || 'Unknown'"></div>
                     <div style="font-size:11px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="h.prompt || 'No prompt'"></div>
+                    <div x-show="h.error" style="font-size:10.5px;color:var(--err);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="h.error" :title="h.error"></div>
                   </div>
                   <div style="text-align:right;flex-shrink:0;font-family:var(--mono);font-size:10.5px;color:var(--ink-3)">
                     <div x-text="(h.created_at || '').slice(0,10)"></div>
@@ -643,6 +644,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
                   <div style="flex:1;min-width:0">
                     <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="h.model_display_name || h.model || 'Unknown'"></div>
                     <div style="font-size:11px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="h.prompt || 'No prompt'"></div>
+                    <div x-show="h.error" style="font-size:10.5px;color:var(--err);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="h.error" :title="h.error"></div>
                   </div>
                   <div style="text-align:right;flex-shrink:0;font-family:var(--mono);font-size:10.5px;color:var(--ink-3)">
                     <div x-text="(h.created_at || '').slice(0,10)"></div>
@@ -692,6 +694,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
                   <div style="flex:1;min-width:0">
                     <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="h.model_display_name || h.model || 'Unknown'"></div>
                     <div style="font-size:11px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="h.prompt || 'No text'"></div>
+                    <div x-show="h.error" style="font-size:10.5px;color:var(--err);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="h.error" :title="h.error"></div>
                   </div>
                   <div style="text-align:right;flex-shrink:0;font-family:var(--mono);font-size:10.5px;color:var(--ink-3)">
                     <div x-text="(h.created_at || '').slice(0,10)"></div>

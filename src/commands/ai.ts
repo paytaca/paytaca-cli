@@ -1249,6 +1249,7 @@ export function registerAiCommands(program: Command): void {
             )
           )
           if (row.prompt) console.log(chalk.dim(`     "${row.prompt}"`))
+          if (row.error) console.log(chalk.red(`     ${row.error}`))
           console.log()
         }
         if (history.count !== undefined) {
@@ -1514,6 +1515,7 @@ export function registerAiCommands(program: Command): void {
             )
           )
           if (row.prompt) console.log(chalk.dim(`     "${row.prompt}"`))
+          if (row.error) console.log(chalk.red(`     ${row.error}`))
           console.log()
         }
         if (history.count !== undefined) {
@@ -1756,6 +1758,7 @@ export function registerAiCommands(program: Command): void {
             )
           )
           if (row.prompt) console.log(chalk.dim(`     "${row.prompt}"`))
+          if (row.error) console.log(chalk.red(`     ${row.error}`))
           console.log()
         }
         if (history.count !== undefined) {

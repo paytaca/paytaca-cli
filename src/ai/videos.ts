@@ -80,6 +80,7 @@ export interface VideoHistoryEntry {
   model?: string
   model_display_name?: string
   status?: string
+  error?: string
   duration?: number
   resolution?: string
   generate_audio?: boolean
@@ -396,7 +397,7 @@ async function pollOrderStatus(
     }
     if (status.status === 'refunded') {
       throw new Error(
-        `The order was refunded${
+        `The order was refunded${status.error ? `: ${status.error}` : ''}${
           status.settlement_txid
             ? ` (settlement txid ${status.settlement_txid})`
             : ''

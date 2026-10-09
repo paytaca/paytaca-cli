@@ -105,6 +105,7 @@ export interface ImageHistoryEntry {
   model?: string
   model_display_name?: string
   status?: string
+  error?: string
   price_usd?: number
   price_sats?: number
   estimated_cost_usd?: number
@@ -417,7 +418,7 @@ async function pollOrderStatus(
     }
     if (status.status === 'refunded') {
       throw new Error(
-        `The order was refunded${
+        `The order was refunded${status.error ? `: ${status.error}` : ''}${
           status.settlement_txid
             ? ` (settlement txid ${status.settlement_txid})`
             : ''
