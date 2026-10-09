@@ -58,12 +58,17 @@ export function resolveImageReference(ref: string): string {
   return `data:${mime};base64,${b64}`
 }
 
+export interface ImageReferenceSpec {
+  max?: number
+  min?: number
+}
+
 export interface ImageModel {
   id: string
   display_name?: string
   pricing_unit?: string
   cost_per_unit_usd?: number
-  supported_parameters?: string[]
+  supported_parameters?: Record<string, ImageReferenceSpec | unknown>
 }
 
 /** A created, unpaid image order (the "quote" shown before spending). */

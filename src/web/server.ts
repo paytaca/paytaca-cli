@@ -81,6 +81,7 @@ import {
   type VideoOrderQuote,
   type GenerateVideoResult,
   type VideoHistoryEntry,
+  type VideoInputReference,
 } from '../ai/videos.js'
 import {
   listAudioModels,
@@ -165,6 +166,7 @@ export interface WebDeps {
     aspectRatio?: string
     quality?: string
     resolution?: string
+    inputReferences?: string[]
   }): Promise<ImageOrderQuote>
   fulfillImage(orderId: string): Promise<GenerateImageResult>
   serveImageFile(id: string): Promise<{ filePath: string; mediaType: string } | null>
@@ -179,6 +181,7 @@ export interface WebDeps {
     resolution?: string
     aspectRatio?: string
     generateAudio?: boolean
+    inputReferences?: VideoInputReference[]
   }): Promise<VideoOrderQuote>
   fulfillVideo(orderId: string): Promise<GenerateVideoResult>
   serveVideoFile(id: string): Promise<{ filePath: string; mediaType: string } | null>
@@ -550,6 +553,7 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
         aspectRatio: opts.aspectRatio,
         quality: opts.quality,
         resolution: opts.resolution,
+        inputReferences: opts.inputReferences,
         isChipnet,
         backendUrl,
       })
@@ -601,6 +605,7 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
         resolution: opts.resolution,
         aspectRatio: opts.aspectRatio,
         generateAudio: opts.generateAudio,
+        inputReferences: opts.inputReferences,
         isChipnet,
         backendUrl,
       })
@@ -772,6 +777,7 @@ function createDefaultDepsWithQuotes(isChipnet: boolean, backendUrl?: string): W
         aspectRatio: opts.aspectRatio,
         quality: opts.quality,
         resolution: opts.resolution,
+        inputReferences: opts.inputReferences,
         isChipnet,
         backendUrl,
       })
@@ -798,6 +804,7 @@ function createDefaultDepsWithQuotes(isChipnet: boolean, backendUrl?: string): W
         resolution: opts.resolution,
         aspectRatio: opts.aspectRatio,
         generateAudio: opts.generateAudio,
+        inputReferences: opts.inputReferences,
         isChipnet,
         backendUrl,
       })
@@ -840,15 +847,47 @@ interface JsonBody {
   [key: string]: unknown
 }
 
-const MAX_BODY_BYTES = 1024 * 1024
+function normalizeImageReferences(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const refs = value
+    .filter((r): r is string => typeof r === 'string')
+    .map((r) => r.trim())
+    .filter(Boolean)
+  return refs.length ? refs : undefined
+}
 
-async function readBody(req: http.IncomingMessage): Promise<JsonBody> {
+function normalizeVideoReferences(value: unknown): VideoInputReference[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const refs: VideoInputReference[] = []
+  for (const item of value) {
+    if (typeof item === 'string') {
+      const url = item.trim()
+      if (url) refs.push({ url })
+      continue
+    }
+    if (item && typeof item === 'object') {
+      const obj = item as JsonBody
+      const url = String(obj.url || '').trim()
+      if (!url) continue
+      const frame = obj.frame_type ?? obj.frameType
+      const ref: VideoInputReference = { url }
+      if (frame === 'first_frame' || frame === 'last_frame') ref.frame_type = frame
+      refs.push(ref)
+    }
+  }
+  return refs.length ? refs : undefined
+}
+
+const MAX_BODY_BYTES = 1024 * 1024
+const MAX_MEDIA_BODY_BYTES = 40 * 1024 * 1024
+
+async function readBody(req: http.IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<JsonBody> {
   const chunks: Buffer[] = []
   let total = 0
   for await (const chunk of req) {
     const buf = typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer)
     total += buf.length
-    if (total > MAX_BODY_BYTES) {
+    if (total > maxBytes) {
       req.destroy()
       throw new Error('Request body too large')
     }
@@ -1150,7 +1189,7 @@ export async function startWebServer(
         if (req.headers['content-type'] !== 'application/json') {
           return json(res, 400, { error: 'Content-Type must be application/json' })
         }
-        const body = await readBody(req)
+        const body = await readBody(req, MAX_MEDIA_BODY_BYTES)
         const prompt = String(body.prompt || '').trim()
         if (!prompt) return json(res, 400, { error: 'Missing prompt' })
         const quote = await deps.createImageQuote({
@@ -1159,6 +1198,7 @@ export async function startWebServer(
           aspectRatio: body.aspectRatio != null ? String(body.aspectRatio) : undefined,
           quality: body.quality != null ? String(body.quality) : undefined,
           resolution: body.resolution != null ? String(body.resolution) : undefined,
+          inputReferences: normalizeImageReferences(body.inputReferences),
         })
         return json(res, 200, quote)
       }
@@ -1227,7 +1267,7 @@ export async function startWebServer(
         if (req.headers['content-type'] !== 'application/json') {
           return json(res, 400, { error: 'Content-Type must be application/json' })
         }
-        const body = await readBody(req)
+        const body = await readBody(req, MAX_MEDIA_BODY_BYTES)
         const prompt = String(body.prompt || '').trim()
         if (!prompt) return json(res, 400, { error: 'Missing prompt' })
         let duration: number | undefined
@@ -1245,6 +1285,7 @@ export async function startWebServer(
           aspectRatio: body.aspectRatio != null ? String(body.aspectRatio) : undefined,
           generateAudio:
             body.generateAudio != null ? Boolean(body.generateAudio) : undefined,
+          inputReferences: normalizeVideoReferences(body.inputReferences),
         })
         return json(res, 200, quote)
       }

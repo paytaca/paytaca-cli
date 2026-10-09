@@ -44,6 +44,8 @@ const okAudioModels = [{ id: 'audio-a', display_name: 'Audio A' }] as any
 const okAudioQuote = { orderId: 'aorder-1', prompt: 'hello', contractAddress: 'bitcoincash:qq...', amountSats: 2000 } as any
 const okAudioResult = { success: true, paid: true, orderId: 'aorder-1', status: 'completed', path: '/tmp/a.mp3', mediaType: 'audio/mpeg' } as any
 
+const captured: { imageQuote?: any; videoQuote?: any } = {}
+
 function fakeDeps(): WebDeps {
   return {
     getWalletState: async () => ({
@@ -87,7 +89,7 @@ function fakeDeps(): WebDeps {
     }),
     getImageModels: async () => okImageModels,
     getImageHistory: async () => ({ data: [] }),
-    createImageQuote: async () => okImageQuote,
+    createImageQuote: async (opts) => { captured.imageQuote = opts; return okImageQuote },
     fulfillImage: async () => okImageResult,
     serveImageFile: async (id) => {
       if (id === 'exist') return { filePath: '/dev/null', mediaType: 'image/png' }
@@ -100,7 +102,7 @@ function fakeDeps(): WebDeps {
     deleteImageFile: async (id) => id === 'exist',
     getVideoModels: async () => okVideoModels,
     getVideoHistory: async () => ({ data: [] }),
-    createVideoQuote: async () => okVideoQuote,
+    createVideoQuote: async (opts) => { captured.videoQuote = opts; return okVideoQuote },
     fulfillVideo: async () => okVideoResult,
     serveVideoFile: async (id) => {
       if (id === 'exist') return { filePath: '/dev/null', mediaType: 'video/mp4' }
@@ -341,6 +343,27 @@ describe('web server AI routes', () => {
     expect(res.status).toBe(400)
   })
 
+  it('POST /api/ai/images/quote forwards input references', async () => {
+    captured.imageQuote = undefined
+    const refs = ['data:image/png;base64,AAAA', 'https://example.com/y.png']
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/images/quote`, srv.token, 'POST', {
+      prompt: 'a cat',
+      inputReferences: refs,
+    })
+    expect(res.status).toBe(200)
+    expect(captured.imageQuote?.inputReferences).toEqual(refs)
+  })
+
+  it('POST /api/ai/images/quote omits empty input references', async () => {
+    captured.imageQuote = undefined
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/images/quote`, srv.token, 'POST', {
+      prompt: 'a cat',
+      inputReferences: [],
+    })
+    expect(res.status).toBe(200)
+    expect(captured.imageQuote?.inputReferences).toBeUndefined()
+  })
+
   it('POST /api/ai/images/fulfill succeeds', async () => {
     const res = await req(`http://127.0.0.1:${srv.port}/api/ai/images/fulfill`, srv.token, 'POST', {
       orderId: 'order-1',
@@ -401,6 +424,26 @@ describe('web server AI routes', () => {
       prompt: 'a cat', duration: -1,
     })
     expect(res.status).toBe(400)
+  })
+
+  it('POST /api/ai/videos/quote forwards and normalizes input references', async () => {
+    captured.videoQuote = undefined
+    const res = await req(`http://127.0.0.1:${srv.port}/api/ai/videos/quote`, srv.token, 'POST', {
+      prompt: 'a cat',
+      duration: 5,
+      inputReferences: [
+        'https://example.com/1.png',
+        { url: 'https://example.com/2.png', frame_type: 'first_frame' },
+        { url: 'https://example.com/3.png', frame_type: 'bogus' },
+        { url: '' },
+      ],
+    })
+    expect(res.status).toBe(200)
+    expect(captured.videoQuote?.inputReferences).toEqual([
+      { url: 'https://example.com/1.png' },
+      { url: 'https://example.com/2.png', frame_type: 'first_frame' },
+      { url: 'https://example.com/3.png' },
+    ])
   })
 
   it('POST /api/ai/videos/fulfill succeeds', async () => {
