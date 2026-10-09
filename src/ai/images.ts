@@ -46,6 +46,7 @@ export interface ImageOrderStatus {
   status?: string
   image?: string | null
   media_type?: string
+  model?: string
   error?: string
   settlement_txid?: string
   note?: string
@@ -104,6 +105,13 @@ export interface FulfillImageOrderOptions {
   confirmSpacingMs?: number
   pollIntervalMs?: number
   pollTimeoutMs?: number
+  /**
+   * When true, poll only for order metadata and do NOT download/save the image
+   * (nor release the backend cache). Used by MCP, where the big inline image
+   * payload would exceed the transport timeout; the CLI command performs the
+   * actual download.
+   */
+  deferDownload?: boolean
 }
 
 export type GenerateImageOptions = CreateImageOrderOptions &
@@ -122,10 +130,21 @@ export interface GenerateImageResult {
   path?: string
   mediaType?: string
   base64?: string
+  /** True when generation finished but the image was not downloaded here. */
+  ready?: boolean
+  /** False when the caller requested a metadata-only check (no download). */
+  downloaded?: boolean
+  /** Backend note, e.g. "Image data has been delivered or expired". */
+  note?: string
   error?: string
 }
 
 const REQUEST_TIMEOUT_MS = 30000
+// The status endpoint streams the whole image inline (can be many MB). This
+// must be far longer than REQUEST_TIMEOUT_MS so the download is not aborted.
+const STATUS_REQUEST_TIMEOUT_MS = 120000
+// Cap on how many leading bytes we buffer when reading status metadata only.
+const STATUS_PREFIX_LIMIT = 64 * 1024
 const DEFAULT_CONFIRM_ATTEMPTS = 5
 const DEFAULT_CONFIRM_SPACING_MS = 4000
 const DEFAULT_POLL_INTERVAL_MS = 3000
@@ -177,7 +196,8 @@ async function authedRequest(
   baseUrl: string,
   apiPath: string,
   token: string,
-  init: { method: 'GET' | 'POST'; body?: unknown } = { method: 'GET' }
+  init: { method: 'GET' | 'POST'; body?: unknown } = { method: 'GET' },
+  timeoutMs: number = REQUEST_TIMEOUT_MS
 ): Promise<any> {
   let response: Response
   try {
@@ -192,7 +212,7 @@ async function authedRequest(
       ...(init.body !== undefined
         ? { body: JSON.stringify(init.body) }
         : {}),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     })
   } catch (err: any) {
     throw new AiApiError(`Backend unreachable: ${err?.message || err}`)
@@ -315,20 +335,121 @@ async function confirmPaymentWithRetry(
   throw lastError ?? new Error('Payment confirmation failed.')
 }
 
+function extractJsonString(text: string, key: string): string | undefined {
+  const match = text.match(
+    new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`)
+  )
+  if (!match) return undefined
+  try {
+    return JSON.parse(`"${match[1]}"`)
+  } catch {
+    return match[1]
+  }
+}
+
+/**
+ * Read only the leading portion of the status response (id/status/prompt/model)
+ * and abort before the multi-MB inline image is transferred. The backend read
+ * is non-destructive, so this never consumes the cached image.
+ */
+async function requestStatusMetadata(
+  baseUrl: string,
+  token: string,
+  orderId: string
+): Promise<ImageOrderStatus> {
+  let response: Response
+  try {
+    response = await fetch(
+      apiUrl(baseUrl, `/v1/images/${encodeURIComponent(orderId)}/status`),
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(STATUS_REQUEST_TIMEOUT_MS),
+      }
+    )
+  } catch (err: any) {
+    throw new AiApiError(`Backend unreachable: ${err?.message || err}`)
+  }
+  if (!response.ok) {
+    const text = await response.text()
+    let body: any = text
+    try {
+      body = JSON.parse(text)
+    } catch {
+      // keep raw text
+    }
+    const message =
+      (body && typeof body === 'object' && (body.error || body.detail)) ||
+      (typeof body === 'string' && body) ||
+      response.statusText
+    throw new AiApiError(
+      `GET image status failed (${response.status} ${response.statusText}): ${message}`,
+      response.status,
+      body
+    )
+  }
+  if (!response.body) {
+    return (await response.json()) as ImageOrderStatus
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  try {
+    while (buffer.length < STATUS_PREFIX_LIMIT) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      // Stop before pulling the multi-MB inline base64 image...
+      if (/"image"\s*:\s*"/.test(buffer)) break
+      // ...but when the image is null, keep reading to capture the note.
+      if (/"note"\s*:/.test(buffer)) break
+      if (/"status"\s*:\s*"[^"]*"/.test(buffer) && /}\s*$/.test(buffer.trim())) {
+        break
+      }
+    }
+  } finally {
+    reader.cancel().catch(() => {})
+  }
+
+  const status: ImageOrderStatus = { id: orderId }
+  const statusValue = extractJsonString(buffer, 'status')
+  if (statusValue) status.status = statusValue
+  const model = extractJsonString(buffer, 'model')
+  if (model) status.model = model
+  const mediaType = extractJsonString(buffer, 'media_type')
+  if (mediaType) status.media_type = mediaType
+  const note = extractJsonString(buffer, 'note')
+  if (note) status.note = note
+  const error = extractJsonString(buffer, 'error')
+  if (error) status.error = error
+  const settlementTxid = extractJsonString(buffer, 'settlement_txid')
+  if (settlementTxid) status.settlement_txid = settlementTxid
+  return status
+}
+
+function isReadyStatus(status?: string): boolean {
+  return status === 'generation_complete' || status === 'completed'
+}
+
 async function pollOrderStatus(
   baseUrl: string,
   token: string,
   orderId: string,
   intervalMs: number,
-  timeoutMs: number
+  timeoutMs: number,
+  download = true
 ): Promise<ImageOrderStatus> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
-    const status = (await authedRequest(
-      baseUrl,
-      `/v1/images/${encodeURIComponent(orderId)}/status`,
-      token
-    )) as ImageOrderStatus
+    const status = download
+      ? ((await authedRequest(
+          baseUrl,
+          `/v1/images/${encodeURIComponent(orderId)}/status`,
+          token,
+          { method: 'GET' },
+          STATUS_REQUEST_TIMEOUT_MS
+        )) as ImageOrderStatus)
+      : await requestStatusMetadata(baseUrl, token, orderId)
 
     if (status.status === 'failed') {
       throw new Error(
@@ -344,12 +465,15 @@ async function pollOrderStatus(
         }.`
       )
     }
-    if (
-      (status.status === 'generation_complete' ||
-        status.status === 'completed') &&
-      status.image
-    ) {
-      return status
+    if (isReadyStatus(status.status)) {
+      // Metadata-only callers only need the status; they must not pull the image.
+      if (!download) return status
+      if (status.image) return status
+      // Completed, but the inline image is gone (already delivered via
+      // POST /confirm or past the 10-minute cache TTL): terminal, not pending.
+      throw new Error(
+        status.note || 'Image data has been delivered or expired.'
+      )
     }
     if (Date.now() >= deadline) {
       throw new Error(
@@ -472,6 +596,8 @@ export async function fulfillImageOrder(
     }
   }
 
+  const deferDownload = Boolean(opts.deferDownload)
+
   let status: ImageOrderStatus
   try {
     status = await pollOrderStatus(
@@ -479,7 +605,8 @@ export async function fulfillImageOrder(
       token,
       quote.orderId,
       opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
-      opts.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS
+      opts.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS,
+      !deferDownload
     )
   } catch (err: any) {
     return {
@@ -487,6 +614,21 @@ export async function fulfillImageOrder(
       error: `${
         err?.message || err
       } Payment already made (txid ${txid}); order ${quote.orderId}.`,
+    }
+  }
+
+  // Metadata-only mode: report readiness without pulling the image or
+  // releasing the backend cache, so the CLI can download it later.
+  if (deferDownload) {
+    return {
+      ...paid,
+      success: true,
+      ready: true,
+      downloaded: false,
+      status: status.status,
+      model: status.model ?? quote.model,
+      mediaType: status.media_type,
+      note: status.note,
     }
   }
 
@@ -518,6 +660,7 @@ export async function fulfillImageOrder(
   return {
     ...paid,
     success: true,
+    downloaded: true,
     status: status.status,
     path: filePath,
     mediaType: status.media_type,
@@ -554,18 +697,25 @@ export interface PollStatusOptions {
   backendUrl?: string
   pollIntervalMs?: number
   pollTimeoutMs?: number
+  /**
+   * When false, only fetch order metadata (no image download/save and no cache
+   * release). Used by MCP to avoid transferring the huge inline image.
+   */
+  download?: boolean
 }
 
 /**
  * Poll an existing image order by ID until the image is ready or the
  * deadline is reached. Mints a fresh OAuth token and saves the image
- * to ~/.paytaca/images when generation is complete.
+ * to ~/.paytaca/images when generation is complete. With `download: false`
+ * it reports only readiness/metadata and leaves the image for the CLI.
  */
 export async function getImageOrderStatus(
   orderId: string,
   opts: PollStatusOptions = {}
 ): Promise<GenerateImageResult> {
   const isChipnet = Boolean(opts.isChipnet)
+  const download = opts.download !== false
   const baseUrl = resolveBackendUrl(opts.backendUrl)
   const base: GenerateImageResult = {
     success: false,
@@ -589,10 +739,24 @@ export async function getImageOrderStatus(
       token,
       orderId,
       opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
-      opts.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS
+      opts.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS,
+      download
     )
   } catch (err: any) {
     return { ...base, error: err?.message || String(err) }
+  }
+
+  if (!download) {
+    return {
+      ...base,
+      success: true,
+      ready: true,
+      downloaded: false,
+      status: status.status,
+      model: status.model,
+      mediaType: status.media_type,
+      note: status.note,
+    }
   }
 
   let filePath: string
@@ -622,8 +786,10 @@ export async function getImageOrderStatus(
   return {
     ...base,
     success: true,
+    downloaded: true,
     status: status.status,
     path: filePath,
+    model: status.model,
     mediaType: status.media_type,
     base64: status.image ?? undefined,
   }

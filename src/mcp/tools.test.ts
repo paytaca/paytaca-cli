@@ -221,19 +221,19 @@ describe('MCP tools', () => {
       })
     })
 
-    it('returns an inline image with a saved path on success', async () => {
+    it('returns metadata only (no inline image) with a download command on success', async () => {
       mocks.generateImage.mockResolvedValue({
         success: true,
         paid: true,
+        ready: true,
+        downloaded: false,
         orderId: 'order-1',
         model: 'nano-banana',
         amountSats: 1500,
         amountUsd: 0.01,
         txid: 'txid-1',
         status: 'generation_complete',
-        path: '/tmp/order-1.png',
         mediaType: 'image/png',
-        base64: 'aGk=',
       })
       const c = await connect()
       const result = await c.callTool({
@@ -249,15 +249,18 @@ describe('MCP tools', () => {
         resolution: undefined,
         isChipnet: false,
         backendUrl: undefined,
+        deferDownload: true,
       })
       const image = (result.content as any[]).find(
         (block) => block.type === 'image'
-      ) as { type: string; data: string; mimeType: string }
-      expect(image).toEqual({ type: 'image', data: 'aGk=', mimeType: 'image/png' })
+      )
+      expect(image).toBeUndefined()
+      expect(text(result)).toMatch(/paytaca ai image status order-1/)
       expect(result.structuredContent).toMatchObject({
         orderId: 'order-1',
-        path: '/tmp/order-1.png',
+        status: 'generation_complete',
         txid: 'txid-1',
+        ready: true,
       })
     })
 
@@ -319,34 +322,62 @@ describe('MCP tools', () => {
       expect(text(result)).toBe('backend down')
     })
 
-    it('returns image on get_image_status when generation is complete', async () => {
+    it('returns metadata only on get_image_status when generation is complete', async () => {
       mocks.getImageOrderStatus.mockResolvedValue({
         success: true,
         paid: true,
+        ready: true,
+        downloaded: false,
         orderId: 'order-1',
         model: 'nano-banana',
         amountSats: 1500,
         amountUsd: 0.01,
         txid: 'txid-1',
         status: 'generation_complete',
-        path: '/tmp/order-1.png',
         mediaType: 'image/png',
-        base64: 'aGk=',
       })
+      mocks.isStillProcessing.mockReturnValue(false)
       const c = await connect()
       const result = await c.callTool({
         name: 'get_image_status',
         arguments: { order_id: 'order-1' },
       })
       expect(result.isError).toBeFalsy()
+      expect(mocks.getImageOrderStatus).toHaveBeenCalledWith(
+        'order-1',
+        expect.objectContaining({ download: false })
+      )
       const image = (result.content as any[]).find(
         (block) => block.type === 'image'
       )
-      expect(image).toEqual({ type: 'image', data: 'aGk=', mimeType: 'image/png' })
+      expect(image).toBeUndefined()
+      expect(text(result)).toMatch(/paytaca ai image status order-1/)
       expect(result.structuredContent).toMatchObject({
         orderId: 'order-1',
-        path: '/tmp/order-1.png',
+        status: 'generation_complete',
+        ready: true,
       })
+    })
+
+    it('warns when the cached image is already delivered or expired', async () => {
+      mocks.getImageOrderStatus.mockResolvedValue({
+        success: true,
+        paid: true,
+        ready: true,
+        downloaded: false,
+        orderId: 'order-1',
+        status: 'completed',
+        note: 'Image data has been delivered or expired',
+      })
+      mocks.isStillProcessing.mockReturnValue(false)
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'get_image_status',
+        arguments: { order_id: 'order-1' },
+      })
+      expect(result.isError).toBeFalsy()
+      expect(text(result)).toMatch(/delivered or expired/)
+      expect(text(result)).not.toMatch(/paytaca ai image status order-1/)
     })
 
     it('returns processing status when still generating', async () => {
@@ -413,17 +444,18 @@ describe('MCP tools', () => {
       })
     })
 
-    it('returns a saved path with structured content on success', async () => {
+    it('returns metadata only (no inline video) with a download command on success', async () => {
       mocks.generateVideo.mockResolvedValue({
         success: true,
         paid: true,
+        ready: true,
+        downloaded: false,
         orderId: 'vorder-1',
         model: 'video-a',
         amountSats: 2000,
         amountUsd: 0.02,
         txid: 'txid-1',
         status: 'completed',
-        path: '/tmp/vorder-1.mp4',
         mediaType: 'video/mp4',
       })
       const c = await connect()
@@ -441,12 +473,13 @@ describe('MCP tools', () => {
         generateAudio: undefined,
         isChipnet: false,
         backendUrl: undefined,
+        deferDownload: true,
       })
-      expect(text(result)).toMatch(/Saved to: \/tmp\/vorder-1\.mp4/)
+      expect(text(result)).toMatch(/paytaca ai video status vorder-1/)
       expect((result.content as any[]).some((b) => b.type === 'image')).toBe(false)
       expect(result.structuredContent).toMatchObject({
         orderId: 'vorder-1',
-        path: '/tmp/vorder-1.mp4',
+        ready: true,
         txid: 'txid-1',
       })
     })
@@ -509,30 +542,55 @@ describe('MCP tools', () => {
       expect(text(result)).toBe('backend down')
     })
 
-    it('returns a saved path on get_video_status when complete', async () => {
+    it('returns metadata only on get_video_status when complete', async () => {
       mocks.getVideoOrderStatus.mockResolvedValue({
         success: true,
         paid: true,
+        ready: true,
+        downloaded: false,
         orderId: 'vorder-1',
         model: 'video-a',
-        amountSats: 2000,
-        amountUsd: 0.02,
-        txid: 'txid-1',
         status: 'completed',
-        path: '/tmp/vorder-1.mp4',
         mediaType: 'video/mp4',
       })
+      mocks.isVideoStillProcessing.mockReturnValue(false)
       const c = await connect()
       const result = await c.callTool({
         name: 'get_video_status',
         arguments: { order_id: 'vorder-1' },
       })
       expect(result.isError).toBeFalsy()
-      expect(text(result)).toMatch(/Saved to: \/tmp\/vorder-1\.mp4/)
+      expect(mocks.getVideoOrderStatus).toHaveBeenCalledWith('vorder-1', {
+        isChipnet: false,
+        backendUrl: undefined,
+        download: false,
+      })
+      expect(text(result)).toMatch(/paytaca ai video status vorder-1/)
       expect(result.structuredContent).toMatchObject({
         orderId: 'vorder-1',
-        path: '/tmp/vorder-1.mp4',
+        ready: true,
       })
+    })
+
+    it('warns when the cached video is already delivered or expired', async () => {
+      mocks.getVideoOrderStatus.mockResolvedValue({
+        success: true,
+        paid: true,
+        ready: true,
+        downloaded: false,
+        orderId: 'vorder-1',
+        status: 'completed',
+        note: 'Video data has been delivered or expired',
+      })
+      mocks.isVideoStillProcessing.mockReturnValue(false)
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'get_video_status',
+        arguments: { order_id: 'vorder-1' },
+      })
+      expect(result.isError).toBeFalsy()
+      expect(text(result)).toMatch(/delivered or expired/)
+      expect(text(result)).not.toMatch(/paytaca ai video status/)
     })
 
     it('returns processing status when still generating', async () => {
@@ -599,17 +657,18 @@ describe('MCP tools', () => {
       })
     })
 
-    it('returns a saved path with structured content on success', async () => {
+    it('returns metadata only (no inline audio) with a download command on success', async () => {
       mocks.generateAudio.mockResolvedValue({
         success: true,
         paid: true,
+        ready: true,
+        downloaded: false,
         orderId: 'aorder-1',
         model: 'audio-a',
         amountSats: 2000,
         amountUsd: 0.02,
         txid: 'txid-1',
         status: 'completed',
-        path: '/tmp/aorder-1.mp3',
         mediaType: 'audio/mpeg',
       })
       const c = await connect()
@@ -626,12 +685,13 @@ describe('MCP tools', () => {
         speed: undefined,
         isChipnet: false,
         backendUrl: undefined,
+        deferDownload: true,
       })
-      expect(text(result)).toMatch(/Saved to: \/tmp\/aorder-1\.mp3/)
+      expect(text(result)).toMatch(/paytaca ai audio status aorder-1/)
       expect((result.content as any[]).some((b) => b.type === 'image')).toBe(false)
       expect(result.structuredContent).toMatchObject({
         orderId: 'aorder-1',
-        path: '/tmp/aorder-1.mp3',
+        ready: true,
         txid: 'txid-1',
       })
     })
@@ -683,30 +743,58 @@ describe('MCP tools', () => {
       })
     })
 
-    it('returns a saved path on get_audio_status when complete', async () => {
+    it('returns metadata only on get_audio_status when complete', async () => {
       mocks.getAudioOrderStatus.mockResolvedValue({
         success: true,
         paid: true,
+        ready: true,
+        downloaded: false,
         orderId: 'aorder-1',
         model: 'audio-a',
         amountSats: 2000,
         amountUsd: 0.02,
         txid: 'txid-1',
         status: 'completed',
-        path: '/tmp/aorder-1.mp3',
         mediaType: 'audio/mpeg',
       })
+      mocks.isAudioStillProcessing.mockReturnValue(false)
       const c = await connect()
       const result = await c.callTool({
         name: 'get_audio_status',
         arguments: { order_id: 'aorder-1' },
       })
       expect(result.isError).toBeFalsy()
-      expect(text(result)).toMatch(/Saved to: \/tmp\/aorder-1\.mp3/)
+      expect(mocks.getAudioOrderStatus).toHaveBeenCalledWith('aorder-1', {
+        isChipnet: false,
+        backendUrl: undefined,
+        download: false,
+      })
+      expect(text(result)).toMatch(/paytaca ai audio status aorder-1/)
       expect(result.structuredContent).toMatchObject({
         orderId: 'aorder-1',
-        path: '/tmp/aorder-1.mp3',
+        ready: true,
       })
+    })
+
+    it('warns when the cached audio is already delivered or expired', async () => {
+      mocks.getAudioOrderStatus.mockResolvedValue({
+        success: true,
+        paid: true,
+        ready: true,
+        downloaded: false,
+        orderId: 'aorder-1',
+        status: 'completed',
+        note: 'Audio data has been delivered or expired',
+      })
+      mocks.isAudioStillProcessing.mockReturnValue(false)
+      const c = await connect()
+      const result = await c.callTool({
+        name: 'get_audio_status',
+        arguments: { order_id: 'aorder-1' },
+      })
+      expect(result.isError).toBeFalsy()
+      expect(text(result)).toMatch(/delivered or expired/)
+      expect(text(result)).not.toMatch(/paytaca ai audio status/)
     })
 
     it('returns processing status when still generating', async () => {

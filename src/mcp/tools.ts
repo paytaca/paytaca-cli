@@ -1254,7 +1254,7 @@ export function registerTools(
     {
       title: 'Poll image generation status',
       description:
-        'Poll an existing image generation order by ID. If generation is complete, returns the image inline plus the saved file path. If still processing, returns the current status so you can retry later. Use this to resume after generate_image returns a "processing" status.',
+        'Poll an existing image generation order by ID. When generation is complete, returns metadata only (no image bytes) plus a command to download the image from the command line. If still processing, returns the current status so you can retry later. Use this to resume after generate_image returns a "processing" status.',
       inputSchema: {
         order_id: z.string().min(1),
         chipnet: z.boolean().optional(),
@@ -1272,36 +1272,8 @@ export function registerTools(
         const result = await getImageOrderStatus(order_id, {
           isChipnet: cn(chipnet),
           backendUrl: backend,
+          download: false,
         })
-
-        if (result.success && result.base64) {
-          const mediaType = result.mediaType || 'image/png'
-          return {
-            content: [
-              { type: 'image' as const, data: result.base64, mimeType: mediaType },
-              {
-                type: 'text' as const,
-                text: [
-                  `Image ready (order ${result.orderId}).`,
-                  `Saved to: ${result.path}`,
-                  `Model: ${result.model}`,
-                  `Cost: ${result.amountSats} sats`,
-                  `txid: ${result.txid}`,
-                ].join('\n'),
-              },
-            ],
-            structuredContent: {
-              orderId: result.orderId,
-              model: result.model,
-              status: result.status,
-              path: result.path,
-              mediaType: result.mediaType,
-              amountSats: result.amountSats,
-              amountUsd: result.amountUsd,
-              txid: result.txid,
-            },
-          }
-        }
 
         if (isStillProcessing(result)) {
           return {
@@ -1321,6 +1293,35 @@ export function registerTools(
           }
         }
 
+        if (result.success && result.ready) {
+          const lines = [`Image ready (order ${result.orderId}).`]
+          if (result.note) {
+            lines.push(result.note)
+            lines.push(
+              'The cached image is no longer available (it was already delivered or expired), so it cannot be downloaded again.'
+            )
+          } else {
+            lines.push(
+              `Download it from the command line: paytaca ai image status ${result.orderId}`
+            )
+            lines.push(
+              'Run the download promptly — the generated image is cached server-side for only ~10 minutes.'
+            )
+          }
+          if (result.model) lines.push(`Model: ${result.model}`)
+          return {
+            content: [{ type: 'text' as const, text: lines.join('\n') }],
+            structuredContent: {
+              orderId: result.orderId,
+              model: result.model,
+              status: result.status,
+              mediaType: result.mediaType,
+              ready: true,
+              note: result.note,
+            },
+          }
+        }
+
         return fail(new Error(result.error || 'Image generation failed.'))
       } catch (err) {
         return fail(err)
@@ -1333,7 +1334,7 @@ export function registerTools(
     {
       title: 'Generate an image',
       description:
-        'Generate an image from a text prompt with a Paytaca AI image model. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). Returns the image inline plus the file path where it was saved. The MCP host must obtain user approval before calling this.',
+        'Generate an image from a text prompt with a Paytaca AI image model. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). Returns metadata only (no image bytes); download the image from the command line with `paytaca ai image status <order_id>`. The MCP host must obtain user approval before calling this.',
       inputSchema: {
         prompt: z.string().min(1),
         model: z.string().optional(),
@@ -1360,6 +1361,7 @@ export function registerTools(
           resolution,
           isChipnet: cn(chipnet),
           backendUrl: backend,
+          deferDownload: true,
         })
 
         if (isStillProcessing(result)) {
@@ -1369,7 +1371,7 @@ export function registerTools(
                 type: 'text' as const,
                 text: [
                   `Image generation is still processing (order ${result.orderId}).`,
-                  `The generation is running server-side — call get_image_status with order_id "${result.orderId}" to retrieve the result.`,
+                  `The generation is running server-side — call get_image_status with order_id "${result.orderId}" to check it, then run \`paytaca ai image status ${result.orderId}\` to download it.`,
                   `Model: ${result.model}`,
                   `Paid: ${result.amountSats} sats (txid: ${result.txid})`,
                 ].join('\n'),
@@ -1386,30 +1388,26 @@ export function registerTools(
           }
         }
 
-        if (!result.success || !result.base64) {
+        if (!result.success || !result.ready) {
           return fail(new Error(result.error || 'Image generation failed.'))
         }
-        const mediaType = result.mediaType || 'image/png'
+
+        const lines = [
+          `Image generated (order ${result.orderId}).`,
+          `Download it from the command line: paytaca ai image status ${result.orderId}`,
+          'Run the download promptly — the generated image is cached server-side for only ~10 minutes.',
+        ]
+        if (result.model) lines.push(`Model: ${result.model}`)
+        if (result.amountSats !== undefined) lines.push(`Cost: ${result.amountSats} sats`)
+        if (result.txid) lines.push(`txid: ${result.txid}`)
         return {
-          content: [
-            { type: 'image' as const, data: result.base64, mimeType: mediaType },
-            {
-              type: 'text' as const,
-              text: [
-                `Image generated (order ${result.orderId}).`,
-                `Saved to: ${result.path}`,
-                `Model: ${result.model}`,
-                `Cost: ${result.amountSats} sats`,
-                `txid: ${result.txid}`,
-              ].join('\n'),
-            },
-          ],
+          content: [{ type: 'text' as const, text: lines.join('\n') }],
           structuredContent: {
             orderId: result.orderId,
             model: result.model,
             status: result.status,
-            path: result.path,
             mediaType: result.mediaType,
+            ready: true,
             amountSats: result.amountSats,
             amountUsd: result.amountUsd,
             txid: result.txid,
@@ -1470,7 +1468,7 @@ export function registerTools(
     {
       title: 'Poll video generation status',
       description:
-        'Poll an existing video generation order by ID. If generation is complete, saves the video to disk and returns its file path plus the model/cost. If still processing, returns the current status so you can retry later. Use this to resume after generate_video returns a "processing" status.',
+        'Poll an existing video generation order by ID. When generation is complete, returns metadata only (no video bytes) plus a command to download the video from the command line. If still processing, returns the current status so you can retry later. Use this to resume after generate_video returns a "processing" status.',
       inputSchema: {
         order_id: z.string().min(1),
         chipnet: z.boolean().optional(),
@@ -1488,34 +1486,8 @@ export function registerTools(
         const result = await getVideoOrderStatus(order_id, {
           isChipnet: cn(chipnet),
           backendUrl: backend,
+          download: false,
         })
-
-        if (result.success && result.path) {
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: [
-                  `Video ready (order ${result.orderId}).`,
-                  `Saved to: ${result.path}`,
-                  `Model: ${result.model}`,
-                  `Cost: ${result.amountSats} sats`,
-                  `txid: ${result.txid}`,
-                ].join('\n'),
-              },
-            ],
-            structuredContent: {
-              orderId: result.orderId,
-              model: result.model,
-              status: result.status,
-              path: result.path,
-              mediaType: result.mediaType,
-              amountSats: result.amountSats,
-              amountUsd: result.amountUsd,
-              txid: result.txid,
-            },
-          }
-        }
 
         if (isVideoStillProcessing(result)) {
           return {
@@ -1535,6 +1507,35 @@ export function registerTools(
           }
         }
 
+        if (result.success && result.ready) {
+          const lines = [`Video ready (order ${result.orderId}).`]
+          if (result.note) {
+            lines.push(result.note)
+            lines.push(
+              'The cached video is no longer available (it was already delivered or expired), so it cannot be downloaded again.'
+            )
+          } else {
+            lines.push(
+              `Download it from the command line: paytaca ai video status ${result.orderId}`
+            )
+            lines.push(
+              'Run the download promptly — the generated video is cached server-side for only a limited time.'
+            )
+          }
+          if (result.model) lines.push(`Model: ${result.model}`)
+          return {
+            content: [{ type: 'text' as const, text: lines.join('\n') }],
+            structuredContent: {
+              orderId: result.orderId,
+              model: result.model,
+              status: result.status,
+              mediaType: result.mediaType,
+              ready: true,
+              note: result.note,
+            },
+          }
+        }
+
         return fail(new Error(result.error || 'Video generation failed.'))
       } catch (err) {
         return fail(err)
@@ -1547,7 +1548,7 @@ export function registerTools(
     {
       title: 'Generate a video',
       description:
-        'Generate a video from a text prompt with a Paytaca AI video model. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). Saves the video to disk and returns its file path. The MCP host must obtain user approval before calling this.',
+        'Generate a video from a text prompt with a Paytaca AI video model. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). Returns metadata only (no video bytes); download the video from the command line with `paytaca ai video status <order_id>`. The MCP host must obtain user approval before calling this.',
       inputSchema: {
         prompt: z.string().min(1),
         model: z.string().optional(),
@@ -1585,6 +1586,7 @@ export function registerTools(
           generateAudio: generate_audio,
           isChipnet: cn(chipnet),
           backendUrl: backend,
+          deferDownload: true,
         })
 
         if (isVideoStillProcessing(result)) {
@@ -1594,7 +1596,7 @@ export function registerTools(
                 type: 'text' as const,
                 text: [
                   `Video generation is still processing (order ${result.orderId}).`,
-                  `The generation is running server-side — call get_video_status with order_id "${result.orderId}" to retrieve the result.`,
+                  `The generation is running server-side — call get_video_status with order_id "${result.orderId}" to check it, then run \`paytaca ai video status ${result.orderId}\` to download it.`,
                   `Model: ${result.model}`,
                   `Paid: ${result.amountSats} sats (txid: ${result.txid})`,
                 ].join('\n'),
@@ -1611,28 +1613,26 @@ export function registerTools(
           }
         }
 
-        if (!result.success || !result.path) {
+        if (!result.success || !result.ready) {
           return fail(new Error(result.error || 'Video generation failed.'))
         }
+
+        const lines = [
+          `Video generated (order ${result.orderId}).`,
+          `Download it from the command line: paytaca ai video status ${result.orderId}`,
+          'Run the download promptly — the generated video is cached server-side for only a limited time.',
+        ]
+        if (result.model) lines.push(`Model: ${result.model}`)
+        if (result.amountSats !== undefined) lines.push(`Cost: ${result.amountSats} sats`)
+        if (result.txid) lines.push(`txid: ${result.txid}`)
         return {
-          content: [
-            {
-              type: 'text' as const,
-              text: [
-                `Video generated (order ${result.orderId}).`,
-                `Saved to: ${result.path}`,
-                `Model: ${result.model}`,
-                `Cost: ${result.amountSats} sats`,
-                `txid: ${result.txid}`,
-              ].join('\n'),
-            },
-          ],
+          content: [{ type: 'text' as const, text: lines.join('\n') }],
           structuredContent: {
             orderId: result.orderId,
             model: result.model,
             status: result.status,
-            path: result.path,
             mediaType: result.mediaType,
+            ready: true,
             amountSats: result.amountSats,
             amountUsd: result.amountUsd,
             txid: result.txid,
@@ -1693,7 +1693,7 @@ export function registerTools(
     {
       title: 'Poll audio generation status',
       description:
-        'Poll an existing audio generation order by ID. If generation is complete, saves the audio to disk and returns its file path plus the model/cost. If still processing, returns the current status so you can retry later. Use this to resume after generate_audio returns a "processing" status.',
+        'Poll an existing audio generation order by ID. When generation is complete, returns metadata only (no audio bytes) plus a command to download the audio from the command line. If still processing, returns the current status so you can retry later. Use this to resume after generate_audio returns a "processing" status.',
       inputSchema: {
         order_id: z.string().min(1),
         chipnet: z.boolean().optional(),
@@ -1711,34 +1711,8 @@ export function registerTools(
         const result = await getAudioOrderStatus(order_id, {
           isChipnet: cn(chipnet),
           backendUrl: backend,
+          download: false,
         })
-
-        if (result.success && result.path) {
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: [
-                  `Audio ready (order ${result.orderId}).`,
-                  `Saved to: ${result.path}`,
-                  `Model: ${result.model}`,
-                  `Cost: ${result.amountSats} sats`,
-                  `txid: ${result.txid}`,
-                ].join('\n'),
-              },
-            ],
-            structuredContent: {
-              orderId: result.orderId,
-              model: result.model,
-              status: result.status,
-              path: result.path,
-              mediaType: result.mediaType,
-              amountSats: result.amountSats,
-              amountUsd: result.amountUsd,
-              txid: result.txid,
-            },
-          }
-        }
 
         if (isAudioStillProcessing(result)) {
           return {
@@ -1758,6 +1732,35 @@ export function registerTools(
           }
         }
 
+        if (result.success && result.ready) {
+          const lines = [`Audio ready (order ${result.orderId}).`]
+          if (result.note) {
+            lines.push(result.note)
+            lines.push(
+              'The cached audio is no longer available (it was already delivered or expired), so it cannot be downloaded again.'
+            )
+          } else {
+            lines.push(
+              `Download it from the command line: paytaca ai audio status ${result.orderId}`
+            )
+            lines.push(
+              'Run the download promptly — the generated audio is cached server-side for only a limited time.'
+            )
+          }
+          if (result.model) lines.push(`Model: ${result.model}`)
+          return {
+            content: [{ type: 'text' as const, text: lines.join('\n') }],
+            structuredContent: {
+              orderId: result.orderId,
+              model: result.model,
+              status: result.status,
+              mediaType: result.mediaType,
+              ready: true,
+              note: result.note,
+            },
+          }
+        }
+
         return fail(new Error(result.error || 'Audio generation failed.'))
       } catch (err) {
         return fail(err)
@@ -1770,7 +1773,7 @@ export function registerTools(
     {
       title: 'Generate speech from text',
       description:
-        'Generate speech from a text prompt with a Paytaca AI audio (text-to-speech) model. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). Saves the audio to disk and returns its file path. The MCP host must obtain user approval before calling this.',
+        'Generate speech from a text prompt with a Paytaca AI audio (text-to-speech) model. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). Returns metadata only (no audio bytes); download the audio from the command line with `paytaca ai audio status <order_id>`. The MCP host must obtain user approval before calling this.',
       inputSchema: {
         prompt: z.string().min(1),
         model: z.string().optional(),
@@ -1797,6 +1800,7 @@ export function registerTools(
           speed,
           isChipnet: cn(chipnet),
           backendUrl: backend,
+          deferDownload: true,
         })
 
         if (isAudioStillProcessing(result)) {
@@ -1806,7 +1810,7 @@ export function registerTools(
                 type: 'text' as const,
                 text: [
                   `Audio generation is still processing (order ${result.orderId}).`,
-                  `The generation is running server-side — call get_audio_status with order_id "${result.orderId}" to retrieve the result.`,
+                  `The generation is running server-side — call get_audio_status with order_id "${result.orderId}" to check it, then run \`paytaca ai audio status ${result.orderId}\` to download it.`,
                   `Model: ${result.model}`,
                   `Paid: ${result.amountSats} sats (txid: ${result.txid})`,
                 ].join('\n'),
@@ -1823,28 +1827,26 @@ export function registerTools(
           }
         }
 
-        if (!result.success || !result.path) {
+        if (!result.success || !result.ready) {
           return fail(new Error(result.error || 'Audio generation failed.'))
         }
+
+        const lines = [
+          `Audio generated (order ${result.orderId}).`,
+          `Download it from the command line: paytaca ai audio status ${result.orderId}`,
+          'Run the download promptly — the generated audio is cached server-side for only a limited time.',
+        ]
+        if (result.model) lines.push(`Model: ${result.model}`)
+        if (result.amountSats !== undefined) lines.push(`Cost: ${result.amountSats} sats`)
+        if (result.txid) lines.push(`txid: ${result.txid}`)
         return {
-          content: [
-            {
-              type: 'text' as const,
-              text: [
-                `Audio generated (order ${result.orderId}).`,
-                `Saved to: ${result.path}`,
-                `Model: ${result.model}`,
-                `Cost: ${result.amountSats} sats`,
-                `txid: ${result.txid}`,
-              ].join('\n'),
-            },
-          ],
+          content: [{ type: 'text' as const, text: lines.join('\n') }],
           structuredContent: {
             orderId: result.orderId,
             model: result.model,
             status: result.status,
-            path: result.path,
             mediaType: result.mediaType,
+            ready: true,
             amountSats: result.amountSats,
             amountUsd: result.amountUsd,
             txid: result.txid,

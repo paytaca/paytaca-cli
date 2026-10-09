@@ -394,6 +394,53 @@ describe('fulfillImageOrder', () => {
     expect(result.error).toMatch(/unsupported media type/)
     expect(mocks.writeFileSync).not.toHaveBeenCalled()
   })
+
+  it('treats a completed order with no image as terminal (not a timeout)', async () => {
+    mocks.requireWallet.mockReturnValue(ctxFixture())
+    happyRoute({
+      statusBodies: [
+        { status: 'processing' },
+        {
+          status: 'completed',
+          image: null,
+          note: 'Image data has been delivered or expired',
+        },
+      ],
+    })
+
+    const result = await fulfillImageOrder(QUOTE, timing)
+    expect(result.success).toBe(false)
+    expect(result.paid).toBe(true)
+    expect(result.error).toMatch(/delivered or expired/)
+    expect(result.error).not.toMatch(/Timed out/)
+  })
+
+  it('defers the download (no save, no cache release) when deferDownload is set', async () => {
+    mocks.requireWallet.mockReturnValue(ctxFixture())
+    happyRoute({
+      statusBodies: [
+        { status: 'processing' },
+        {
+          status: 'generation_complete',
+          image: 'aGk=',
+          media_type: 'image/png',
+          model: 'nano-banana',
+        },
+      ],
+    })
+
+    const result = await fulfillImageOrder(QUOTE, { ...timing, deferDownload: true })
+    expect(result.success).toBe(true)
+    expect(result.ready).toBe(true)
+    expect(result.downloaded).toBe(false)
+    expect(result.path).toBeUndefined()
+    expect(result.model).toBe('nano-banana')
+    expect(mocks.writeFileSync).not.toHaveBeenCalled()
+    const confirmCalls = fetchMock.mock.calls.filter(([u]) =>
+      String(u).endsWith('/confirm')
+    )
+    expect(confirmCalls).toHaveLength(0)
+  })
 })
 
 describe('generateImage', () => {
@@ -552,5 +599,57 @@ describe('getImageOrderStatus', () => {
     expect(result.success).toBe(false)
     expect(result.paid).toBe(true)
     expect(result.error).toMatch(/No wallet/)
+  })
+
+  it('treats a completed order with no image as terminal (not a timeout)', async () => {
+    mocks.requireWallet.mockReturnValue(ctxFixture())
+    pollRoute({
+      status: 'completed',
+      image: null,
+      note: 'Image data has been delivered or expired',
+    })
+
+    const result = await getImageOrderStatus('order-1', timing)
+    expect(result.success).toBe(false)
+    expect(result.paid).toBe(true)
+    expect(result.error).toMatch(/delivered or expired/)
+    expect(result.error).not.toMatch(/Timed out/)
+  })
+
+  it('metadata mode reports readiness without saving or releasing the cache', async () => {
+    mocks.requireWallet.mockReturnValue(ctxFixture())
+    pollRoute({
+      status: 'generation_complete',
+      image: 'aGk=',
+      media_type: 'image/png',
+      model: 'nano-banana',
+    })
+
+    const result = await getImageOrderStatus('order-1', { ...timing, download: false })
+    expect(result.success).toBe(true)
+    expect(result.ready).toBe(true)
+    expect(result.downloaded).toBe(false)
+    expect(result.path).toBeUndefined()
+    expect(result.model).toBe('nano-banana')
+    expect(mocks.writeFileSync).not.toHaveBeenCalled()
+    const confirmCalls = fetchMock.mock.calls.filter(([u]) =>
+      String(u).endsWith('/confirm')
+    )
+    expect(confirmCalls).toHaveLength(0)
+  })
+
+  it('metadata mode surfaces the note when the cached image is gone', async () => {
+    mocks.requireWallet.mockReturnValue(ctxFixture())
+    pollRoute({
+      status: 'completed',
+      image: null,
+      note: 'Image data has been delivered or expired',
+    })
+
+    const result = await getImageOrderStatus('order-1', { ...timing, download: false })
+    expect(result.success).toBe(true)
+    expect(result.ready).toBe(true)
+    expect(result.downloaded).toBe(false)
+    expect(result.note).toMatch(/delivered or expired/)
   })
 })

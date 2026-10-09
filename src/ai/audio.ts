@@ -52,6 +52,7 @@ export interface AudioOrderStatus {
   status?: string
   audio?: string | null
   media_type?: string
+  model?: string
   error?: string
   settlement_txid?: string
   note?: string
@@ -112,6 +113,13 @@ export interface FulfillAudioOrderOptions {
   confirmSpacingMs?: number
   pollIntervalMs?: number
   pollTimeoutMs?: number
+  /**
+   * When true, poll only for order metadata and do NOT download/save the audio
+   * (nor release the backend cache). Used by MCP, where the inline audio
+   * payload could exceed the transport timeout; the CLI command performs the
+   * actual download.
+   */
+  deferDownload?: boolean
 }
 
 export type GenerateAudioOptions = CreateAudioOrderOptions &
@@ -130,10 +138,21 @@ export interface GenerateAudioResult {
   path?: string
   mediaType?: string
   base64?: string
+  /** True when generation finished but the audio was not downloaded here. */
+  ready?: boolean
+  /** False when the caller requested a metadata-only check (no download). */
+  downloaded?: boolean
+  /** Backend note, e.g. "Audio data has been delivered or expired". */
+  note?: string
   error?: string
 }
 
 const REQUEST_TIMEOUT_MS = 30000
+// The status endpoint streams the whole audio inline. This must be far longer
+// than REQUEST_TIMEOUT_MS so the download is not aborted.
+const STATUS_REQUEST_TIMEOUT_MS = 300000
+// Cap on how many leading bytes we buffer when reading status metadata only.
+const STATUS_PREFIX_LIMIT = 64 * 1024
 const DEFAULT_CONFIRM_ATTEMPTS = 5
 const DEFAULT_CONFIRM_SPACING_MS = 4000
 const DEFAULT_POLL_INTERVAL_MS = 5000
@@ -191,7 +210,8 @@ async function authedRequest(
   baseUrl: string,
   apiPath: string,
   token: string,
-  init: { method: 'GET' | 'POST'; body?: unknown } = { method: 'GET' }
+  init: { method: 'GET' | 'POST'; body?: unknown } = { method: 'GET' },
+  timeoutMs = REQUEST_TIMEOUT_MS
 ): Promise<any> {
   let response: Response
   try {
@@ -206,7 +226,7 @@ async function authedRequest(
       ...(init.body !== undefined
         ? { body: JSON.stringify(init.body) }
         : {}),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     })
   } catch (err: any) {
     throw new AiApiError(`Backend unreachable: ${err?.message || err}`)
@@ -331,20 +351,121 @@ async function confirmPaymentWithRetry(
   throw lastError ?? new Error('Payment confirmation failed.')
 }
 
+function extractJsonString(text: string, key: string): string | undefined {
+  const match = text.match(
+    new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`)
+  )
+  if (!match) return undefined
+  try {
+    return JSON.parse(`"${match[1]}"`)
+  } catch {
+    return match[1]
+  }
+}
+
+function isReadyStatus(status?: string): boolean {
+  return status === 'generation_complete' || status === 'completed'
+}
+
+/**
+ * Read only the leading portion of the status response (id/status/prompt/model)
+ * and abort before the inline audio is transferred. The backend read is
+ * non-destructive, so this never consumes the cached audio.
+ */
+async function requestStatusMetadata(
+  baseUrl: string,
+  token: string,
+  orderId: string
+): Promise<AudioOrderStatus> {
+  let response: Response
+  try {
+    response = await fetch(
+      apiUrl(baseUrl, `/v1/audio/${encodeURIComponent(orderId)}/status`),
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(STATUS_REQUEST_TIMEOUT_MS),
+      }
+    )
+  } catch (err: any) {
+    throw new AiApiError(`Backend unreachable: ${err?.message || err}`)
+  }
+  if (!response.ok) {
+    const text = await response.text()
+    let body: any = text
+    try {
+      body = JSON.parse(text)
+    } catch {
+      // keep raw text
+    }
+    const message =
+      (body && typeof body === 'object' && (body.error || body.detail)) ||
+      (typeof body === 'string' && body) ||
+      response.statusText
+    throw new AiApiError(
+      `GET audio status failed (${response.status} ${response.statusText}): ${message}`,
+      response.status,
+      body
+    )
+  }
+  if (!response.body) {
+    return (await response.json()) as AudioOrderStatus
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  try {
+    while (buffer.length < STATUS_PREFIX_LIMIT) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      // Stop before pulling the inline base64 audio...
+      if (/"audio"\s*:\s*"/.test(buffer)) break
+      // ...but when the audio is null, keep reading to capture the note.
+      if (/"note"\s*:/.test(buffer)) break
+      if (/"status"\s*:\s*"[^"]*"/.test(buffer) && /}\s*$/.test(buffer.trim())) {
+        break
+      }
+    }
+  } finally {
+    reader.cancel().catch(() => {})
+  }
+
+  const status: AudioOrderStatus = { id: orderId }
+  const statusValue = extractJsonString(buffer, 'status')
+  if (statusValue) status.status = statusValue
+  const model = extractJsonString(buffer, 'model')
+  if (model) status.model = model
+  const mediaType = extractJsonString(buffer, 'media_type')
+  if (mediaType) status.media_type = mediaType
+  const note = extractJsonString(buffer, 'note')
+  if (note) status.note = note
+  const error = extractJsonString(buffer, 'error')
+  if (error) status.error = error
+  const settlementTxid = extractJsonString(buffer, 'settlement_txid')
+  if (settlementTxid) status.settlement_txid = settlementTxid
+  return status
+}
+
 async function pollOrderStatus(
   baseUrl: string,
   token: string,
   orderId: string,
   intervalMs: number,
-  timeoutMs: number
+  timeoutMs: number,
+  download = true
 ): Promise<AudioOrderStatus> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
-    const status = (await authedRequest(
-      baseUrl,
-      `/v1/audio/${encodeURIComponent(orderId)}/status`,
-      token
-    )) as AudioOrderStatus
+    const status = download
+      ? ((await authedRequest(
+          baseUrl,
+          `/v1/audio/${encodeURIComponent(orderId)}/status`,
+          token,
+          { method: 'GET' },
+          STATUS_REQUEST_TIMEOUT_MS
+        )) as AudioOrderStatus)
+      : await requestStatusMetadata(baseUrl, token, orderId)
 
     if (status.status === 'failed') {
       throw new Error(
@@ -360,12 +481,14 @@ async function pollOrderStatus(
         }.`
       )
     }
-    if (
-      (status.status === 'generation_complete' ||
-        status.status === 'completed') &&
-      status.audio
-    ) {
-      return status
+    if (isReadyStatus(status.status)) {
+      if (!download) return status
+      if (status.audio) return status
+      // Completed, but the inline audio is gone (already delivered via
+      // POST /confirm or past the cache TTL): terminal, not pending.
+      throw new Error(
+        status.note || 'Audio data has been delivered or expired.'
+      )
     }
     if (Date.now() >= deadline) {
       throw new Error(
@@ -416,6 +539,7 @@ export async function fulfillAudioOrder(
 ): Promise<GenerateAudioResult> {
   const isChipnet = Boolean(opts.isChipnet)
   const baseUrl = resolveBackendUrl(opts.backendUrl)
+  const deferDownload = Boolean(opts.deferDownload)
   const base: GenerateAudioResult = {
     success: false,
     paid: false,
@@ -502,7 +626,8 @@ export async function fulfillAudioOrder(
       token,
       quote.orderId,
       opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
-      opts.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS
+      opts.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS,
+      !deferDownload
     )
   } catch (err: any) {
     return {
@@ -510,6 +635,21 @@ export async function fulfillAudioOrder(
       error: `${
         err?.message || err
       } Payment already made (txid ${txid}); order ${quote.orderId}.`,
+    }
+  }
+
+  // Metadata-only mode: report readiness without pulling the audio or
+  // releasing the backend cache, so the CLI can download it later.
+  if (deferDownload) {
+    return {
+      ...paid,
+      success: true,
+      ready: true,
+      downloaded: false,
+      status: status.status,
+      model: status.model ?? quote.model,
+      mediaType: status.media_type,
+      note: status.note,
     }
   }
 
@@ -543,6 +683,7 @@ export async function fulfillAudioOrder(
     success: true,
     status: status.status,
     path: filePath,
+    model: status.model ?? quote.model,
     mediaType: status.media_type,
     base64: status.audio ?? undefined,
   }
@@ -577,12 +718,18 @@ export interface PollStatusOptions {
   backendUrl?: string
   pollIntervalMs?: number
   pollTimeoutMs?: number
+  /**
+   * When false, only fetch order metadata (no audio download/save and no cache
+   * release). Used by MCP to avoid transferring the inline audio.
+   */
+  download?: boolean
 }
 
 /**
  * Poll an existing audio order by ID until the audio is ready or the
  * deadline is reached. Mints a fresh OAuth token and saves the audio
- * to ~/.paytaca/audio when generation is complete.
+ * to ~/.paytaca/audio when generation is complete. With `download: false`
+ * it reports only readiness/metadata and leaves the audio for the CLI.
  */
 export async function getAudioOrderStatus(
   orderId: string,
@@ -590,6 +737,7 @@ export async function getAudioOrderStatus(
 ): Promise<GenerateAudioResult> {
   const isChipnet = Boolean(opts.isChipnet)
   const baseUrl = resolveBackendUrl(opts.backendUrl)
+  const download = opts.download !== false
   const base: GenerateAudioResult = {
     success: false,
     paid: true,
@@ -612,10 +760,24 @@ export async function getAudioOrderStatus(
       token,
       orderId,
       opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
-      opts.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS
+      opts.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS,
+      download
     )
   } catch (err: any) {
     return { ...base, error: err?.message || String(err) }
+  }
+
+  if (!download) {
+    return {
+      ...base,
+      success: true,
+      ready: true,
+      downloaded: false,
+      status: status.status,
+      model: status.model,
+      mediaType: status.media_type,
+      note: status.note,
+    }
   }
 
   let filePath: string
@@ -647,6 +809,7 @@ export async function getAudioOrderStatus(
     success: true,
     status: status.status,
     path: filePath,
+    model: status.model,
     mediaType: status.media_type,
     base64: status.audio ?? undefined,
   }

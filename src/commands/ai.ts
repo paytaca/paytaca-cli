@@ -41,6 +41,7 @@ import {
   listImageModels,
   getImageHistory,
   getImageOrderStatus,
+  isStillProcessing as isImageStillProcessing,
   createImageOrder,
   fulfillImageOrder,
   type ImageOrderQuote,
@@ -49,6 +50,7 @@ import {
   listVideoModels,
   getVideoHistory,
   getVideoOrderStatus,
+  isStillProcessing as isVideoStillProcessing,
   createVideoOrder,
   fulfillVideoOrder,
   type VideoOrderQuote,
@@ -57,6 +59,7 @@ import {
   listAudioModels,
   getAudioHistory,
   getAudioOrderStatus,
+  isStillProcessing as isAudioStillProcessing,
   createAudioOrder,
   fulfillAudioOrder,
   type AudioOrderQuote,
@@ -1266,10 +1269,11 @@ export function registerAiCommands(program: Command): void {
         if (result.success && result.path) {
           console.log(chalk.green(`\n   Image ready (order ${result.orderId}).`))
           console.log(`   Saved to: ${result.path}`)
-          console.log(chalk.dim(`   Model: ${result.model}`))
-          console.log(chalk.dim(`   Cost: ${result.amountSats} sats`))
-          console.log(chalk.dim(`   txid: ${result.txid}\n`))
-        } else if (result.paid && !result.success) {
+          if (result.model) console.log(chalk.dim(`   Model: ${result.model}`))
+          if (result.amountSats !== undefined) console.log(chalk.dim(`   Cost: ${result.amountSats} sats`))
+          if (result.txid) console.log(chalk.dim(`   txid: ${result.txid}`))
+          console.log()
+        } else if (isImageStillProcessing(result)) {
           console.log(chalk.yellow(`\n   Image generation is still processing (order ${result.orderId}).`))
           console.log(chalk.dim('   Try again in a few seconds.\n'))
         } else {
@@ -1530,10 +1534,11 @@ export function registerAiCommands(program: Command): void {
         if (result.success && result.path) {
           console.log(chalk.green(`\n   Video ready (order ${result.orderId}).`))
           console.log(`   Saved to: ${result.path}`)
-          console.log(chalk.dim(`   Model: ${result.model}`))
-          console.log(chalk.dim(`   Cost: ${result.amountSats} sats`))
-          console.log(chalk.dim(`   txid: ${result.txid}\n`))
-        } else if (result.paid && !result.success) {
+          if (result.model) console.log(chalk.dim(`   Model: ${result.model}`))
+          if (result.amountSats !== undefined) console.log(chalk.dim(`   Cost: ${result.amountSats} sats`))
+          if (result.txid) console.log(chalk.dim(`   txid: ${result.txid}`))
+          console.log()
+        } else if (isVideoStillProcessing(result)) {
           console.log(chalk.yellow(`\n   Video generation is still processing (order ${result.orderId}).`))
           console.log(chalk.dim('   Try again in a few seconds.\n'))
         } else {
@@ -1771,10 +1776,11 @@ export function registerAiCommands(program: Command): void {
         if (result.success && result.path) {
           console.log(chalk.green(`\n   Audio ready (order ${result.orderId}).`))
           console.log(`   Saved to: ${result.path}`)
-          console.log(chalk.dim(`   Model: ${result.model}`))
-          console.log(chalk.dim(`   Cost: ${result.amountSats} sats`))
-          console.log(chalk.dim(`   txid: ${result.txid}\n`))
-        } else if (result.paid && !result.success) {
+          if (result.model) console.log(chalk.dim(`   Model: ${result.model}`))
+          if (result.amountSats !== undefined) console.log(chalk.dim(`   Cost: ${result.amountSats} sats`))
+          if (result.txid) console.log(chalk.dim(`   txid: ${result.txid}`))
+          console.log()
+        } else if (isAudioStillProcessing(result)) {
           console.log(chalk.yellow(`\n   Audio generation is still processing (order ${result.orderId}).`))
           console.log(chalk.dim('   Try again in a few seconds.\n'))
         } else {
