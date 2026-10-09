@@ -7,7 +7,6 @@
  * ready, save it under ~/.paytaca/images, and release the one-shot cache.
  */
 
-import { mkdirSync, writeFileSync, chmodSync } from 'node:fs'
 import path from 'node:path'
 import { requireWallet, type WalletContext } from '../core/context.js'
 import { isValidBchAddress } from '../core/wallet.js'
@@ -18,6 +17,7 @@ import {
 } from './oauth.js'
 import { AiApiError } from './client.js'
 import { resolveBackendUrl, apiUrl, PAYTACA_DIR } from './config.js'
+import { downloadMedia } from './media-download.js'
 
 export const IMAGE_DIR = path.join(PAYTACA_DIR, 'images')
 
@@ -44,12 +44,17 @@ export interface ImageOrderQuote {
 export interface ImageOrderStatus {
   id?: string
   status?: string
-  image?: string | null
   media_type?: string
   model?: string
   error?: string
   settlement_txid?: string
   note?: string
+  /** True when the image bytes are still cached server-side and downloadable. */
+  ready?: boolean
+  /** Byte size of the cached image, when ready. */
+  size_bytes?: number
+  /** Backend path to stream the image from, when ready. */
+  content_path?: string
 }
 
 export interface ImageHistoryEntry {
@@ -129,7 +134,6 @@ export interface GenerateImageResult {
   status?: string
   path?: string
   mediaType?: string
-  base64?: string
   /** True when generation finished but the image was not downloaded here. */
   ready?: boolean
   /** False when the caller requested a metadata-only check (no download). */
@@ -140,11 +144,9 @@ export interface GenerateImageResult {
 }
 
 const REQUEST_TIMEOUT_MS = 30000
-// The status endpoint streams the whole image inline (can be many MB). This
-// must be far longer than REQUEST_TIMEOUT_MS so the download is not aborted.
-const STATUS_REQUEST_TIMEOUT_MS = 120000
-// Cap on how many leading bytes we buffer when reading status metadata only.
-const STATUS_PREFIX_LIMIT = 64 * 1024
+// The content endpoint streams the whole image (can be many MB), so the
+// download timeout must be far longer than other requests.
+const MEDIA_REQUEST_TIMEOUT_MS = 120000
 const DEFAULT_CONFIRM_ATTEMPTS = 5
 const DEFAULT_CONFIRM_SPACING_MS = 4000
 const DEFAULT_POLL_INTERVAL_MS = 3000
@@ -335,102 +337,16 @@ async function confirmPaymentWithRetry(
   throw lastError ?? new Error('Payment confirmation failed.')
 }
 
-function extractJsonString(text: string, key: string): string | undefined {
-  const match = text.match(
-    new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`)
-  )
-  if (!match) return undefined
-  try {
-    return JSON.parse(`"${match[1]}"`)
-  } catch {
-    return match[1]
-  }
-}
-
-/**
- * Read only the leading portion of the status response (id/status/prompt/model)
- * and abort before the multi-MB inline image is transferred. The backend read
- * is non-destructive, so this never consumes the cached image.
- */
-async function requestStatusMetadata(
-  baseUrl: string,
-  token: string,
-  orderId: string
-): Promise<ImageOrderStatus> {
-  let response: Response
-  try {
-    response = await fetch(
-      apiUrl(baseUrl, `/v1/images/${encodeURIComponent(orderId)}/status`),
-      {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(STATUS_REQUEST_TIMEOUT_MS),
-      }
-    )
-  } catch (err: any) {
-    throw new AiApiError(`Backend unreachable: ${err?.message || err}`)
-  }
-  if (!response.ok) {
-    const text = await response.text()
-    let body: any = text
-    try {
-      body = JSON.parse(text)
-    } catch {
-      // keep raw text
-    }
-    const message =
-      (body && typeof body === 'object' && (body.error || body.detail)) ||
-      (typeof body === 'string' && body) ||
-      response.statusText
-    throw new AiApiError(
-      `GET image status failed (${response.status} ${response.statusText}): ${message}`,
-      response.status,
-      body
-    )
-  }
-  if (!response.body) {
-    return (await response.json()) as ImageOrderStatus
-  }
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  try {
-    while (buffer.length < STATUS_PREFIX_LIMIT) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      // Stop before pulling the multi-MB inline base64 image...
-      if (/"image"\s*:\s*"/.test(buffer)) break
-      // ...but when the image is null, keep reading to capture the note.
-      if (/"note"\s*:/.test(buffer)) break
-      if (/"status"\s*:\s*"[^"]*"/.test(buffer) && /}\s*$/.test(buffer.trim())) {
-        break
-      }
-    }
-  } finally {
-    reader.cancel().catch(() => {})
-  }
-
-  const status: ImageOrderStatus = { id: orderId }
-  const statusValue = extractJsonString(buffer, 'status')
-  if (statusValue) status.status = statusValue
-  const model = extractJsonString(buffer, 'model')
-  if (model) status.model = model
-  const mediaType = extractJsonString(buffer, 'media_type')
-  if (mediaType) status.media_type = mediaType
-  const note = extractJsonString(buffer, 'note')
-  if (note) status.note = note
-  const error = extractJsonString(buffer, 'error')
-  if (error) status.error = error
-  const settlementTxid = extractJsonString(buffer, 'settlement_txid')
-  if (settlementTxid) status.settlement_txid = settlementTxid
-  return status
-}
-
 function isReadyStatus(status?: string): boolean {
   return status === 'generation_complete' || status === 'completed'
 }
 
+/**
+ * Poll the (metadata-only) status endpoint until the order is ready or the
+ * deadline is reached. Status responses no longer carry inline image bytes, so
+ * this is always a small JSON read; the bytes are streamed separately from the
+ * content endpoint when `download` is true.
+ */
 async function pollOrderStatus(
   baseUrl: string,
   token: string,
@@ -441,15 +357,11 @@ async function pollOrderStatus(
 ): Promise<ImageOrderStatus> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
-    const status = download
-      ? ((await authedRequest(
-          baseUrl,
-          `/v1/images/${encodeURIComponent(orderId)}/status`,
-          token,
-          { method: 'GET' },
-          STATUS_REQUEST_TIMEOUT_MS
-        )) as ImageOrderStatus)
-      : await requestStatusMetadata(baseUrl, token, orderId)
+    const status = (await authedRequest(
+      baseUrl,
+      `/v1/images/${encodeURIComponent(orderId)}/status`,
+      token
+    )) as ImageOrderStatus
 
     if (status.status === 'failed') {
       throw new Error(
@@ -466,14 +378,16 @@ async function pollOrderStatus(
       )
     }
     if (isReadyStatus(status.status)) {
-      // Metadata-only callers only need the status; they must not pull the image.
+      // Metadata-only callers only need the status; they must not download.
       if (!download) return status
-      if (status.image) return status
-      // Completed, but the inline image is gone (already delivered via
-      // POST /confirm or past the 10-minute cache TTL): terminal, not pending.
-      throw new Error(
-        status.note || 'Image data has been delivered or expired.'
-      )
+      // Completed, but the cached image is gone (already delivered via
+      // POST /confirm or past the cache TTL): terminal, not pending.
+      if (status.ready === false) {
+        throw new Error(
+          status.note || 'Image data has been delivered or expired.'
+        )
+      }
+      return status
     }
     if (Date.now() >= deadline) {
       throw new Error(
@@ -486,25 +400,10 @@ async function pollOrderStatus(
   }
 }
 
-function saveImage(orderId: string, mediaType: string, base64: string): string {
-  if (!ALLOWED_MEDIA_TYPES.has(mediaType)) {
-    throw new Error(`Backend returned an unsupported media type: ${mediaType}`)
-  }
-  if (typeof base64 !== 'string' || base64.length === 0) {
-    throw new Error('Backend returned an empty image payload.')
-  }
-  if (!/^[A-Za-z0-9+/=\r\n]+$/.test(base64)) {
-    throw new Error(
-      'Backend returned an image payload that is not valid base64.'
-    )
-  }
-  mkdirSync(IMAGE_DIR, { recursive: true })
-  const ext = MEDIA_TYPE_EXTENSIONS[mediaType]
-  const safeId = orderId.replace(/[^a-zA-Z0-9_-]/g, '')
-  const filePath = path.join(IMAGE_DIR, `${safeId}.${ext}`)
-  writeFileSync(filePath, Buffer.from(base64, 'base64'))
-  chmodSync(filePath, 0o600)
-  return filePath
+function imageContentPath(orderId: string, status: ImageOrderStatus): string {
+  return (
+    status.content_path ?? `/v1/images/${encodeURIComponent(orderId)}/content`
+  )
 }
 
 /**
@@ -632,15 +531,25 @@ export async function fulfillImageOrder(
     }
   }
 
-  let filePath: string
+  let media: { path: string; mediaType: string }
   try {
-    filePath = saveImage(quote.orderId, status.media_type ?? '', status.image ?? '')
+    media = await downloadMedia({
+      baseUrl,
+      token,
+      contentPath: imageContentPath(quote.orderId, status),
+      mediaType: status.media_type,
+      orderId: quote.orderId,
+      dir: IMAGE_DIR,
+      allowedMediaTypes: ALLOWED_MEDIA_TYPES,
+      extensionByMediaType: MEDIA_TYPE_EXTENSIONS,
+      defaultExtension: 'png',
+      timeoutMs: MEDIA_REQUEST_TIMEOUT_MS,
+    })
   } catch (err: any) {
     return {
       ...paid,
       status: status.status,
       mediaType: status.media_type,
-      base64: status.image ?? undefined,
       error: `${err?.message || err} The image was generated but could not be saved.`,
     }
   }
@@ -662,9 +571,8 @@ export async function fulfillImageOrder(
     success: true,
     downloaded: true,
     status: status.status,
-    path: filePath,
-    mediaType: status.media_type,
-    base64: status.image ?? undefined,
+    path: media.path,
+    mediaType: media.mediaType,
   }
 }
 
@@ -759,15 +667,25 @@ export async function getImageOrderStatus(
     }
   }
 
-  let filePath: string
+  let media: { path: string; mediaType: string }
   try {
-    filePath = saveImage(orderId, status.media_type ?? '', status.image ?? '')
+    media = await downloadMedia({
+      baseUrl,
+      token,
+      contentPath: imageContentPath(orderId, status),
+      mediaType: status.media_type,
+      orderId,
+      dir: IMAGE_DIR,
+      allowedMediaTypes: ALLOWED_MEDIA_TYPES,
+      extensionByMediaType: MEDIA_TYPE_EXTENSIONS,
+      defaultExtension: 'png',
+      timeoutMs: MEDIA_REQUEST_TIMEOUT_MS,
+    })
   } catch (err: any) {
     return {
       ...base,
       status: status.status,
       mediaType: status.media_type,
-      base64: status.image ?? undefined,
       error: `${err?.message || err} The image was generated but could not be saved.`,
     }
   }
@@ -788,9 +706,8 @@ export async function getImageOrderStatus(
     success: true,
     downloaded: true,
     status: status.status,
-    path: filePath,
+    path: media.path,
     model: status.model,
-    mediaType: status.media_type,
-    base64: status.image ?? undefined,
+    mediaType: media.mediaType,
   }
 }

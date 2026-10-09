@@ -1182,7 +1182,7 @@ export function registerAiCommands(program: Command): void {
       const result = await fulfillImageOrder(quote, orderOpts)
 
       if (json) {
-        outputJson({ ...result, base64: undefined })
+        outputJson(result)
         if (!result.success) process.exitCode = 1
         return
       }
@@ -1263,7 +1263,7 @@ export function registerAiCommands(program: Command): void {
           backendUrl: opts.backend,
         })
         if (opts.json) {
-          outputJson({ ...result, base64: undefined })
+          outputJson(result)
           return
         }
         if (result.success && result.path) {
@@ -1440,7 +1440,7 @@ export function registerAiCommands(program: Command): void {
       const result = await fulfillVideoOrder(quote, orderOpts)
 
       if (json) {
-        outputJson({ ...result, base64: undefined })
+        outputJson(result)
         if (!result.success) process.exitCode = 1
         return
       }
@@ -1528,7 +1528,7 @@ export function registerAiCommands(program: Command): void {
           backendUrl: opts.backend,
         })
         if (opts.json) {
-          outputJson({ ...result, base64: undefined })
+          outputJson(result)
           return
         }
         if (result.success && result.path) {
@@ -1683,7 +1683,7 @@ export function registerAiCommands(program: Command): void {
       const result = await fulfillAudioOrder(quote, orderOpts)
 
       if (json) {
-        outputJson({ ...result, base64: undefined })
+        outputJson(result)
         if (!result.success) process.exitCode = 1
         return
       }
@@ -1770,7 +1770,7 @@ export function registerAiCommands(program: Command): void {
           backendUrl: opts.backend,
         })
         if (opts.json) {
-          outputJson({ ...result, base64: undefined })
+          outputJson(result)
           return
         }
         if (result.success && result.path) {

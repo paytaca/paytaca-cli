@@ -56,20 +56,31 @@ function ctxFixture(overrides: Record<string, unknown> = {}) {
   }
 }
 
+type RouteResult = { status?: number; body?: unknown; response?: Response }
+
 function route(
   handler: (
     url: string,
     init?: { method?: string; body?: string; headers?: Record<string, string> }
-  ) => { status?: number; body?: unknown } | undefined
+  ) => RouteResult | undefined
 ): void {
   fetchMock.mockImplementation(async (url: any, init?: any) => {
     const result = handler(String(url), init)
     if (!result) {
       throw new Error(`unexpected fetch: ${init?.method ?? 'GET'} ${String(url)}`)
     }
+    if (result.response) return result.response
     return new Response(JSON.stringify(result.body ?? {}), {
       status: result.status ?? 200,
     })
+  })
+}
+
+/** A raw binary response, as served by the streaming /content endpoint. */
+function contentResponse(bytes: Uint8Array, mediaType: string): Response {
+  return new Response(bytes as unknown as BodyInit, {
+    status: 200,
+    headers: { 'content-type': mediaType },
   })
 }
 
@@ -205,7 +216,11 @@ describe('fulfillImageOrder', () => {
     const confirmResponses = opts.confirmResponses ?? [200]
     const statusBodies = opts.statusBodies ?? [
       { status: 'processing' },
-      { status: 'generation_complete', image: 'aGk=', media_type: 'image/png' },
+      {
+        status: 'generation_complete',
+        media_type: 'image/png',
+        ready: true,
+      },
     ]
     let confirmIndex = 0
     let statusIndex = 0
@@ -216,6 +231,9 @@ describe('fulfillImageOrder', () => {
       }
       if (url.includes('/status')) {
         return { body: statusBodies[statusIndex++] ?? statusBodies.at(-1) }
+      }
+      if (url.includes('/content')) {
+        return { response: contentResponse(Buffer.from('hi'), 'image/png') }
       }
       if (url.endsWith('/confirm')) {
         return { body: { ok: true } }
@@ -234,7 +252,6 @@ describe('fulfillImageOrder', () => {
     expect(result.paid).toBe(true)
     expect(result.txid).toBe('txid-1')
     expect(result.path).toContain('order-1.png')
-    expect(result.base64).toBe('aGk=')
     expect(ctx.bch.sendBch).toHaveBeenCalledWith(
       1500 / 1e8,
       QUOTE.contractAddress,
@@ -242,7 +259,7 @@ describe('fulfillImageOrder', () => {
     )
     expect(mocks.writeFileSync).toHaveBeenCalledWith(
       expect.stringContaining('order-1.png'),
-      Buffer.from('aGk=', 'base64')
+      Buffer.from('hi')
     )
     expect(mocks.chmodSync).toHaveBeenCalledWith(
       expect.stringContaining('order-1.png'),
@@ -281,11 +298,14 @@ describe('fulfillImageOrder', () => {
         return new Response(
           JSON.stringify({
             status: 'generation_complete',
-            image: 'aGk=',
             media_type: 'image/png',
+            ready: true,
           }),
           { status: 200 }
         )
+      }
+      if (u.includes('/content')) {
+        return contentResponse(Buffer.from('hi'), 'image/png')
       }
       if (u.endsWith('/confirm')) {
         return new Response(JSON.stringify({ ok: true }), { status: 200 })
@@ -383,14 +403,17 @@ describe('fulfillImageOrder', () => {
     mocks.requireWallet.mockReturnValue(ctxFixture())
     happyRoute({
       statusBodies: [
-        { status: 'generation_complete', image: 'aGk=', media_type: 'image/tiff' },
+        {
+          status: 'generation_complete',
+          media_type: 'image/tiff',
+          ready: true,
+        },
       ],
     })
 
     const result = await fulfillImageOrder(QUOTE, timing)
     expect(result.success).toBe(false)
     expect(result.paid).toBe(true)
-    expect(result.base64).toBe('aGk=')
     expect(result.error).toMatch(/unsupported media type/)
     expect(mocks.writeFileSync).not.toHaveBeenCalled()
   })
@@ -402,7 +425,7 @@ describe('fulfillImageOrder', () => {
         { status: 'processing' },
         {
           status: 'completed',
-          image: null,
+          ready: false,
           note: 'Image data has been delivered or expired',
         },
       ],
@@ -422,8 +445,8 @@ describe('fulfillImageOrder', () => {
         { status: 'processing' },
         {
           status: 'generation_complete',
-          image: 'aGk=',
           media_type: 'image/png',
+          ready: true,
           model: 'nano-banana',
         },
       ],
@@ -457,10 +480,13 @@ describe('generateImage', () => {
         return {
           body: {
             status: 'generation_complete',
-            image: 'aGk=',
             media_type: 'image/png',
+            ready: true,
           },
         }
+      }
+      if (url.includes('/content')) {
+        return { response: contentResponse(Buffer.from('hi'), 'image/png') }
       }
       if (url.endsWith('/confirm')) {
         return { body: { ok: true } }
@@ -546,6 +572,9 @@ describe('getImageOrderStatus', () => {
   function pollRoute(statusBody: unknown) {
     route((url) => {
       if (url.includes('/status')) return { body: statusBody }
+      if (url.includes('/content')) {
+        return { response: contentResponse(Buffer.from('hi'), 'image/png') }
+      }
       if (url.endsWith('/confirm')) return { body: { ok: true } }
     })
   }
@@ -554,18 +583,17 @@ describe('getImageOrderStatus', () => {
     mocks.requireWallet.mockReturnValue(ctxFixture())
     pollRoute({
       status: 'generation_complete',
-      image: 'aGk=',
       media_type: 'image/png',
+      ready: true,
     })
 
     const result = await getImageOrderStatus('order-1', timing)
     expect(result.success).toBe(true)
     expect(result.orderId).toBe('order-1')
     expect(result.path).toContain('order-1.png')
-    expect(result.base64).toBe('aGk=')
     expect(mocks.writeFileSync).toHaveBeenCalledWith(
       expect.stringContaining('order-1.png'),
-      Buffer.from('aGk=', 'base64')
+      Buffer.from('hi')
     )
   })
 
@@ -605,7 +633,7 @@ describe('getImageOrderStatus', () => {
     mocks.requireWallet.mockReturnValue(ctxFixture())
     pollRoute({
       status: 'completed',
-      image: null,
+      ready: false,
       note: 'Image data has been delivered or expired',
     })
 
@@ -620,8 +648,8 @@ describe('getImageOrderStatus', () => {
     mocks.requireWallet.mockReturnValue(ctxFixture())
     pollRoute({
       status: 'generation_complete',
-      image: 'aGk=',
       media_type: 'image/png',
+      ready: true,
       model: 'nano-banana',
     })
 
@@ -642,7 +670,7 @@ describe('getImageOrderStatus', () => {
     mocks.requireWallet.mockReturnValue(ctxFixture())
     pollRoute({
       status: 'completed',
-      image: null,
+      ready: false,
       note: 'Image data has been delivered or expired',
     })
 

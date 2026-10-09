@@ -8,7 +8,6 @@
  * cache.
  */
 
-import { mkdirSync, writeFileSync, chmodSync } from 'node:fs'
 import path from 'node:path'
 import { requireWallet, type WalletContext } from '../core/context.js'
 import { isValidBchAddress } from '../core/wallet.js'
@@ -19,6 +18,7 @@ import {
 } from './oauth.js'
 import { AiApiError } from './client.js'
 import { resolveBackendUrl, apiUrl, PAYTACA_DIR } from './config.js'
+import { downloadMedia } from './media-download.js'
 
 export const VIDEO_DIR = path.join(PAYTACA_DIR, 'videos')
 
@@ -61,12 +61,17 @@ export interface VideoOrderQuote {
 export interface VideoOrderStatus {
   id?: string
   status?: string
-  video?: string | null
   media_type?: string
   model?: string
   error?: string
   settlement_txid?: string
   note?: string
+  /** True when the video bytes are still cached server-side and downloadable. */
+  ready?: boolean
+  /** Byte size of the cached video, when ready. */
+  size_bytes?: number
+  /** Backend path to stream the video from, when ready. */
+  content_path?: string
 }
 
 export interface VideoHistoryEntry {
@@ -149,7 +154,6 @@ export interface GenerateVideoResult {
   status?: string
   path?: string
   mediaType?: string
-  base64?: string
   /** True when generation finished but the video was not downloaded here. */
   ready?: boolean
   /** False when the caller requested a metadata-only check (no download). */
@@ -160,11 +164,9 @@ export interface GenerateVideoResult {
 }
 
 const REQUEST_TIMEOUT_MS = 30000
-// The status endpoint streams the whole video inline (many MB). This must be
-// far longer than REQUEST_TIMEOUT_MS so the download is not aborted.
-const STATUS_REQUEST_TIMEOUT_MS = 300000
-// Cap on how many leading bytes we buffer when reading status metadata only.
-const STATUS_PREFIX_LIMIT = 64 * 1024
+// The content endpoint streams the whole video (many MB), so the download
+// timeout must be far longer than other requests.
+const MEDIA_REQUEST_TIMEOUT_MS = 600000
 const DEFAULT_CONFIRM_ATTEMPTS = 5
 const DEFAULT_CONFIRM_SPACING_MS = 4000
 const DEFAULT_POLL_INTERVAL_MS = 5000
@@ -361,102 +363,16 @@ async function confirmPaymentWithRetry(
   throw lastError ?? new Error('Payment confirmation failed.')
 }
 
-function extractJsonString(text: string, key: string): string | undefined {
-  const match = text.match(
-    new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`)
-  )
-  if (!match) return undefined
-  try {
-    return JSON.parse(`"${match[1]}"`)
-  } catch {
-    return match[1]
-  }
-}
-
 function isReadyStatus(status?: string): boolean {
   return status === 'generation_complete' || status === 'completed'
 }
 
 /**
- * Read only the leading portion of the status response (id/status/prompt/model)
- * and abort before the multi-MB inline video is transferred. The backend read
- * is non-destructive, so this never consumes the cached video.
+ * Poll the (metadata-only) status endpoint until the order is ready or the
+ * deadline is reached. Status responses no longer carry inline video bytes, so
+ * this is always a small JSON read; the bytes are streamed separately from the
+ * content endpoint when `download` is true.
  */
-async function requestStatusMetadata(
-  baseUrl: string,
-  token: string,
-  orderId: string
-): Promise<VideoOrderStatus> {
-  let response: Response
-  try {
-    response = await fetch(
-      apiUrl(baseUrl, `/v1/video/${encodeURIComponent(orderId)}/status`),
-      {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(STATUS_REQUEST_TIMEOUT_MS),
-      }
-    )
-  } catch (err: any) {
-    throw new AiApiError(`Backend unreachable: ${err?.message || err}`)
-  }
-  if (!response.ok) {
-    const text = await response.text()
-    let body: any = text
-    try {
-      body = JSON.parse(text)
-    } catch {
-      // keep raw text
-    }
-    const message =
-      (body && typeof body === 'object' && (body.error || body.detail)) ||
-      (typeof body === 'string' && body) ||
-      response.statusText
-    throw new AiApiError(
-      `GET video status failed (${response.status} ${response.statusText}): ${message}`,
-      response.status,
-      body
-    )
-  }
-  if (!response.body) {
-    return (await response.json()) as VideoOrderStatus
-  }
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  try {
-    while (buffer.length < STATUS_PREFIX_LIMIT) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      // Stop before pulling the multi-MB inline base64 video...
-      if (/"video"\s*:\s*"/.test(buffer)) break
-      // ...but when the video is null, keep reading to capture the note.
-      if (/"note"\s*:/.test(buffer)) break
-      if (/"status"\s*:\s*"[^"]*"/.test(buffer) && /}\s*$/.test(buffer.trim())) {
-        break
-      }
-    }
-  } finally {
-    reader.cancel().catch(() => {})
-  }
-
-  const status: VideoOrderStatus = { id: orderId }
-  const statusValue = extractJsonString(buffer, 'status')
-  if (statusValue) status.status = statusValue
-  const model = extractJsonString(buffer, 'model')
-  if (model) status.model = model
-  const mediaType = extractJsonString(buffer, 'media_type')
-  if (mediaType) status.media_type = mediaType
-  const note = extractJsonString(buffer, 'note')
-  if (note) status.note = note
-  const error = extractJsonString(buffer, 'error')
-  if (error) status.error = error
-  const settlementTxid = extractJsonString(buffer, 'settlement_txid')
-  if (settlementTxid) status.settlement_txid = settlementTxid
-  return status
-}
-
 async function pollOrderStatus(
   baseUrl: string,
   token: string,
@@ -467,15 +383,11 @@ async function pollOrderStatus(
 ): Promise<VideoOrderStatus> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
-    const status = download
-      ? ((await authedRequest(
-          baseUrl,
-          `/v1/video/${encodeURIComponent(orderId)}/status`,
-          token,
-          { method: 'GET' },
-          STATUS_REQUEST_TIMEOUT_MS
-        )) as VideoOrderStatus)
-      : await requestStatusMetadata(baseUrl, token, orderId)
+    const status = (await authedRequest(
+      baseUrl,
+      `/v1/video/${encodeURIComponent(orderId)}/status`,
+      token
+    )) as VideoOrderStatus
 
     if (status.status === 'failed') {
       throw new Error(
@@ -493,12 +405,14 @@ async function pollOrderStatus(
     }
     if (isReadyStatus(status.status)) {
       if (!download) return status
-      if (status.video) return status
-      // Completed, but the inline video is gone (already delivered via
+      // Completed, but the cached video is gone (already delivered via
       // POST /confirm or past the cache TTL): terminal, not pending.
-      throw new Error(
-        status.note || 'Video data has been delivered or expired.'
-      )
+      if (status.ready === false) {
+        throw new Error(
+          status.note || 'Video data has been delivered or expired.'
+        )
+      }
+      return status
     }
     if (Date.now() >= deadline) {
       throw new Error(
@@ -511,25 +425,10 @@ async function pollOrderStatus(
   }
 }
 
-function saveVideo(orderId: string, mediaType: string, base64: string): string {
-  if (!ALLOWED_MEDIA_TYPES.has(mediaType)) {
-    throw new Error(`Backend returned an unsupported media type: ${mediaType}`)
-  }
-  if (typeof base64 !== 'string' || base64.length === 0) {
-    throw new Error('Backend returned an empty video payload.')
-  }
-  if (!/^[A-Za-z0-9+/=\r\n]+$/.test(base64)) {
-    throw new Error(
-      'Backend returned a video payload that is not valid base64.'
-    )
-  }
-  mkdirSync(VIDEO_DIR, { recursive: true })
-  const ext = VIDEO_MEDIA_TYPE_EXTENSIONS[mediaType]
-  const safeId = orderId.replace(/[^a-zA-Z0-9_-]/g, '')
-  const filePath = path.join(VIDEO_DIR, `${safeId}.${ext}`)
-  writeFileSync(filePath, Buffer.from(base64, 'base64'))
-  chmodSync(filePath, 0o600)
-  return filePath
+function videoContentPath(orderId: string, status: VideoOrderStatus): string {
+  return (
+    status.content_path ?? `/v1/video/${encodeURIComponent(orderId)}/content`
+  )
 }
 
 /**
@@ -656,15 +555,25 @@ export async function fulfillVideoOrder(
     }
   }
 
-  let filePath: string
+  let media: { path: string; mediaType: string }
   try {
-    filePath = saveVideo(quote.orderId, status.media_type ?? '', status.video ?? '')
+    media = await downloadMedia({
+      baseUrl,
+      token,
+      contentPath: videoContentPath(quote.orderId, status),
+      mediaType: status.media_type,
+      orderId: quote.orderId,
+      dir: VIDEO_DIR,
+      allowedMediaTypes: ALLOWED_MEDIA_TYPES,
+      extensionByMediaType: VIDEO_MEDIA_TYPE_EXTENSIONS,
+      defaultExtension: 'mp4',
+      timeoutMs: MEDIA_REQUEST_TIMEOUT_MS,
+    })
   } catch (err: any) {
     return {
       ...paid,
       status: status.status,
       mediaType: status.media_type,
-      base64: status.video ?? undefined,
       error: `${err?.message || err} The video was generated but could not be saved.`,
     }
   }
@@ -685,10 +594,9 @@ export async function fulfillVideoOrder(
     ...paid,
     success: true,
     status: status.status,
-    path: filePath,
+    path: media.path,
     model: status.model ?? quote.model,
-    mediaType: status.media_type,
-    base64: status.video ?? undefined,
+    mediaType: media.mediaType,
   }
 }
 
@@ -783,15 +691,25 @@ export async function getVideoOrderStatus(
     }
   }
 
-  let filePath: string
+  let media: { path: string; mediaType: string }
   try {
-    filePath = saveVideo(orderId, status.media_type ?? '', status.video ?? '')
+    media = await downloadMedia({
+      baseUrl,
+      token,
+      contentPath: videoContentPath(orderId, status),
+      mediaType: status.media_type,
+      orderId,
+      dir: VIDEO_DIR,
+      allowedMediaTypes: ALLOWED_MEDIA_TYPES,
+      extensionByMediaType: VIDEO_MEDIA_TYPE_EXTENSIONS,
+      defaultExtension: 'mp4',
+      timeoutMs: MEDIA_REQUEST_TIMEOUT_MS,
+    })
   } catch (err: any) {
     return {
       ...base,
       status: status.status,
       mediaType: status.media_type,
-      base64: status.video ?? undefined,
       error: `${err?.message || err} The video was generated but could not be saved.`,
     }
   }
@@ -811,9 +729,8 @@ export async function getVideoOrderStatus(
     ...base,
     success: true,
     status: status.status,
-    path: filePath,
+    path: media.path,
     model: status.model,
-    mediaType: status.media_type,
-    base64: status.video ?? undefined,
+    mediaType: media.mediaType,
   }
 }
