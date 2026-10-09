@@ -8,6 +8,7 @@
  */
 
 import path from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
 import { requireWallet, type WalletContext } from '../core/context.js'
 import { isValidBchAddress } from '../core/wallet.js'
 import {
@@ -20,6 +21,42 @@ import { resolveBackendUrl, apiUrl, PAYTACA_DIR } from './config.js'
 import { downloadMedia, fetchMedia, type FetchedMedia } from './media-download.js'
 
 export const IMAGE_DIR = path.join(PAYTACA_DIR, 'images')
+
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.bmp': 'image/bmp',
+}
+
+/**
+ * Turn an image reference (an http(s) URL, a data:image/... URL, or a local
+ * file path) into a URL the backend accepts. Local files are read and encoded
+ * as base64 data URLs.
+ */
+export function resolveImageReference(ref: string): string {
+  const value = String(ref || '').trim()
+  if (!value) throw new Error('Empty image reference.')
+  if (
+    value.startsWith('data:image/') ||
+    value.startsWith('http://') ||
+    value.startsWith('https://')
+  ) {
+    return value
+  }
+  if (!existsSync(value)) {
+    throw new Error(`Image reference not found: ${value}`)
+  }
+  const ext = path.extname(value).toLowerCase()
+  const mime = IMAGE_MIME_BY_EXT[ext]
+  if (!mime) {
+    throw new Error(`Unsupported image reference type: ${ext || value}`)
+  }
+  const b64 = readFileSync(value).toString('base64')
+  return `data:${mime};base64,${b64}`
+}
 
 export interface ImageModel {
   id: string
@@ -99,6 +136,8 @@ export interface CreateImageOrderOptions {
   aspectRatio?: string
   quality?: string
   resolution?: string
+  /** Reference images (http(s)/data URLs or local file paths) to condition on. */
+  inputReferences?: string[]
   isChipnet?: boolean
   backendUrl?: string
 }
@@ -277,7 +316,7 @@ export async function createImageOrder(
   const token = await mintAccessToken(ctx, baseUrl)
 
   const addresses = ctx.bch.getAddressSetAt(0)
-  const body: Record<string, string> = {
+  const body: Record<string, unknown> = {
     prompt,
     refund_address: addresses.receiving,
   }
@@ -285,6 +324,9 @@ export async function createImageOrder(
   if (opts.aspectRatio) body.aspect_ratio = opts.aspectRatio
   if (opts.quality) body.quality = opts.quality
   if (opts.resolution) body.resolution = opts.resolution
+  if (opts.inputReferences && opts.inputReferences.length > 0) {
+    body.input_references = opts.inputReferences.map(resolveImageReference)
+  }
 
   const order = await authedRequest(baseUrl, '/v1/images', token, {
     method: 'POST',

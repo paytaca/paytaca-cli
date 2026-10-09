@@ -1342,13 +1342,19 @@ export function registerTools(
     {
       title: 'Generate an image',
       description:
-        'Generate an image from a text prompt with a Paytaca AI image model. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). Returns metadata only (no image bytes); download the image from the command line with `paytaca ai image status <order_id>`. The MCP host must obtain user approval before calling this.',
+        'Generate an image from a text prompt with a Paytaca AI image model. Optionally pass input_references (image URLs) to edit, remix, or compose from existing images. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). Returns metadata only (no image bytes); download the image from the command line with `paytaca ai image status <order_id>`. The MCP host must obtain user approval before calling this.',
       inputSchema: {
         prompt: z.string().min(1),
         model: z.string().optional(),
         aspect_ratio: z.string().optional(),
         quality: z.string().optional(),
         resolution: z.string().optional(),
+        input_references: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Reference images to condition on (http(s) or data:image URLs). Only models advertising input_references support these; describe the order of people/objects in the prompt.'
+          ),
         chipnet: z.boolean().optional(),
         backend: z.string().optional(),
       },
@@ -1359,7 +1365,7 @@ export function registerTools(
         openWorldHint: true,
       },
     },
-    async ({ prompt, model, aspect_ratio, quality, resolution, chipnet, backend }) => {
+    async ({ prompt, model, aspect_ratio, quality, resolution, input_references, chipnet, backend }) => {
       try {
         const result = await generateImage({
           prompt,
@@ -1367,6 +1373,7 @@ export function registerTools(
           aspectRatio: aspect_ratio,
           quality,
           resolution,
+          inputReferences: input_references,
           isChipnet: cn(chipnet),
           backendUrl: backend,
           deferDownload: true,

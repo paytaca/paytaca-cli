@@ -7,6 +7,7 @@ import {
   generateImage,
   isStillProcessing,
   getImageOrderStatus,
+  resolveImageReference,
   type ImageOrderQuote,
 } from './images.js'
 
@@ -19,6 +20,8 @@ const mocks = vi.hoisted(() => ({
   mkdirSync: vi.fn(),
   writeFileSync: vi.fn(),
   chmodSync: vi.fn(),
+  existsSync: vi.fn(),
+  readFileSync: vi.fn(),
 }))
 
 vi.mock('../core/context.js', () => ({ requireWallet: mocks.requireWallet }))
@@ -32,6 +35,8 @@ vi.mock('node:fs', () => ({
   mkdirSync: mocks.mkdirSync,
   writeFileSync: mocks.writeFileSync,
   chmodSync: mocks.chmodSync,
+  existsSync: mocks.existsSync,
+  readFileSync: mocks.readFileSync,
 }))
 
 const fetchMock = vi.fn()
@@ -188,6 +193,34 @@ describe('createImageOrder', () => {
     expect(quote).toEqual(QUOTE)
   })
 
+  it('sends input_references for reference-image generation', async () => {
+    route((url, init) => {
+      if (url.endsWith('/v1/images') && init?.method === 'POST') {
+        const body = JSON.parse(init?.body ?? '{}')
+        expect(body.input_references).toEqual([
+          'https://example.com/me.png',
+          'data:image/png;base64,AAAA',
+        ])
+        return { status: 201, body: ORDER_RESPONSE }
+      }
+    })
+    await createImageOrder({
+      prompt: 'two people together',
+      inputReferences: ['https://example.com/me.png', 'data:image/png;base64,AAAA'],
+    })
+  })
+
+  it('omits input_references when none are given', async () => {
+    route((url, init) => {
+      if (url.endsWith('/v1/images') && init?.method === 'POST') {
+        const body = JSON.parse(init?.body ?? '{}')
+        expect(body.input_references).toBeUndefined()
+        return { status: 201, body: ORDER_RESPONSE }
+      }
+    })
+    await createImageOrder({ prompt: 'a cat' })
+  })
+
   it('rejects an empty prompt before any request', async () => {
     const ctx = ctxFixture()
     mocks.requireWallet.mockReturnValue(ctx)
@@ -205,6 +238,47 @@ describe('createImageOrder', () => {
     })
     await expect(createImageOrder({ prompt: 'a cat' })).rejects.toThrow(
       /Malformed image order/
+    )
+  })
+})
+
+describe('resolveImageReference', () => {
+  beforeEach(() => {
+    mocks.existsSync.mockReturnValue(false)
+    mocks.readFileSync.mockReset()
+  })
+
+  it('passes through http(s) and data URLs unchanged', () => {
+    expect(resolveImageReference('https://example.com/me.png')).toBe(
+      'https://example.com/me.png'
+    )
+    expect(resolveImageReference('http://example.com/me.png')).toBe(
+      'http://example.com/me.png'
+    )
+    expect(resolveImageReference('data:image/png;base64,AAAA')).toBe(
+      'data:image/png;base64,AAAA'
+    )
+  })
+
+  it('encodes a local file as a base64 data URL', () => {
+    mocks.existsSync.mockReturnValue(true)
+    mocks.readFileSync.mockReturnValue(Buffer.from([1, 2, 3]))
+    expect(resolveImageReference('/tmp/me.jpg')).toBe(
+      `data:image/jpeg;base64,${Buffer.from([1, 2, 3]).toString('base64')}`
+    )
+  })
+
+  it('throws for a missing file', () => {
+    mocks.existsSync.mockReturnValue(false)
+    expect(() => resolveImageReference('/tmp/nope.png')).toThrow(
+      'Image reference not found'
+    )
+  })
+
+  it('throws for an unsupported extension', () => {
+    mocks.existsSync.mockReturnValue(true)
+    expect(() => resolveImageReference('/tmp/me.txt')).toThrow(
+      'Unsupported image reference type'
     )
   })
 })

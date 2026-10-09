@@ -83,6 +83,10 @@ import {
 import { createRefillTickDeps } from '../mcp/tools.js'
 
 
+function collectRepeatable(value: string, previous: string[] = []): string[] {
+  return previous.concat(value)
+}
+
 function formatTickResult(tick: RefillTickResult): string {
   switch (tick.action) {
     case 'refilled':
@@ -1124,6 +1128,12 @@ export function registerAiCommands(program: Command): void {
     .option('--aspect-ratio <ratio>', 'Aspect ratio, e.g. 1:1, 16:9', '1:1')
     .option('--quality <quality>', 'Image quality: low, medium, high, auto', 'auto')
     .option('--resolution <resolution>', 'Resolution: 512, 1K, 2K, 4K', '1K')
+    .option(
+      '--input-reference <ref>',
+      'Reference image (repeatable): URL, data URL, or local file path',
+      collectRepeatable,
+      []
+    )
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .option('--backend <url>', 'Override backend URL')
     .option('-y, --yes', 'Skip confirmation prompt')
@@ -1136,6 +1146,7 @@ export function registerAiCommands(program: Command): void {
         aspectRatio: opts.aspectRatio,
         quality: opts.quality,
         resolution: opts.resolution,
+        inputReferences: opts.inputReference,
         isChipnet: Boolean(opts.chipnet),
         backendUrl: opts.backend,
       }

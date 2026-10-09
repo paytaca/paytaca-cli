@@ -266,6 +266,34 @@ describe('MCP tools', () => {
       })
     })
 
+    it('passes input_references through for reference-image generation', async () => {
+      mocks.generateImage.mockResolvedValue({
+        success: true,
+        paid: true,
+        ready: true,
+        downloaded: false,
+        orderId: 'order-2',
+        model: 'seedream',
+        amountSats: 1000,
+        txid: 'txid-2',
+        status: 'generation_complete',
+        mediaType: 'image/png',
+      })
+      const c = await connect()
+      await c.callTool({
+        name: 'generate_image',
+        arguments: {
+          prompt: 'two people together',
+          input_references: ['https://a/x.png', 'https://b/y.png'],
+        },
+      })
+      expect(mocks.generateImage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inputReferences: ['https://a/x.png', 'https://b/y.png'],
+        })
+      )
+    })
+
     it('returns an error result when generation fails', async () => {
       mocks.generateImage.mockResolvedValue({
         success: false,
