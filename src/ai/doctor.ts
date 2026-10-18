@@ -27,6 +27,13 @@ export interface DoctorCheck {
   status: DoctorStatus
   detail: string
   fix?: string
+  /**
+   * Machine-applicable remedy, used by `ai doctor --fix`. `configure` re-runs
+   * `paytaca ai configure`, which installs or replaces the harness credential
+   * (missing / invalid / mismatched key) and clears stale OpenCode credentials.
+   * Checks that spend money or need a human carry no `autoFix`.
+   */
+  autoFix?: 'configure'
 }
 
 export interface DoctorContext {
@@ -109,6 +116,7 @@ export function buildDoctorChecks(ctx: DoctorContext): DoctorCheck[] {
       status: 'fail',
       detail: `No Paytaca API key in the ${ctx.harness} config.`,
       fix: `paytaca ai configure ${ctx.harness}`,
+      autoFix: 'configure',
     })
   } else {
     checks.push({
@@ -124,6 +132,7 @@ export function buildDoctorChecks(ctx: DoctorContext): DoctorCheck[] {
         status: 'fail',
         detail: 'The backend rejected the key with "401 Invalid API key".',
         fix: `paytaca ai configure ${ctx.harness}`,
+        autoFix: 'configure',
       })
     } else if (ctx.keyIdentity === 'mismatch') {
       checks.push({
@@ -133,6 +142,7 @@ export function buildDoctorChecks(ctx: DoctorContext): DoctorCheck[] {
         detail:
           'The key belongs to a different wallet than the one holding your credits — the harness sees no plan and falls back to x402.',
         fix: `paytaca ai configure ${ctx.harness}`,
+        autoFix: 'configure',
       })
     } else if (ctx.keyIdentity === 'match') {
       checks.push({
@@ -160,6 +170,7 @@ export function buildDoctorChecks(ctx: DoctorContext): DoctorCheck[] {
             status: 'warn',
             detail: `${ctx.staleCredentials} stored OpenCode credential(s) differ from the configured key and can shadow it.`,
             fix: `paytaca ai configure ${ctx.harness}`,
+            autoFix: 'configure',
           }
         : {
             id: 'stale-credentials',
@@ -203,4 +214,13 @@ export function summarizeDoctor(checks: DoctorCheck[]): DoctorStatus {
   if (checks.some((c) => c.status === 'fail')) return 'fail'
   if (checks.some((c) => c.status === 'warn')) return 'warn'
   return 'ok'
+}
+
+/**
+ * Checks that `ai doctor --fix` can repair by itself. Everything else either
+ * spends money (`ai purchase` / `ai topup`) or needs a human (create or import
+ * a wallet), so it is only ever suggested.
+ */
+export function fixableChecks(checks: DoctorCheck[]): DoctorCheck[] {
+  return checks.filter((c) => c.autoFix === 'configure')
 }

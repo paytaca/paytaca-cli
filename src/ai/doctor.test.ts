@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import type { WalletStatus } from './client.js'
-import { buildDoctorChecks, summarizeDoctor, type DoctorContext } from './doctor.js'
+import {
+  buildDoctorChecks,
+  fixableChecks,
+  summarizeDoctor,
+  type DoctorContext,
+} from './doctor.js'
 
 function status(sessions: Partial<WalletStatus>[]): WalletStatus {
   return { sessions } as unknown as WalletStatus
@@ -113,6 +118,39 @@ describe('buildDoctorChecks', () => {
       context({ walletStatus: null, walletStatusError: 'Backend unreachable' })
     )
     expect(find(checks, 'credits')?.status).toBe('warn')
+  })
+})
+
+describe('fixableChecks', () => {
+  it('offers a configure fix for credential problems', () => {
+    const missing = buildDoctorChecks(context({ apiKey: null, apiKeyPrefix: null }))
+    expect(fixableChecks(missing).map((c) => c.id)).toEqual(['api-key'])
+
+    const invalid = buildDoctorChecks(context({ keyIdentity: 'invalid' }))
+    expect(fixableChecks(invalid).map((c) => c.id)).toEqual(['api-key-identity'])
+
+    const mismatch = buildDoctorChecks(context({ keyIdentity: 'mismatch' }))
+    expect(fixableChecks(mismatch).map((c) => c.id)).toEqual(['api-key-identity'])
+
+    const stale = buildDoctorChecks(context({ staleCredentials: 2 }))
+    expect(fixableChecks(stale).map((c) => c.id)).toEqual(['stale-credentials'])
+  })
+
+  it('does not auto-fix problems that spend money or need a human', () => {
+    const noWallet = buildDoctorChecks(
+      context({ walletConfigured: false, walletStatus: null })
+    )
+    expect(fixableChecks(noWallet)).toHaveLength(0)
+
+    const noCredits = buildDoctorChecks(context({ walletStatus: status([]) }))
+    expect(fixableChecks(noCredits)).toHaveLength(0)
+
+    const missingModel = buildDoctorChecks(context({ modelId: 'z-ai/glm-5.3-flash' }))
+    expect(fixableChecks(missingModel)).toHaveLength(0)
+  })
+
+  it('finds nothing to fix in a healthy configuration', () => {
+    expect(fixableChecks(buildDoctorChecks(context()))).toHaveLength(0)
   })
 })
 

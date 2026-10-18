@@ -195,10 +195,13 @@ If a model fails inside a harness — most commonly a `402` (`PAYMENT-SIGNATURE 
 ```bash
 paytaca ai doctor opencode                    # Harness defaults to opencode
 paytaca ai doctor opencode --model <id>       # Also check a specific model
+paytaca ai doctor opencode --fix              # Diagnose, then repair credential issues
 paytaca ai doctor opencode --json             # Machine-readable report
 ```
 
 `ai doctor` compares the credits the *active wallet* holds (`paytaca ai credits`) with the wallet the *configured API key* resolves to, and flags the common causes: no wallet, no API key, an invalid key, a key left over from a different wallet, stale OpenCode stored credentials, and a model with no plan or pay-as-you-go balance. An API key resolves to the wallet that minted it, so a `402` while `ai credits` shows a plan almost always means the harness is using a key for a different wallet — `ai configure` now detects this and mints a fresh wallet-bound key automatically.
+
+Add `--fix` to repair the config/credential problems it finds: it re-runs `ai configure` (installing a missing key, replacing an invalid or wallet-mismatched key, and clearing stale OpenCode credentials), then re-checks and prints a before/after report. It only ever fixes credential/config state — anything that spends money (buying a plan or topping up) or needs a human (creating or importing a wallet) is still only suggested. For a read-only wallet, pass `--api-key <key>` so the fix has a key to install; otherwise it prompts (interactive) or leaves the issue in place. `--fix` also accepts `--backend`, `--path`, and `--chipnet`.
 
 Armed auto-refill state lives at `~/.paytaca/auto-refill.json`. Arming performs one immediate check (buying right away if the armed model has no credits), and the `paytaca mcp` server keeps a background backstop (every 60s) while a session is running. The backstop refills **proactively** — once the armed model's remaining time drops to ~2 minutes it buys the next plan, so a session isn't interrupted by a mid-turn `402`. The `get_credits` MCP tool is read-only and never triggers a purchase; when auto-refill is armed it adds a `resumeHint` pointing at the `await_refill` tool, which waits for the refill to land and then lets the task continue automatically (it only ever buys through the already-armed configuration). Each execution is appended to `~/.paytaca/auto-refill-events.jsonl` and the latest is reported as `lastEvent`. It disarms when the budget is spent, funds are short, or the plan is no longer offered. Use `--disable` to pause and `--delete` to remove the configuration (history is kept).
 
