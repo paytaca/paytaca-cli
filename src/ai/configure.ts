@@ -113,6 +113,10 @@ export function resolveOpencodeMajor(
   return 1
 }
 
+export function shouldClearOpencodeCredentials(opencodeMajor: number): boolean {
+  return opencodeMajor >= 2
+}
+
 export function buildOpencodeProvider(
   config: AiConfig,
   backendUrl: string,
@@ -219,6 +223,73 @@ function stripOtherOpencodeShape(
   }
 
   return out
+}
+
+export interface OpencodeStoredCredential {
+  id: string
+  integrationID: string
+  key?: string
+}
+
+export function parseOpencodeAuthExport(raw: string): OpencodeStoredCredential[] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return []
+  }
+  if (!Array.isArray(parsed)) return []
+  const out: OpencodeStoredCredential[] = []
+  for (const entry of parsed) {
+    if (!isPlainObject(entry)) continue
+    const { id, integrationID, value } = entry
+    if (typeof id !== 'string' || typeof integrationID !== 'string') continue
+    const key = isPlainObject(value) && typeof value.key === 'string' ? value.key : undefined
+    out.push({ id, integrationID, key })
+  }
+  return out
+}
+
+export function staleOpencodeCredentialIds(
+  stored: OpencodeStoredCredential[],
+  providerId: string,
+  apiKey: string
+): string[] {
+  return stored
+    .filter((c) => c.integrationID === providerId && c.key !== undefined && c.key !== apiKey)
+    .map((c) => c.id)
+}
+
+export function clearStaleOpencodeCredentials(
+  providerId: string,
+  apiKey: string
+): { removed: number; error?: string } {
+  let stored: OpencodeStoredCredential[]
+  try {
+    const raw = execFileSync('opencode', ['auth', 'export'], {
+      encoding: 'utf-8',
+      timeout: 10000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+    stored = parseOpencodeAuthExport(raw)
+  } catch (err: any) {
+    return { removed: 0, error: err?.message || String(err) }
+  }
+  const ids = staleOpencodeCredentialIds(stored, providerId, apiKey)
+  let removed = 0
+  for (const id of ids) {
+    try {
+      execFileSync('opencode', ['auth', 'logout', providerId, id], {
+        encoding: 'utf-8',
+        timeout: 10000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      })
+      removed += 1
+    } catch {
+      // Best-effort: a leftover credential just means the user must sign in again.
+    }
+  }
+  return { removed }
 }
 
 export function buildPiProvider(
@@ -711,6 +782,16 @@ export async function configureHarness(options: ConfigureOptions): Promise<Confi
 
     writeJsonFile(target, merged)
     result.mcpInstalled = true
+
+    if (config && apiKey && shouldClearOpencodeCredentials(opencodeMajor)) {
+      const cleared = clearStaleOpencodeCredentials(OPENCODE_PROVIDER_ID, apiKey)
+      if (cleared.removed > 0) {
+        result.warnings = [
+          ...(result.warnings ?? []),
+          `Removed ${cleared.removed} stale OpenCode credential(s) for ${OPENCODE_PROVIDER_ID} that were shadowing the API key in ${target}. Restart OpenCode if models still fail with "Invalid API key".`,
+        ]
+      }
+    }
   } else {
     if (!target) throw new Error(`No known config file for harness "${harness}". Use --path.`)
     const existingMcp = readJson(target)

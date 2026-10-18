@@ -12,10 +12,13 @@ import {
   OPENCODE_PROVIDER_NPM,
   OPENCODE_PROVIDER_PACKAGE,
   parseJsonConfig,
+  parseOpencodeAuthExport,
   parseOpencodeMajor,
   replaceOmpDefaultModel,
   resolveOpencodeMajor,
   serializeOmpProviderYaml,
+  shouldClearOpencodeCredentials,
+  staleOpencodeCredentialIds,
   upsertOmpProviderYaml,
 } from './configure.js'
 
@@ -128,6 +131,13 @@ describe('configure', () => {
     expect(resolveOpencodeMajor(null, { providers: {} }, null)).toBe(2)
     expect(resolveOpencodeMajor(null, { provider: {} }, null)).toBe(1)
     expect(resolveOpencodeMajor(null, { providers: {} }, 1)).toBe(1)
+  })
+
+  it('never clears stored credentials on opencode v1', () => {
+    expect(shouldClearOpencodeCredentials(1)).toBe(false)
+    expect(shouldClearOpencodeCredentials(0)).toBe(false)
+    expect(shouldClearOpencodeCredentials(2)).toBe(true)
+    expect(shouldClearOpencodeCredentials(3)).toBe(true)
   })
 
   it('builds the pi provider with a model per backend model', () => {
@@ -306,5 +316,47 @@ describe('configure', () => {
     expect(extractOmpProviderApiKey(yaml)).toBe('sk-pytc-from-yaml')
     expect(extractOmpProviderApiKey('providers:\n  other:\n    apiKey: sk-other\n')).toBeNull()
     expect(extractOmpProviderApiKey('')).toBeNull()
+  })
+
+  it('parses opencode auth export credentials without leaking unrelated fields', () => {
+    const raw = JSON.stringify([
+      {
+        id: 'cred_1',
+        integrationID: 'paytaca-ai',
+        label: 'API key',
+        active: true,
+        value: { type: 'key', key: 'sk-paytaca-wallet-auth' },
+      },
+      { id: 'cred_2', integrationID: 'gmi', value: { type: 'key', key: 'eyJ…' } },
+      { id: 'cred_3', integrationID: 'paytaca-ai', value: { type: 'oauth' } },
+      { integrationID: 'missing-id' },
+      'not-an-object',
+    ])
+    expect(parseOpencodeAuthExport(raw)).toEqual([
+      { id: 'cred_1', integrationID: 'paytaca-ai', key: 'sk-paytaca-wallet-auth' },
+      { id: 'cred_2', integrationID: 'gmi', key: 'eyJ…' },
+      { id: 'cred_3', integrationID: 'paytaca-ai', key: undefined },
+    ])
+    expect(parseOpencodeAuthExport('not json')).toEqual([])
+    expect(parseOpencodeAuthExport('{}')).toEqual([])
+    expect(parseOpencodeAuthExport('[]')).toEqual([])
+  })
+
+  it('flags only stale paytaca credentials that differ from the configured key', () => {
+    const stored = parseOpencodeAuthExport(
+      JSON.stringify([
+        { id: 'cred_placeholder', integrationID: 'paytaca-ai', value: { type: 'key', key: 'sk-paytaca-wallet-auth' } },
+        { id: 'cred_matching', integrationID: 'paytaca-ai', value: { type: 'key', key: 'sk-pytc-current' } },
+        { id: 'cred_noauth', integrationID: 'paytaca-ai', value: { type: 'oauth' } },
+        { id: 'cred_other', integrationID: 'gmi', value: { type: 'key', key: 'sk-paytaca-wallet-auth' } },
+      ])
+    )
+    expect(staleOpencodeCredentialIds(stored, 'paytaca-ai', 'sk-pytc-current')).toEqual([
+      'cred_placeholder',
+    ])
+    expect(staleOpencodeCredentialIds(stored, 'gmi', 'sk-pytc-current')).toEqual([
+      'cred_other',
+    ])
+    expect(staleOpencodeCredentialIds([], 'paytaca-ai', 'sk-pytc-current')).toEqual([])
   })
 })
