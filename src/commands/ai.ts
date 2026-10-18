@@ -1362,6 +1362,14 @@ export function registerAiCommands(program: Command): void {
     .option('--resolution <resolution>', 'Resolution, e.g. 720p, 1080p')
     .option('--aspect-ratio <ratio>', 'Aspect ratio, e.g. 16:9, 9:16')
     .option('--audio <mode>', 'Audio generation: on or off')
+    .option(
+      '--input-reference <ref>',
+      'Reference image (repeatable): URL, data URL, or local file path',
+      collectRepeatable,
+      []
+    )
+    .option('--first-frame <ref>', 'Image to use as the first frame')
+    .option('--last-frame <ref>', 'Image to use as the last frame')
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .option('--backend <url>', 'Override backend URL')
     .option('-y, --yes', 'Skip confirmation prompt')
@@ -1392,6 +1400,16 @@ export function registerAiCommands(program: Command): void {
         generateAudio = value === 'on' || value === 'true'
       }
 
+      const inputReferences = [
+        ...((opts.inputReference as string[]) || []).map((url) => ({ url })),
+        ...(opts.firstFrame
+          ? [{ url: opts.firstFrame as string, frame_type: 'first_frame' as const }]
+          : []),
+        ...(opts.lastFrame
+          ? [{ url: opts.lastFrame as string, frame_type: 'last_frame' as const }]
+          : []),
+      ]
+
       const orderOpts = {
         prompt,
         model: opts.model,
@@ -1399,6 +1417,7 @@ export function registerAiCommands(program: Command): void {
         resolution: opts.resolution,
         aspectRatio: opts.aspectRatio,
         generateAudio,
+        inputReferences: inputReferences.length > 0 ? inputReferences : undefined,
         isChipnet: Boolean(opts.chipnet),
         backendUrl: opts.backend,
       }

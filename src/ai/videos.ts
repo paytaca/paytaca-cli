@@ -18,6 +18,7 @@ import {
 } from './oauth.js'
 import { AiApiError } from './client.js'
 import { resolveBackendUrl, apiUrl, PAYTACA_DIR } from './config.js'
+import { resolveImageReference } from './images.js'
 import { downloadMedia, fetchMedia, type FetchedMedia } from './media-download.js'
 
 export const VIDEO_DIR = path.join(PAYTACA_DIR, 'videos')
@@ -307,7 +308,10 @@ export async function createVideoOrder(
   if (opts.aspectRatio) body.aspect_ratio = opts.aspectRatio
   if (opts.generateAudio !== undefined) body.generate_audio = opts.generateAudio
   if (opts.inputReferences && opts.inputReferences.length > 0) {
-    body.input_references = opts.inputReferences
+    body.input_references = opts.inputReferences.map((ref) => ({
+      url: resolveImageReference(ref.url),
+      ...(ref.frame_type ? { frame_type: ref.frame_type } : {}),
+    }))
   }
 
   const order = await authedRequest(baseUrl, '/v1/video/generate', token, {

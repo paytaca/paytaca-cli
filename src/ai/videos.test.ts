@@ -209,6 +209,26 @@ describe('createVideoOrder', () => {
     })
   })
 
+  it('omits frame_type for plain references and keeps data URLs intact', async () => {
+    route((url, init) => {
+      if (url.endsWith('/v1/video/generate') && init?.method === 'POST') {
+        const body = JSON.parse(init?.body ?? '{}')
+        expect(body.input_references).toEqual([
+          { url: 'data:image/png;base64,AAAA' },
+          { url: 'https://example.com/last.png', frame_type: 'last_frame' },
+        ])
+        return { status: 201, body: ORDER_RESPONSE }
+      }
+    })
+    await createVideoOrder({
+      prompt: 'a cat',
+      inputReferences: [
+        { url: 'data:image/png;base64,AAAA' },
+        { url: 'https://example.com/last.png', frame_type: 'last_frame' },
+      ],
+    })
+  })
+
   it('rejects an empty prompt before any request', async () => {
     const ctx = ctxFixture()
     mocks.requireWallet.mockReturnValue(ctx)

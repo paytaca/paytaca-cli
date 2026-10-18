@@ -501,6 +501,7 @@ describe('MCP tools', () => {
         resolution: undefined,
         aspectRatio: undefined,
         generateAudio: undefined,
+        inputReferences: undefined,
         isChipnet: false,
         backendUrl: undefined,
         deferDownload: true,
@@ -512,6 +513,40 @@ describe('MCP tools', () => {
         ready: true,
         txid: 'txid-1',
       })
+    })
+
+    it('passes input_references through for reference/keyframe video generation', async () => {
+      mocks.generateVideo.mockResolvedValue({
+        success: true,
+        paid: true,
+        ready: true,
+        downloaded: false,
+        orderId: 'vorder-2',
+        model: 'video-a',
+        amountSats: 2000,
+        txid: 'txid-2',
+        status: 'completed',
+        mediaType: 'video/mp4',
+      })
+      const c = await connect()
+      await c.callTool({
+        name: 'generate_video',
+        arguments: {
+          prompt: 'a cat walking',
+          input_references: [
+            'https://a/ref.png',
+            { url: 'https://b/first.png', frame_type: 'first_frame' },
+          ],
+        },
+      })
+      expect(mocks.generateVideo).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inputReferences: [
+            { url: 'https://a/ref.png' },
+            { url: 'https://b/first.png', frame_type: 'first_frame' },
+          ],
+        })
+      )
     })
 
     it('returns an error result when generation fails', async () => {

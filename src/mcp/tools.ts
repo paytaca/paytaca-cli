@@ -1563,7 +1563,7 @@ export function registerTools(
     {
       title: 'Generate a video',
       description:
-        'Generate a video from a text prompt with a Paytaca AI video model. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). Returns metadata only (no video bytes); download the video from the command line with `paytaca ai video status <order_id>`. The MCP host must obtain user approval before calling this.',
+        'Generate a video from a text prompt with a Paytaca AI video model. Optionally pass input_references (reference/keyframe images) to guide the result. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). Returns metadata only (no video bytes); download the video from the command line with `paytaca ai video status <order_id>`. The MCP host must obtain user approval before calling this.',
       inputSchema: {
         prompt: z.string().min(1),
         model: z.string().optional(),
@@ -1571,6 +1571,20 @@ export function registerTools(
         resolution: z.string().optional(),
         aspect_ratio: z.string().optional(),
         generate_audio: z.boolean().optional(),
+        input_references: z
+          .array(
+            z.union([
+              z.string(),
+              z.object({
+                url: z.string(),
+                frame_type: z.enum(['first_frame', 'last_frame']).optional(),
+              }),
+            ])
+          )
+          .optional()
+          .describe(
+            'Reference images to condition on: http(s) URLs, data:image URLs, or local file paths. Pass an object {url, frame_type} to mark a first_frame/last_frame keyframe; a bare string is a plain reference image. Only models advertising input_reference_types/supported_frame_images support these.'
+          ),
         chipnet: z.boolean().optional(),
         backend: z.string().optional(),
       },
@@ -1588,6 +1602,7 @@ export function registerTools(
       resolution,
       aspect_ratio,
       generate_audio,
+      input_references,
       chipnet,
       backend,
     }) => {
@@ -1599,6 +1614,9 @@ export function registerTools(
           resolution,
           aspectRatio: aspect_ratio,
           generateAudio: generate_audio,
+          inputReferences: input_references?.map((ref) =>
+            typeof ref === 'string' ? { url: ref } : ref
+          ),
           isChipnet: cn(chipnet),
           backendUrl: backend,
           deferDownload: true,
