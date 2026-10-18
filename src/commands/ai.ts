@@ -203,7 +203,6 @@ export function registerAiCommands(program: Command): void {
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .option('--path <path>', 'Override the target config file path')
     .option('--api-key <key>', 'Use an existing Paytaca API key (required for read-only wallets)')
-    .option('-y, --yes', 'Buy a plan without prompting when no credits are active')
     .option('--json', 'Output as JSON')
     .action(async (harnessArg: string | undefined, opts) => {
       const harness = String(harnessArg || 'opencode').toLowerCase() as McpClient
@@ -237,29 +236,8 @@ export function registerAiCommands(program: Command): void {
         return
       }
 
-      let purchased: Awaited<ReturnType<typeof buyPlan>> | null = null
-
-      if (!json && result.canSign && !result.creditsActive && result.planSuggestion) {
-        const plan = result.planSuggestion
-        const proceed =
-          Boolean(opts.yes) ||
-          (await promptConfirmation(
-            `No active AI credits. Buy a ${plan.minutes}-minute plan for ${plan.displayName} (${formatPriceUsd(plan.priceUsd)})?`
-          ))
-        if (proceed) {
-          purchased = await buyPlan({
-            model: plan.modelId,
-            minutes: plan.minutes,
-            paymentMethod: 'bch',
-            isChipnet: Boolean(opts.chipnet),
-            backendUrl: opts.backend,
-            confirmed: true,
-          })
-        }
-      }
-
       if (json) {
-        outputJson({ ...result, purchased })
+        outputJson(result)
         if (!result.mcpInstalled || result.providerError) process.exitCode = 1
         return
       }
@@ -281,11 +259,7 @@ export function registerAiCommands(program: Command): void {
             `   Provider: ${chalk.green('configured')} ${chalk.dim(`(${how}${suffix})`)}`
           )
           if (result.models.length > 0) {
-            console.log(
-              chalk.dim(
-                `   Models:   ${result.models.length} available — use \`paytaca-ai/<model-id>\``
-              )
-            )
+            console.log(chalk.dim(`   Models:   ${result.models.length} available`))
           }
         } else {
           const detail = result.providerError ? chalk.dim(` (${result.providerError})`) : ''
@@ -299,15 +273,6 @@ export function registerAiCommands(program: Command): void {
 
       if (result.creditsActive) {
         console.log(chalk.green('\n   AI credits active — ready to use.'))
-      } else if (purchased?.paid) {
-        console.log(
-          chalk.green(
-            `\n   Plan purchased: ${purchased.displayName || purchased.model} — ${purchased.minutes} minutes.`
-          )
-        )
-        if (purchased.txid) console.log(chalk.dim(`   txid: ${purchased.txid}`))
-      } else if (purchased && !purchased.success) {
-        console.log(chalk.red(`\n   Purchase failed: ${purchased.error || 'unknown error'}`))
       } else if (!result.canSign) {
         console.log(chalk.yellow('\n   No active AI credits.'))
         if (result.planSuggestion) {

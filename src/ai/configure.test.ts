@@ -6,6 +6,7 @@ import {
   deepMerge,
   extractExistingApiKey,
   extractOmpDefaultModel,
+  extractOmpProviderApiKey,
   extractPiApiKey,
   isValidApiKey,
   OPENCODE_PROVIDER_NPM,
@@ -14,6 +15,8 @@ import {
   parseOpencodeMajor,
   replaceOmpDefaultModel,
   resolveOpencodeMajor,
+  serializeOmpProviderYaml,
+  upsertOmpProviderYaml,
 } from './configure.js'
 
 const CONFIG: AiConfig = {
@@ -214,5 +217,94 @@ describe('configure', () => {
     })
     expect(parseJsonConfig('')).toEqual({})
     expect(parseJsonConfig('{ "a": 1 }')).toEqual({ a: 1 })
+  })
+
+  it('serializes an omp provider block as yaml', () => {
+    const provider = buildPiProvider(CONFIG, 'https://api.paytaca.ai', 'sk-pytc-test')
+    expect(serializeOmpProviderYaml('paytaca-ai', provider)).toBe(
+      [
+        '  paytaca-ai:',
+        '    baseUrl: https://api.paytaca.ai/v1',
+        '    apiKey: sk-pytc-test',
+        '    api: openai-completions',
+        '    models:',
+        '      - id: deepseek/deepseek-v4-flash',
+        '        name: DeepSeek V4 Flash',
+        '        contextWindow: 128000',
+        '        maxTokens: 8192',
+        '      - id: z-ai/glm-5.3-flash',
+        '        name: GLM 5.3 Flash',
+        '        contextWindow: 128000',
+        '        maxTokens: 8192',
+      ].join('\n')
+    )
+  })
+
+  it('replaces an existing omp provider block in-place', () => {
+    const existing = [
+      'providers:',
+      '  paytaca-ai:',
+      '    baseUrl: https://old.example/v1',
+      '    apiKey: sk-pytc-old',
+      '    api: openai-completions',
+      '    models:',
+      '      - id: old/model',
+      '        name: Old',
+      '        contextWindow: 1',
+      '        maxTokens: 1',
+      '  other:',
+      '    baseUrl: https://other.example/v1',
+      '',
+    ].join('\n')
+    const provider = { baseUrl: 'https://api.paytaca.ai/v1', apiKey: 'sk-pytc-new', api: 'openai-completions', models: [{ id: 'z-ai/glm-5.3', name: 'GLM 5.3', contextWindow: 128000, maxTokens: 8192 }] }
+    const updated = upsertOmpProviderYaml(existing, 'paytaca-ai', provider)
+    expect(updated).toContain('    apiKey: sk-pytc-new')
+    expect(updated).not.toContain('sk-pytc-old')
+    expect(updated).toContain('  other:')
+    expect(updated).toContain('    baseUrl: https://other.example/v1')
+    expect(upsertOmpProviderYaml(updated, 'paytaca-ai', provider)).toBe(updated)
+  })
+
+  it('adds an omp provider block when missing', () => {
+    const existing = 'providers:\n  other:\n    baseUrl: https://other.example/v1\n'
+    const updated = upsertOmpProviderYaml(existing, 'paytaca-ai', {
+      baseUrl: 'https://api.paytaca.ai/v1',
+      apiKey: 'sk-pytc-new',
+      api: 'openai-completions',
+      models: [],
+    })
+    expect(updated).toBe(
+      [
+        'providers:',
+        '  paytaca-ai:',
+        '    baseUrl: https://api.paytaca.ai/v1',
+        '    apiKey: sk-pytc-new',
+        '    api: openai-completions',
+        '  other:',
+        '    baseUrl: https://other.example/v1',
+        '',
+      ].join('\n')
+    )
+  })
+
+  it('creates a providers section when the omp yaml is empty', () => {
+    const updated = upsertOmpProviderYaml('', 'paytaca-ai', { apiKey: 'sk-pytc-new' })
+    expect(updated).toBe('providers:\n  paytaca-ai:\n    apiKey: sk-pytc-new\n')
+  })
+
+  it('extracts the paytaca api key from omp yaml', () => {
+    const yaml = [
+      'providers:',
+      '  paytaca-ai:',
+      '    baseUrl: https://api.paytaca.ai/v1',
+      '    apiKey: sk-pytc-from-yaml',
+      '    api: openai-completions',
+      '  other:',
+      '    apiKey: sk-other',
+      '',
+    ].join('\n')
+    expect(extractOmpProviderApiKey(yaml)).toBe('sk-pytc-from-yaml')
+    expect(extractOmpProviderApiKey('providers:\n  other:\n    apiKey: sk-other\n')).toBeNull()
+    expect(extractOmpProviderApiKey('')).toBeNull()
   })
 })

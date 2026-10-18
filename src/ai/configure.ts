@@ -242,6 +242,16 @@ export function buildPiProvider(
   }
 }
 
+function normalizeApiKeyRef(raw: string): string | null {
+  const envName = raw.trim().match(/^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/)
+  if (envName) {
+    if (process.env[envName[1]]) return raw
+    return null
+  }
+  if (raw.trim().startsWith('!')) return null
+  return raw
+}
+
 export function extractPiApiKey(
   config: Record<string, unknown>,
   providerId: string = PI_PROVIDER_ID
@@ -252,13 +262,7 @@ export function extractPiApiKey(
   if (!isPlainObject(entry)) return null
   const apiKey = entry.apiKey
   if (typeof apiKey !== 'string' || apiKey.length === 0) return null
-  const envName = apiKey.trim().match(/^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/)
-  if (envName) {
-    if (process.env[envName[1]]) return apiKey
-    return null
-  }
-  if (apiKey.trim().startsWith('!')) return null
-  return apiKey
+  return normalizeApiKeyRef(apiKey)
 }
 
 const YAML_KEY_LINE = /^(\s*)([A-Za-z0-9_-]+):\s*(.*)$/
@@ -292,6 +296,144 @@ export function replaceOmpDefaultModel(yaml: string, nextModelRef: string): stri
   if (!found) return null
   lines[found.index] = `${' '.repeat(found.indent)}default: ${nextModelRef}`
   return lines.join('\n')
+}
+
+function countIndent(line: string): number {
+  const match = line.match(/^ */)
+  return match ? match[0].length : 0
+}
+
+function isIgnorableLine(line: string): boolean {
+  const trimmed = line.trim()
+  return trimmed === '' || trimmed.startsWith('#')
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function yamlScalar(value: unknown): string {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  if (typeof value === 'boolean') return value ? 'true' : 'false'
+  const text = value == null ? '' : String(value)
+  if (text === '') return "''"
+  const unsafe =
+    /^(true|false|null|~|yes|no|on|off)$/i.test(text) ||
+    /^[+-]?(\d[\d_]*)(\.\d+)?([eE][+-]?\d+)?$/.test(text) ||
+    /^\s|\s$/.test(text) ||
+    /[\n\t]/.test(text) ||
+    /:(\s|$)/.test(text) ||
+    /\s#/.test(text) ||
+    /^[-?:,[\]{}#&*!|>'"%@`]/.test(text)
+  return unsafe ? JSON.stringify(text) : text
+}
+
+export function serializeOmpProviderYaml(
+  providerId: string,
+  provider: Record<string, unknown>,
+  indent = '  '
+): string {
+  const inner = indent + '  '
+  const out: string[] = [`${indent}${providerId}:`]
+  const models = Array.isArray(provider.models) ? provider.models : []
+  for (const [key, value] of Object.entries(provider)) {
+    if (key === 'models') continue
+    out.push(`${inner}${key}: ${yamlScalar(value)}`)
+  }
+  if (models.length > 0) {
+    out.push(`${inner}models:`)
+    const itemIndent = inner + '  '
+    for (const model of models) {
+      if (!isPlainObject(model)) continue
+      let first = true
+      for (const [key, value] of Object.entries(model)) {
+        out.push(`${first ? `${itemIndent}- ` : `${itemIndent}  `}${key}: ${yamlScalar(value)}`)
+        first = false
+      }
+    }
+  }
+  return out.join('\n')
+}
+
+function locateYamlProvider(lines: string[], providerId: string): number {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (isIgnorableLine(line)) continue
+    if (countIndent(line) !== 2) continue
+    if (new RegExp(`^\\s{2}${escapeRegExp(providerId)}\\s*:\\s*$`).test(line)) return i
+  }
+  return -1
+}
+
+export function upsertOmpProviderYaml(
+  existingYaml: string,
+  providerId: string,
+  provider: Record<string, unknown>
+): string {
+  const block = serializeOmpProviderYaml(providerId, provider).split('\n')
+  const lines = existingYaml.replace(/\r\n/g, '\n').split('\n')
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+
+  let providersIndex = -1
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (isIgnorableLine(line)) continue
+    if (countIndent(line) === 0 && /^providers\s*:\s*$/.test(line)) {
+      providersIndex = i
+      break
+    }
+  }
+
+  if (providersIndex === -1) {
+    const head = lines.length > 0 ? [...lines, '', 'providers:'] : ['providers:']
+    return [...head, ...block].join('\n') + '\n'
+  }
+
+  const providerIndex = locateYamlProvider(lines.slice(providersIndex + 1), providerId)
+  if (providerIndex === -1) {
+    return [
+      ...lines.slice(0, providersIndex + 1),
+      ...block,
+      ...lines.slice(providersIndex + 1),
+    ].join('\n') + '\n'
+  }
+
+  const start = providersIndex + 1 + providerIndex
+  let end = start + 1
+  while (end < lines.length) {
+    const line = lines[end]
+    if (isIgnorableLine(line)) {
+      end++
+      continue
+    }
+    if (countIndent(line) <= 2) break
+    end++
+  }
+  return [...lines.slice(0, start), ...block, ...lines.slice(end)].join('\n') + '\n'
+}
+
+export function extractOmpProviderApiKey(
+  yaml: string,
+  providerId: string = OMP_PROVIDER_ID
+): string | null {
+  const lines = yaml.replace(/\r\n/g, '\n').split('\n')
+  const start = locateYamlProvider(lines, providerId)
+  if (start === -1) return null
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i]
+    if (!isIgnorableLine(line) && countIndent(line) <= 2) break
+    const match = line.match(/^\s+apiKey\s*:\s*(.+?)\s*$/)
+    if (!match) continue
+    let value = match[1]
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1)
+    }
+    return value.length > 0 ? normalizeApiKeyRef(value) : null
+  }
+  return null
 }
 
 async function resolveApiKey(
@@ -578,8 +720,18 @@ export async function configureHarness(options: ConfigureOptions): Promise<Confi
     ompAgentDir = dirname(target)
     const modelsPath = join(ompAgentDir, 'models.json')
     const existingModels = readJson(modelsPath)
+
+    const ompYamlPath =
+      harness === 'omp'
+        ? ['models.yml', 'models.yaml']
+            .map((name) => join(ompAgentDir as string, name))
+            .find((path) => existsSync(path)) ?? null
+        : null
+    const ompYaml = ompYamlPath ? readFileSync(ompYamlPath, 'utf-8') : null
+
     apiKeyValue = await resolveApiKey(
-      extractPiApiKey(existingModels),
+      (ompYaml ? extractOmpProviderApiKey(ompYaml, OMP_PROVIDER_ID) : null) ??
+        extractPiApiKey(existingModels),
       options,
       wallet,
       backendUrl,
@@ -587,20 +739,16 @@ export async function configureHarness(options: ConfigureOptions): Promise<Confi
     )
     const apiKey = apiKeyValue
 
-    if (harness === 'omp') {
-      const yamlPath = ['models.yml', 'models.yaml']
-        .map((name) => join(ompAgentDir as string, name))
-        .find((path) => existsSync(path))
-      if (yamlPath) {
-        result.warnings = [
-          `${yamlPath} exists — omp prefers it over models.json, so the Paytaca provider there may be ignored.`,
-        ]
-      }
-    }
-
     if (config && apiKey) {
       const provider = buildPiProvider(config, backendUrl, apiKey)
-      writeJsonFile(modelsPath, deepMerge(existingModels, { providers: { [PI_PROVIDER_ID]: provider } }))
+      if (ompYamlPath && ompYaml !== null) {
+        writeFileSync(ompYamlPath, upsertOmpProviderYaml(ompYaml, OMP_PROVIDER_ID, provider), {
+          encoding: 'utf-8',
+          mode: 0o600,
+        })
+      } else {
+        writeJsonFile(modelsPath, deepMerge(existingModels, { providers: { [PI_PROVIDER_ID]: provider } }))
+      }
       if (harness === 'pi') {
         const authPath = join(dirname(target), 'auth.json')
         const existingAuth = readJson(authPath)

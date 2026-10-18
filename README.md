@@ -187,7 +187,7 @@ paytaca ai auto-refill --enable --model <id> --minutes <n> --max-minutes <n>
 paytaca ai auto-refill --status     # Inspect; also --disable, --delete
 ```
 
-`ai configure` accepts `--backend`, `--path`, `--api-key`, `--chipnet`, and `-y/--yes`. `ai purchase` and `ai auto-refill` accept `--lift` to pay with LIFT tokens at a discount. Add `--json` to any `ai` subcommand for machine-readable output.
+`ai configure` only writes configuration; buy credits separately with `paytaca ai purchase`. It accepts `--backend`, `--path`, `--api-key`, and `--chipnet`. `ai purchase` and `ai auto-refill` accept `--lift` to pay with LIFT tokens at a discount. Add `--json` to any `ai` subcommand for machine-readable output.
 
 Armed auto-refill state lives at `~/.paytaca/auto-refill.json`. Arming performs one immediate check (buying right away if the armed model has no credits), and the `paytaca mcp` server keeps a background backstop (every 60s) while a session is running. The backstop refills **proactively** — once the armed model's remaining time drops to ~2 minutes it buys the next plan, so a session isn't interrupted by a mid-turn `402`. The `get_credits` MCP tool is read-only and never triggers a purchase; when auto-refill is armed it adds a `resumeHint` pointing at the `await_refill` tool, which waits for the refill to land and then lets the task continue automatically (it only ever buys through the already-armed configuration). Each execution is appended to `~/.paytaca/auto-refill-events.jsonl` and the latest is reported as `lastEvent`. It disarms when the budget is spent, funds are short, or the plan is no longer offered. Use `--disable` to pause and `--delete` to remove the configuration (history is kept).
 
@@ -232,13 +232,13 @@ Video generation follows the same two-phase flow as images: an order is created 
 
 ### MCP Server
 
-Configure an AI harness in one step. This installs the Paytaca MCP server and, for opencode, also the Paytaca AI provider (model catalogue + API key) so the Paytaca AI models are usable immediately:
+Configure an AI harness in one step. This installs the Paytaca MCP server and the Paytaca AI provider (model catalogue + API key) so the Paytaca AI models are usable immediately:
 
 ```bash
 paytaca ai configure opencode   # opencode | pi | omp
 ```
 
-The command creates a wallet-bound API key against the Paytaca AI backend, writes the provider (base URL, models, key) and MCP server into the harness config, then checks your AI credits and offers to buy a plan when none are active.
+The command creates a wallet-bound API key against the Paytaca AI backend and writes the provider (base URL, models, key) and MCP server into the harness config. For omp it updates `models.yml` when that file exists (omp prefers it over `models.json`). It does not buy credits; use `paytaca ai purchase` for that.
 
 Re-running is idempotent: an existing provider API key is reused. Then run the server over stdio:
 
