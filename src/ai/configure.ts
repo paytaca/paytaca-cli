@@ -4,6 +4,7 @@
  * models.json — so AI models are usable right after `paytaca ai configure`.
  */
 
+import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { CLIENTS, buildTemplate, type ClientTemplate, type McpClient } from '../commands/mcp.js'
@@ -19,6 +20,7 @@ export const OPENCODE_PROVIDER_ID = 'paytaca-ai'
 export const PI_PROVIDER_ID = 'paytaca-ai'
 export const OMP_PROVIDER_ID = 'paytaca-ai'
 export const OPENCODE_PROVIDER_NPM = '@ai-sdk/openai-compatible'
+export const OPENCODE_PROVIDER_PACKAGE = '@opencode/ai/providers/openai-compatible'
 export const DEFAULT_MODEL_CONTEXT = 128000
 export const DEFAULT_MODEL_OUTPUT = 8192
 
@@ -55,6 +57,7 @@ export interface ConfigureOptions {
   backendUrl?: string
   path?: string
   apiKey?: string
+  opencodeVersion?: number | null
   requestApiKey?: () => Promise<string | null>
 }
 
@@ -79,10 +82,42 @@ export function deepMerge(
   return out
 }
 
+export function parseOpencodeMajor(versionOutput: string): number | null {
+  const match = versionOutput.trim().match(/(\d+)\./)
+  if (!match) return null
+  const major = Number(match[1])
+  return Number.isFinite(major) ? major : null
+}
+
+export function detectOpencodeMajorVersion(): number | null {
+  try {
+    const output = execFileSync('opencode', ['--version'], {
+      encoding: 'utf-8',
+      timeout: 3000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+    return parseOpencodeMajor(output)
+  } catch {
+    return null
+  }
+}
+
+export function resolveOpencodeMajor(
+  explicit: number | null | undefined,
+  existing: Record<string, unknown>,
+  detected: number | null = detectOpencodeMajorVersion()
+): number {
+  if (typeof explicit === 'number') return explicit
+  if (detected !== null) return detected
+  if (isPlainObject(existing.providers)) return 2
+  return 1
+}
+
 export function buildOpencodeProvider(
   config: AiConfig,
   backendUrl: string,
-  apiKey: string
+  apiKey: string,
+  opencodeMajor: number = 1
 ): Record<string, unknown> {
   const models: Record<string, unknown> = {}
   for (const model of config.models || []) {
@@ -90,6 +125,14 @@ export function buildOpencodeProvider(
     models[model.id] = {
       name: model.display_name || model.id,
       limit: { context: DEFAULT_MODEL_CONTEXT, output: DEFAULT_MODEL_OUTPUT },
+    }
+  }
+  if (opencodeMajor >= 2) {
+    return {
+      name: 'Paytaca AI',
+      package: OPENCODE_PROVIDER_PACKAGE,
+      settings: { baseURL: `${backendUrl}/v1`, apiKey },
+      models,
     }
   }
   return {
@@ -104,6 +147,16 @@ export function extractExistingApiKey(
   config: Record<string, unknown>,
   providerId: string = OPENCODE_PROVIDER_ID
 ): string | null {
+  return (
+    extractOpencodeKeyV1(config, providerId) ??
+    extractOpencodeKeyV2(config, providerId)
+  )
+}
+
+function extractOpencodeKeyV1(
+  config: Record<string, unknown>,
+  providerId: string
+): string | null {
   const provider = config.provider
   if (!isPlainObject(provider)) return null
   const entry = provider[providerId]
@@ -112,6 +165,60 @@ export function extractExistingApiKey(
   if (!isPlainObject(options)) return null
   const apiKey = options.apiKey
   return typeof apiKey === 'string' && apiKey.length > 0 ? apiKey : null
+}
+
+function extractOpencodeKeyV2(
+  config: Record<string, unknown>,
+  providerId: string
+): string | null {
+  const providers = config.providers
+  if (!isPlainObject(providers)) return null
+  const entry = providers[providerId]
+  if (!isPlainObject(entry)) return null
+  const settings = entry.settings
+  if (!isPlainObject(settings)) return null
+  const apiKey = settings.apiKey
+  return typeof apiKey === 'string' && apiKey.length > 0 ? apiKey : null
+}
+
+function stripOtherOpencodeShape(
+  config: Record<string, unknown>,
+  opencodeMajor: number
+): Record<string, unknown> {
+  let out = config
+
+  const otherKey = opencodeMajor >= 2 ? 'provider' : 'providers'
+  const entry = out[otherKey]
+  if (isPlainObject(entry) && OPENCODE_PROVIDER_ID in entry) {
+    const trimmed = { ...entry }
+    delete trimmed[OPENCODE_PROVIDER_ID]
+    out = { ...out }
+    if (Object.keys(trimmed).length === 0) delete out[otherKey]
+    else out[otherKey] = trimmed
+  }
+
+  const mcp = out.mcp
+  if (isPlainObject(mcp)) {
+    if (opencodeMajor >= 2) {
+      if ('paytaca' in mcp) {
+        const nextMcp = { ...mcp }
+        delete nextMcp.paytaca
+        out = { ...out, mcp: nextMcp }
+      }
+    } else {
+      const servers = mcp.servers
+      if (isPlainObject(servers) && 'paytaca' in servers) {
+        const nextServers = { ...servers }
+        delete nextServers.paytaca
+        const nextMcp = { ...mcp }
+        if (Object.keys(nextServers).length === 0) delete nextMcp.servers
+        else nextMcp.servers = nextServers
+        out = { ...out, mcp: nextMcp }
+      }
+    }
+  }
+
+  return out
 }
 
 export function buildPiProvider(
@@ -434,7 +541,8 @@ export async function configureHarness(options: ConfigureOptions): Promise<Confi
   if (harness === 'opencode') {
     if (!target) throw new Error('No known config path for opencode. Use --path.')
     const existing = readJson(target)
-    const mcpEntry = (template.json as any)?.mcp?.paytaca
+    const opencodeMajor = resolveOpencodeMajor(options.opencodeVersion, existing)
+    const opencodeTemplate = buildTemplate(harness, isChipnet, opencodeMajor)
 
     const apiKey = await resolveApiKey(
       extractExistingApiKey(existing),
@@ -444,10 +552,11 @@ export async function configureHarness(options: ConfigureOptions): Promise<Confi
       result
     )
 
-    let merged = deepMerge(existing, { mcp: { paytaca: mcpEntry } })
+    let merged = deepMerge(existing, opencodeTemplate.json as Record<string, unknown>)
     if (config && apiKey) {
-      const provider = buildOpencodeProvider(config, backendUrl, apiKey)
-      merged = deepMerge(merged, { provider: { [OPENCODE_PROVIDER_ID]: provider } })
+      const provider = buildOpencodeProvider(config, backendUrl, apiKey, opencodeMajor)
+      const providerKey = opencodeMajor >= 2 ? 'providers' : 'provider'
+      merged = deepMerge(merged, { [providerKey]: { [OPENCODE_PROVIDER_ID]: provider } })
       result.models = (config.models || [])
         .filter((m) => m?.id)
         .map((m) => ({ id: m.id, name: m.display_name || m.id }))
@@ -455,6 +564,8 @@ export async function configureHarness(options: ConfigureOptions): Promise<Confi
     } else if (!result.providerError) {
       result.providerError = configError || 'Unable to load the AI configuration.'
     }
+
+    merged = stripOtherOpencodeShape(merged, opencodeMajor)
 
     writeJsonFile(target, merged)
     result.mcpInstalled = true

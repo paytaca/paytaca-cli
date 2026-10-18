@@ -9,8 +9,11 @@ import {
   extractPiApiKey,
   isValidApiKey,
   OPENCODE_PROVIDER_NPM,
+  OPENCODE_PROVIDER_PACKAGE,
   parseJsonConfig,
+  parseOpencodeMajor,
   replaceOmpDefaultModel,
+  resolveOpencodeMajor,
 } from './configure.js'
 
 const CONFIG: AiConfig = {
@@ -67,6 +70,61 @@ describe('configure', () => {
     expect(
       extractExistingApiKey({ provider: { 'paytaca-ai': { options: {} } } })
     ).toBeNull()
+  })
+
+  it('builds the opencode v2 provider with package and settings keys', () => {
+    const provider = buildOpencodeProvider(
+      CONFIG,
+      'https://api.paytaca.ai',
+      'sk-pytc-test',
+      2
+    )
+    expect(provider.package).toBe(OPENCODE_PROVIDER_PACKAGE)
+    expect(provider.name).toBe('Paytaca AI')
+    expect(provider.npm).toBeUndefined()
+    expect(provider.settings).toEqual({
+      baseURL: 'https://api.paytaca.ai/v1',
+      apiKey: 'sk-pytc-test',
+    })
+    expect(provider.options).toBeUndefined()
+    expect(Object.keys(provider.models as Record<string, unknown>)).toEqual([
+      'deepseek/deepseek-v4-flash',
+      'z-ai/glm-5.3-flash',
+    ])
+  })
+
+  it('reads an existing v2 provider api key from settings', () => {
+    expect(
+      extractExistingApiKey({
+        providers: { 'paytaca-ai': { settings: { apiKey: 'sk-pytc-v2' } } },
+      })
+    ).toBe('sk-pytc-v2')
+    expect(
+      extractExistingApiKey({
+        providers: { 'paytaca-ai': { settings: {} } },
+      })
+    ).toBeNull()
+    expect(
+      extractExistingApiKey({
+        provider: { 'paytaca-ai': { options: { apiKey: 'sk-pytc-v1' } } },
+        providers: { 'paytaca-ai': { settings: { apiKey: 'sk-pytc-v2' } } },
+      })
+    ).toBe('sk-pytc-v1')
+  })
+
+  it('parses the opencode major version', () => {
+    expect(parseOpencodeMajor('1.18.35\n')).toBe(1)
+    expect(parseOpencodeMajor('2.0.0')).toBe(2)
+    expect(parseOpencodeMajor('opencode v2.0.0')).toBe(2)
+    expect(parseOpencodeMajor('no version here')).toBeNull()
+  })
+
+  it('falls back to config shape when the opencode version is unknown', () => {
+    expect(resolveOpencodeMajor(2, { provider: {} })).toBe(2)
+    expect(resolveOpencodeMajor(1, { providers: {} })).toBe(1)
+    expect(resolveOpencodeMajor(null, { providers: {} }, null)).toBe(2)
+    expect(resolveOpencodeMajor(null, { provider: {} }, null)).toBe(1)
+    expect(resolveOpencodeMajor(null, { providers: {} }, 1)).toBe(1)
   })
 
   it('builds the pi provider with a model per backend model', () => {

@@ -20,20 +20,33 @@ function serverArgs(chipnet: boolean): string[] {
   return chipnet ? ['mcp', '--chipnet'] : ['mcp']
 }
 
-export function buildTemplate(client: McpClient, chipnet: boolean): ClientTemplate {
+export function buildTemplate(
+  client: McpClient,
+  chipnet: boolean,
+  opencodeMajor: number = 1
+): ClientTemplate {
   const args = serverArgs(chipnet)
 
   switch (client) {
     case 'opencode': {
-      const json = {
-        mcp: {
-          paytaca: {
-            type: 'local',
-            command: ['paytaca', ...args],
-            enabled: true,
-          },
-        },
-      }
+      const json =
+        opencodeMajor >= 2
+          ? {
+              mcp: {
+                servers: {
+                  paytaca: { type: 'local', command: ['paytaca', ...args] },
+                },
+              },
+            }
+          : {
+              mcp: {
+                paytaca: {
+                  type: 'local',
+                  command: ['paytaca', ...args],
+                  enabled: true,
+                },
+              },
+            }
       return {
         client,
         format: 'json',

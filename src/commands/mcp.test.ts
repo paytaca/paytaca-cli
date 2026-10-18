@@ -47,4 +47,18 @@ describe('mcp config templates', () => {
       mcp: { paytaca: { command: ['paytaca', 'mcp', '--chipnet'] } },
     })
   })
+
+  it('opencode v2 nests the server under mcp.servers without enabled', () => {
+    const template = buildTemplate('opencode', false, 2)
+    expect(template.json).toEqual({
+      mcp: {
+        servers: {
+          paytaca: {
+            type: 'local',
+            command: ['paytaca', 'mcp'],
+          },
+        },
+      },
+    })
+  })
 })
