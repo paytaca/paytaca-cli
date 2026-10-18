@@ -13,6 +13,7 @@ import { loadWalletRef } from '../wallet/index.js'
 import { getConfig, getWalletStatus, type AiConfig } from './client.js'
 import { resolveBackendUrl } from './config.js'
 import { hasActiveCredits, summarizeAllCredits, type CreditsSummary } from './credits.js'
+import { checkApiKeyWalletIdentity, type KeyIdentity } from './identity.js'
 import { selectModel, selectTier } from './models.js'
 import { provisionApiKey } from './oauth.js'
 
@@ -43,6 +44,7 @@ export interface ConfigureResult {
   canSign: boolean
   apiKeyReused: boolean
   apiKeyProvided: boolean
+  apiKeyReplaced?: boolean
   apiKeyPrefix?: string
   models: { id: string; name: string }[]
   creditsActive: boolean
@@ -63,6 +65,16 @@ export interface ConfigureOptions {
 
 export function isValidApiKey(key: string): boolean {
   return /^sk-pytc-[A-Za-z0-9]{8,}$/.test(key.trim())
+}
+
+/**
+ * A stored API key should be replaced only when we have positive evidence it is
+ * unusable for this wallet — an invalid key, or one that resolves to a wallet
+ * other than the active one. `unknown` keeps the existing key so a healthy
+ * config is never churned just because the backend could not be compared.
+ */
+export function shouldReprovisionApiKey(identity: KeyIdentity): boolean {
+  return identity === 'mismatch' || identity === 'invalid'
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -264,18 +276,12 @@ export function clearStaleOpencodeCredentials(
   providerId: string,
   apiKey: string
 ): { removed: number; error?: string } {
-  let stored: OpencodeStoredCredential[]
+  let ids: string[]
   try {
-    const raw = execFileSync('opencode', ['auth', 'export'], {
-      encoding: 'utf-8',
-      timeout: 10000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    })
-    stored = parseOpencodeAuthExport(raw)
+    ids = staleOpencodeCredentialIdsFromCli(providerId, apiKey)
   } catch (err: any) {
     return { removed: 0, error: err?.message || String(err) }
   }
-  const ids = staleOpencodeCredentialIds(stored, providerId, apiKey)
   let removed = 0
   for (const id of ids) {
     try {
@@ -290,6 +296,22 @@ export function clearStaleOpencodeCredentials(
     }
   }
   return { removed }
+}
+
+/**
+ * Read-only counterpart of {@link clearStaleOpencodeCredentials}: returns the
+ * ids of stored credentials that shadow the configured key without logging out.
+ */
+export function staleOpencodeCredentialIdsFromCli(
+  providerId: string,
+  apiKey: string
+): string[] {
+  const raw = execFileSync('opencode', ['auth', 'export'], {
+    encoding: 'utf-8',
+    timeout: 10000,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  })
+  return staleOpencodeCredentialIds(parseOpencodeAuthExport(raw), providerId, apiKey)
 }
 
 export function buildPiProvider(
@@ -507,6 +529,77 @@ export function extractOmpProviderApiKey(
   return null
 }
 
+export interface HarnessApiKeyInfo {
+  path: string | null
+  apiKey: string | null
+}
+
+function readJsonSafe(path: string): Record<string, unknown> {
+  try {
+    return readJson(path)
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Read the API key already configured for a harness without writing anything.
+ * Mirrors the file locations used by {@link configureHarness}, so `ai doctor`
+ * inspects exactly what the harness will read at runtime.
+ */
+export function readHarnessApiKey(
+  harness: McpClient,
+  options: { path?: string } = {}
+): HarnessApiKeyInfo {
+  const template = buildTemplate(harness, false)
+  const target = options.path || template.path
+  if (!target) return { path: null, apiKey: null }
+
+  if (harness === 'opencode') {
+    return { path: target, apiKey: extractExistingApiKey(readJsonSafe(target)) }
+  }
+
+  const agentDir = dirname(target)
+  if (harness === 'omp') {
+    const yamlPath =
+      ['models.yml', 'models.yaml']
+        .map((name) => join(agentDir, name))
+        .find((path) => existsSync(path)) ?? null
+    if (yamlPath) {
+      try {
+        const apiKey = extractOmpProviderApiKey(readFileSync(yamlPath, 'utf-8'), OMP_PROVIDER_ID)
+        return { path: yamlPath, apiKey }
+      } catch {
+        return { path: yamlPath, apiKey: null }
+      }
+    }
+  }
+
+  const modelsPath = join(agentDir, 'models.json')
+  if (harness === 'pi') {
+    const fromModels = extractPiApiKey(readJsonSafe(modelsPath))
+    if (fromModels) return { path: modelsPath, apiKey: fromModels }
+    const authPath = join(agentDir, 'auth.json')
+    const auth = readJsonSafe(authPath)
+    const entry = auth[PI_PROVIDER_ID]
+    const key = isPlainObject(entry) && typeof entry.key === 'string' ? entry.key : null
+    return { path: key ? authPath : modelsPath, apiKey: key }
+  }
+
+  return { path: modelsPath, apiKey: extractPiApiKey(readJsonSafe(modelsPath)) }
+}
+
+/**
+ * OpenCode major version as configuration sees it: an explicit value if the
+ * caller supplied one, otherwise the installed binary, otherwise the config
+ * shape. Used by `ai doctor` to know whether stored credentials can shadow keys.
+ */
+export function readOpencodeMajor(options: { path?: string; version?: number | null } = {}): number {
+  const target = options.path || buildTemplate('opencode', false).path
+  const existing = target ? readJsonSafe(target) : {}
+  return resolveOpencodeMajor(options.version, existing)
+}
+
 async function resolveApiKey(
   existingKey: string | null,
   options: ConfigureOptions,
@@ -514,18 +607,62 @@ async function resolveApiKey(
   backendUrl: string,
   result: ConfigureResult
 ): Promise<string | null> {
-  if (existingKey) {
-    result.apiKeyReused = true
-    return existingKey
-  }
+  // An explicit --api-key always wins over whatever is already in the config.
   if (options.apiKey) {
     if (isValidApiKey(options.apiKey)) {
       result.apiKeyProvided = true
-      return options.apiKey.trim()
+      const provided = options.apiKey.trim()
+      await warnIfKeyNotForWallet(provided, wallet, backendUrl, result)
+      return provided
     }
     result.providerError = 'Invalid API key: expected a Paytaca key like sk-pytc-…'
     return null
   }
+
+  if (existingKey) {
+    const identity = await checkApiKeyWalletIdentity(existingKey, wallet.walletHash, { backendUrl })
+    if (shouldReprovisionApiKey(identity) && wallet.canSign && wallet.mnemonic) {
+      const reason =
+        identity === 'invalid'
+          ? 'The stored API key is no longer valid'
+          : 'The stored API key belongs to a different wallet'
+      try {
+        const created = await provisionApiKey({
+          mnemonic: wallet.mnemonic,
+          walletHash: wallet.walletHash,
+          backendUrl,
+          name: 'paytaca-cli',
+        })
+        result.apiKeyPrefix = created.keyPrefix
+        result.apiKeyReplaced = true
+        result.warnings = [
+          ...(result.warnings ?? []),
+          `${reason}. Replaced it with a key bound to this wallet in the harness config — restart the harness to pick it up.`,
+        ]
+        return created.key
+      } catch (err: any) {
+        result.apiKeyReused = true
+        result.warnings = [
+          ...(result.warnings ?? []),
+          `${reason}, and a replacement could not be created (${err?.message || err}). Re-run \`paytaca ai configure\` from your full wallet.`,
+        ]
+        return existingKey
+      }
+    }
+    if (shouldReprovisionApiKey(identity)) {
+      const reason =
+        identity === 'invalid'
+          ? 'The stored API key is no longer valid'
+          : 'The stored API key belongs to a different wallet'
+      result.warnings = [
+        ...(result.warnings ?? []),
+        `${reason}. This read-only wallet cannot mint a replacement — pass --api-key with a key created from the wallet that holds your credits.`,
+      ]
+    }
+    result.apiKeyReused = true
+    return existingKey
+  }
+
   if (wallet.canSign && wallet.mnemonic) {
     try {
       const created = await provisionApiKey({
@@ -554,6 +691,20 @@ async function resolveApiKey(
   result.providerError =
     'This wallet is read-only. Pass --api-key <key> with a key created from your full wallet.'
   return null
+}
+
+async function warnIfKeyNotForWallet(
+  apiKey: string,
+  wallet: NonNullable<ReturnType<typeof loadWalletRef>>,
+  backendUrl: string,
+  result: ConfigureResult
+): Promise<void> {
+  const identity = await checkApiKeyWalletIdentity(apiKey, wallet.walletHash, { backendUrl })
+  if (!shouldReprovisionApiKey(identity)) return
+  result.warnings = [
+    ...(result.warnings ?? []),
+    'The API key you passed does not resolve to this wallet — the harness may see no credits. Re-run `paytaca ai configure` without --api-key to mint one for this wallet.',
+  ]
 }
 
 function stripJsonComments(input: string): string {
@@ -735,6 +886,7 @@ export async function configureHarness(options: ConfigureOptions): Promise<Confi
     canSign: wallet.canSign,
     apiKeyReused: false,
     apiKeyProvided: false,
+    apiKeyReplaced: false,
     models: [],
     creditsActive: false,
     credits: [],

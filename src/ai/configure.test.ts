@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { AiConfig } from './client.js'
 import {
   buildOpencodeProvider,
@@ -14,10 +17,12 @@ import {
   parseJsonConfig,
   parseOpencodeAuthExport,
   parseOpencodeMajor,
+  readHarnessApiKey,
   replaceOmpDefaultModel,
   resolveOpencodeMajor,
   serializeOmpProviderYaml,
   shouldClearOpencodeCredentials,
+  shouldReprovisionApiKey,
   staleOpencodeCredentialIds,
   upsertOmpProviderYaml,
 } from './configure.js'
@@ -138,6 +143,54 @@ describe('configure', () => {
     expect(shouldClearOpencodeCredentials(0)).toBe(false)
     expect(shouldClearOpencodeCredentials(2)).toBe(true)
     expect(shouldClearOpencodeCredentials(3)).toBe(true)
+  })
+
+  it('replaces a stored key only for a mismatch or an invalid key', () => {
+    expect(shouldReprovisionApiKey('mismatch')).toBe(true)
+    expect(shouldReprovisionApiKey('invalid')).toBe(true)
+    expect(shouldReprovisionApiKey('match')).toBe(false)
+    expect(shouldReprovisionApiKey('unknown')).toBe(false)
+  })
+
+  it('reads the configured opencode api key without writing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'paytaca-doctor-'))
+    try {
+      const configPath = join(dir, 'opencode.json')
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          providers: { 'paytaca-ai': { settings: { apiKey: 'sk-pytc-doctor' } } },
+        })
+      )
+      expect(readHarnessApiKey('opencode', { path: configPath })).toEqual({
+        path: configPath,
+        apiKey: 'sk-pytc-doctor',
+      })
+
+      const missing = join(dir, 'missing.json')
+      expect(readHarnessApiKey('opencode', { path: missing })).toEqual({
+        path: missing,
+        apiKey: null,
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('reads the configured pi api key from models.json', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'paytaca-doctor-'))
+    try {
+      writeFileSync(
+        join(dir, 'models.json'),
+        JSON.stringify({ providers: { 'paytaca-ai': { apiKey: 'sk-pytc-pi' } } })
+      )
+      expect(readHarnessApiKey('pi', { path: join(dir, 'mcp.json') })).toEqual({
+        path: join(dir, 'models.json'),
+        apiKey: 'sk-pytc-pi',
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('builds the pi provider with a model per backend model', () => {

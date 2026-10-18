@@ -175,6 +175,7 @@ Paytaca AI is a pay-as-you-go model gateway paid with BCH or LIFT via x402. Mana
 
 ```bash
 paytaca ai configure [harness]      # Install MCP + AI provider (opencode is the default)
+paytaca ai doctor [harness]        # Diagnose why a model fails in a harness (402 / Invalid API key)
 paytaca ai api-key create           # Create a wallet-bound API key (shown once)
 paytaca ai models                   # List available models
 paytaca ai plans [model]            # Plan pricing, optionally for a single model
@@ -188,6 +189,16 @@ paytaca ai auto-refill --status     # Inspect; also --disable, --delete
 ```
 
 `ai configure` only writes configuration; buy credits separately with `paytaca ai purchase`. It accepts `--backend`, `--path`, `--api-key`, and `--chipnet`. `ai purchase` and `ai auto-refill` accept `--lift` to pay with LIFT tokens at a discount. Add `--json` to any `ai` subcommand for machine-readable output.
+
+If a model fails inside a harness — most commonly a `402` (`PAYMENT-SIGNATURE header is required`) or `Invalid API key` — run the doctor:
+
+```bash
+paytaca ai doctor opencode                    # Harness defaults to opencode
+paytaca ai doctor opencode --model <id>       # Also check a specific model
+paytaca ai doctor opencode --json             # Machine-readable report
+```
+
+`ai doctor` compares the credits the *active wallet* holds (`paytaca ai credits`) with the wallet the *configured API key* resolves to, and flags the common causes: no wallet, no API key, an invalid key, a key left over from a different wallet, stale OpenCode stored credentials, and a model with no plan or pay-as-you-go balance. An API key resolves to the wallet that minted it, so a `402` while `ai credits` shows a plan almost always means the harness is using a key for a different wallet — `ai configure` now detects this and mints a fresh wallet-bound key automatically.
 
 Armed auto-refill state lives at `~/.paytaca/auto-refill.json`. Arming performs one immediate check (buying right away if the armed model has no credits), and the `paytaca mcp` server keeps a background backstop (every 60s) while a session is running. The backstop refills **proactively** — once the armed model's remaining time drops to ~2 minutes it buys the next plan, so a session isn't interrupted by a mid-turn `402`. The `get_credits` MCP tool is read-only and never triggers a purchase; when auto-refill is armed it adds a `resumeHint` pointing at the `await_refill` tool, which waits for the refill to land and then lets the task continue automatically (it only ever buys through the already-armed configuration). Each execution is appended to `~/.paytaca/auto-refill-events.jsonl` and the latest is reported as `lastEvent`. It disarms when the budget is spent, funds are short, or the plan is no longer offered. Use `--disable` to pause and `--delete` to remove the configuration (history is kept).
 
@@ -240,7 +251,7 @@ paytaca ai configure opencode   # opencode | pi | omp
 
 The command creates a wallet-bound API key against the Paytaca AI backend and writes the provider (base URL, models, key) and MCP server into the harness config. For omp it updates `models.yml` when that file exists (omp prefers it over `models.json`). It does not buy credits; use `paytaca ai purchase` for that.
 
-Re-running is idempotent: an existing provider API key is reused. Then run the server over stdio:
+Re-running is idempotent: an existing provider API key is reused. Before reusing it, `ai configure` checks that the key still resolves to the active wallet; if it is invalid or belongs to a different wallet (the usual cause of a harness `402` even though `ai credits` shows a plan), a fresh wallet-bound key is minted and written in its place. An explicit `--api-key` always wins over the stored key. Then run the server over stdio:
 
 ```bash
 paytaca mcp              # mainnet

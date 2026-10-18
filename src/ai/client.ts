@@ -134,8 +134,8 @@ export async function getConfig(opts: RequestOptions = {}): Promise<AiConfig> {
   return body as AiConfig
 }
 
-export async function getWalletStatus(
-  walletHash: string,
+async function fetchWalletStatus(
+  authHeaders: Record<string, string>,
   opts: RequestOptions & { modelId?: string } = {}
 ): Promise<WalletStatus> {
   const base = resolveBackendUrl(opts.backendUrl)
@@ -148,7 +148,7 @@ export async function getWalletStatus(
       url.toString(),
       {
         method: 'GET',
-        headers: { 'X-Wallet-Hash': walletHash, ...(opts.headers || {}) },
+        headers: { ...authHeaders, ...(opts.headers || {}) },
       },
       opts.timeoutMs ?? 15000
     )
@@ -165,6 +165,24 @@ export async function getWalletStatus(
     )
   }
   return body as WalletStatus
+}
+
+export async function getWalletStatus(
+  walletHash: string,
+  opts: RequestOptions & { modelId?: string } = {}
+): Promise<WalletStatus> {
+  return fetchWalletStatus({ 'X-Wallet-Hash': walletHash }, opts)
+}
+
+/**
+ * Wallet status as seen through an API key. The backend resolves the key to
+ * its own wallet, so this is how the harness (OpenCode, Pi, omp) sees credits.
+ */
+export async function getApiKeyWalletStatus(
+  apiKey: string,
+  opts: RequestOptions & { modelId?: string } = {}
+): Promise<WalletStatus> {
+  return fetchWalletStatus({ Authorization: `Bearer ${apiKey}` }, opts)
 }
 
 export interface ChatRequestOptions extends RequestOptions {
