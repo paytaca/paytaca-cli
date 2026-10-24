@@ -284,6 +284,20 @@ claude --model paytaca-claude-deepseek-deepseek-v4-pro
 
 The aliases are derived from the model ids, so `z-ai/glm-5.3` becomes `paytaca-claude-z-ai-glm-5-3`. The alias list is cached by Claude Code in `~/.claude/cache/gateway-models.json` and refreshed on each start.
 
+**Reasoning effort.** The thinking/effort setting works in every supported harness, not just Claude Code. Each one expresses it differently, and `ai configure` writes the capability its own format expects:
+
+| Harness | How effort is declared | How it is sent |
+| --- | --- | --- |
+| Claude Code | gateway picks it up automatically | `thinking` + `output_config.effort` translated to `reasoning.effort` |
+| opencode | `capabilities.reasoning.effort` (v2) or `reasoning: true` (v1) | `reasoning_effort` |
+| pi / omp | `thinking: { mode: 'effort', efforts: [...] }` | `reasoning_effort` |
+
+Which levels you can pick depends on the model, so the menus come from the backend catalogue rather than a fixed list: GLM 5.3 accepts `max, high, low` and always reasons, DeepSeek V4 Pro accepts `xhigh, high, none`, and MiMo V2.6 Flash exposes no effort control at all (the setting is hidden rather than shown and ignored).
+
+`ai configure` only advertises levels a model actually accepts. Requests are normalised server-side as a safety net — an unsupported level is mapped to the nearest one the model does take, and `none` is dropped for models that cannot switch reasoning off, rather than being silently turned into a low level.
+
+Two billing notes. Reasoning tokens are billed as output tokens, and on most providers they count against `max_tokens`, so a small `max_tokens` with high effort can return an empty reply that still costs money; the backend raises the limit when it would starve the visible answer. Claude Code also asks for thinking to be hidden by default, so a high effort setting costs more without visibly looking different.
+
 **Read-only wallets:** if the active wallet cannot sign (no seed phrase in the keychain), `ai configure` asks for an API key instead of creating one. Generate it from your full wallet and hand it over:
 
 ```bash

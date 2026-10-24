@@ -112,6 +112,7 @@ export interface OpenAIRequest {
   temperature?: number
   tools?: { type: 'function'; function: { name: string; description?: string; parameters: unknown } }[]
   tool_choice?: unknown
+  reasoning?: { effort?: string; exclude?: boolean }
 }
 
 function blockText(block: AnthropicContentBlock): string {
@@ -272,6 +273,58 @@ export function toOpenAITools(tools: AnthropicTool[] | undefined): OpenAIRequest
   return mapped.length > 0 ? mapped : undefined
 }
 
+/**
+ * Translate Anthropic's reasoning controls into the OpenAI/OpenRouter shape.
+ *
+ * Claude Code asks for thinking in two ways: `thinking: {type:'adaptive'}` plus
+ * `output_config: {effort}`, or a fixed `thinking: {type:'enabled',
+ * budget_tokens}`. Neither exists on the OpenAI-compatible wire, so they are
+ * carried across as `reasoning.effort`.
+ *
+ * The requested level is deliberately NOT clamped here: the gateway has no
+ * reliable view of which levels each model accepts, and the backend already
+ * normalises onto the model's own list before it reaches the provider.
+ */
+export function toOpenAIReasoning(
+  body: Record<string, any>
+): OpenAIRequest['reasoning'] {
+  const thinking = body.thinking
+  if (thinking && typeof thinking === 'object') {
+    const type = typeof thinking.type === 'string' ? thinking.type.toLowerCase() : ''
+    if (type === 'disabled') return { effort: 'none' }
+  }
+
+  const outputConfig = body.output_config
+  if (outputConfig && typeof outputConfig === 'object') {
+    const effort = outputConfig.effort
+    if (typeof effort === 'string' && effort.trim()) {
+      return { effort: effort.trim().toLowerCase() }
+    }
+  }
+
+  if (thinking && typeof thinking === 'object') {
+    const type = typeof thinking.type === 'string' ? thinking.type.toLowerCase() : ''
+    if (type === 'enabled' || type === 'adaptive') {
+      const budget = thinking.budget_tokens
+      if (typeof budget === 'number' && budget > 0) {
+        return { effort: budgetToEffort(budget) }
+      }
+      return { effort: 'medium' }
+    }
+  }
+
+  return undefined
+}
+
+/** Bucket an Anthropic token budget onto a coarse effort level. */
+export function budgetToEffort(budgetTokens: number): string {
+  if (budgetTokens <= 0) return 'none'
+  if (budgetTokens < 2048) return 'low'
+  if (budgetTokens < 8192) return 'medium'
+  if (budgetTokens < 24576) return 'high'
+  return 'max'
+}
+
 export function buildOpenAIRequest(
   body: Record<string, any>,
   model: string
@@ -290,6 +343,8 @@ export function buildOpenAIRequest(
   const tools = toOpenAITools(body.tools)
   if (tools) request.tools = tools
   if (body.tool_choice !== undefined) request.tool_choice = body.tool_choice
+  const reasoning = toOpenAIReasoning(body)
+  if (reasoning) request.reasoning = reasoning
   return request
 }
 

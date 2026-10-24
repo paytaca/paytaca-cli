@@ -19,6 +19,7 @@ import {
   parseOpencodeAuthExport,
   parseOpencodeMajor,
   readHarnessApiKey,
+  reasoningEfforts,
   replaceOmpDefaultModel,
   resolveOpencodeMajor,
   serializeOmpProviderYaml,
@@ -412,6 +413,123 @@ describe('configure', () => {
       'cred_other',
     ])
     expect(staleOpencodeCredentialIds([], 'paytaca-ai', 'sk-pytc-current')).toEqual([])
+  })
+})
+
+describe('reasoning capability', () => {
+  const REASONING_CONFIG: AiConfig = {
+    models: [
+      {
+        id: 'z-ai/glm-5.3',
+        display_name: 'GLM 5.3',
+        price_tiers: [],
+        reasoning_efforts: ['max', 'high', 'low'],
+        reasoning_default_effort: 'max',
+        reasoning_mandatory: true,
+      },
+      {
+        id: 'deepseek/deepseek-v4-pro',
+        display_name: 'DeepSeek V4 Pro',
+        price_tiers: [],
+        reasoning_efforts: ['xhigh', 'high', 'none'],
+        reasoning_default_effort: 'high',
+      },
+      {
+        id: 'xiaomi/mimo-v2.6-flash',
+        display_name: 'MiMo V2.6 Flash',
+        price_tiers: [],
+      },
+    ],
+    default_model: 'z-ai/glm-5.3',
+  }
+
+  it('strips "none" from models that cannot disable reasoning', () => {
+    expect(reasoningEfforts(REASONING_CONFIG.models[0])).toEqual(['max', 'high', 'low'])
+    expect(reasoningEfforts(REASONING_CONFIG.models[1])).toEqual(['xhigh', 'high', 'none'])
+  })
+
+  it('treats a model with no efforts as having no control', () => {
+    expect(reasoningEfforts(REASONING_CONFIG.models[2])).toEqual([])
+  })
+
+  it('declares v2 opencode capabilities, leaving unsupported models alone', () => {
+    const models = buildOpencodeProvider(
+      REASONING_CONFIG,
+      'https://api.paytaca.ai',
+      'sk-pytc-test',
+      2
+    ).models as Record<string, any>
+
+    expect(models['z-ai/glm-5.3'].capabilities).toEqual({
+      reasoning: { supported: true, effort: ['max', 'high', 'low'] },
+    })
+    expect(models['deepseek/deepseek-v4-pro'].capabilities.reasoning.effort)
+      .toEqual(['xhigh', 'high', 'none'])
+    expect(models['xiaomi/mimo-v2.6-flash'].capabilities).toBeUndefined()
+  })
+
+  it('uses the v1 boolean form for older opencode', () => {
+    const models = buildOpencodeProvider(
+      REASONING_CONFIG,
+      'https://api.paytaca.ai',
+      'sk-pytc-test',
+      1
+    ).models as Record<string, any>
+
+    expect(models['z-ai/glm-5.3'].reasoning).toBe(true)
+    expect(models['xiaomi/mimo-v2.6-flash'].reasoning).toBeUndefined()
+  })
+
+  it('declares pi/omp thinking effort menus', () => {
+    const models = buildPiProvider(
+      REASONING_CONFIG,
+      'https://api.paytaca.ai',
+      'sk-pytc-test'
+    ).models as Record<string, any>[]
+
+    expect(models[0].reasoning).toBe(true)
+    expect(models[0].thinking).toEqual({
+      mode: 'effort',
+      efforts: ['max', 'high', 'low'],
+      requiresEffort: true,
+      defaultLevel: 'max',
+    })
+    expect(models[1].thinking.requiresEffort).toBe(false)
+    expect(models[2].reasoning).toBeUndefined()
+    expect(models[2].thinking).toBeUndefined()
+  })
+
+  it('writes pi/omp thinking objects as nested yaml, not stringified', () => {
+    const provider = buildPiProvider(
+      REASONING_CONFIG,
+      'https://api.paytaca.ai',
+      'sk-pytc-test'
+    )
+    const yaml = serializeOmpProviderYaml('paytaca-ai', provider)
+
+    expect(yaml).not.toContain('[object Object]')
+    expect(yaml).toContain(
+      [
+        '      - id: z-ai/glm-5.3',
+        '        name: GLM 5.3',
+        '        contextWindow: 128000',
+        '        maxTokens: 8192',
+        '        reasoning: true',
+        '        thinking:',
+        '          mode: effort',
+        '          efforts: [max, high, low]',
+        '          requiresEffort: true',
+        '          defaultLevel: max',
+      ].join('\n')
+    )
+    expect(yaml).toContain(
+      [
+        '      - id: xiaomi/mimo-v2.6-flash',
+        '        name: MiMo V2.6 Flash',
+        '        contextWindow: 128000',
+        '        maxTokens: 8192',
+      ].join('\n')
+    )
   })
 })
 

@@ -138,7 +138,34 @@ describe('anthropic request translation', () => {
           function: { name: 'Read', parameters: { type: 'object' } },
         },
       ],
+      reasoning: { effort: 'high' },
     })
+  })
+
+  it('carries Anthropic reasoning controls as reasoning.effort', () => {
+    const effortFrom = (body: Record<string, unknown>) =>
+      buildOpenAIRequest(body, 'm').reasoning?.effort
+
+    // Claude Code's own scheme: adaptive thinking plus an explicit effort.
+    expect(effortFrom({ output_config: { effort: 'max' } })).toBe('max')
+    expect(effortFrom({ output_config: { effort: 'LOW' } })).toBe('low')
+
+    // Turning thinking off must reach the backend as "none", not be dropped.
+    expect(effortFrom({ thinking: { type: 'disabled' } })).toBe('none')
+
+    // A fixed token budget is bucketed onto the coarse effort ladder.
+    expect(effortFrom({ thinking: { type: 'enabled', budget_tokens: 1024 } })).toBe('low')
+    expect(effortFrom({ thinking: { type: 'enabled', budget_tokens: 4096 } })).toBe('medium')
+    expect(effortFrom({ thinking: { type: 'enabled', budget_tokens: 16384 } })).toBe('high')
+    expect(effortFrom({ thinking: { type: 'enabled', budget_tokens: 32768 } })).toBe('max')
+
+    // Explicit effort wins over the implied default.
+    expect(
+      effortFrom({ thinking: { type: 'adaptive' }, output_config: { effort: 'high' } })
+    ).toBe('high')
+
+    // No reasoning controls at all: nothing is sent.
+    expect(effortFrom({})).toBeUndefined()
   })
 
   it('maps stop reasons', () => {

@@ -18,7 +18,7 @@ import {
 } from './anthropicProxy.js'
 import { WalletNotConfiguredError } from '../core/context.js'
 import { loadWalletRef } from '../wallet/index.js'
-import { getConfig, getWalletStatus, type AiConfig } from './client.js'
+import { getConfig, getWalletStatus, type AiConfig, type AiModelConfig } from './client.js'
 import { resolveBackendUrl } from './config.js'
 import {
   hasActiveCredits,
@@ -203,6 +203,25 @@ export function shouldClearOpencodeCredentials(opencodeMajor: number): boolean {
   return opencodeMajor >= 2
 }
 
+/**
+ * Reasoning menu for a model, as the effort levels its provider accepts.
+ *
+ * The catalogue is the source of truth because the accepted sets differ per
+ * model (GLM 5.3 takes max/high/low and cannot be switched off, DeepSeek V4 Pro
+ * takes xhigh/high/none). An empty list means the model exposes no effort
+ * control, and harnesses are told nothing rather than being handed a guess.
+ */
+export function reasoningEfforts(model: AiModelConfig): string[] {
+  const efforts = Array.isArray(model.reasoning_efforts)
+    ? model.reasoning_efforts.filter(
+        (effort): effort is string => typeof effort === 'string' && effort.length > 0
+      )
+    : []
+  return model.reasoning_mandatory
+    ? efforts.filter((effort) => effort !== 'none')
+    : efforts
+}
+
 export function buildOpencodeProvider(
   config: AiConfig,
   backendUrl: string,
@@ -212,10 +231,20 @@ export function buildOpencodeProvider(
   const models: Record<string, unknown> = {}
   for (const model of config.models || []) {
     if (!model?.id) continue
-    models[model.id] = {
+    const efforts = reasoningEfforts(model)
+    const entry: Record<string, unknown> = {
       name: model.display_name || model.id,
       limit: { context: DEFAULT_MODEL_CONTEXT, output: DEFAULT_MODEL_OUTPUT },
     }
+    if (efforts.length > 0) {
+      if (opencodeMajor >= 2) {
+        // v2 describes capability; the agent then offers the menu itself.
+        entry.capabilities = { reasoning: { supported: true, effort: efforts } }
+      } else {
+        entry.reasoning = true
+      }
+    }
+    models[model.id] = entry
   }
   if (opencodeMajor >= 2) {
     return {
@@ -395,12 +424,27 @@ export function buildPiProvider(
 ): Record<string, unknown> {
   const models = (config.models || [])
     .filter((model) => model?.id)
-    .map((model) => ({
-      id: model.id,
-      name: model.display_name || model.id,
-      contextWindow: DEFAULT_MODEL_CONTEXT,
-      maxTokens: DEFAULT_MODEL_OUTPUT,
-    }))
+    .map((model) => {
+      const efforts = reasoningEfforts(model)
+      const entry: Record<string, unknown> = {
+        id: model.id,
+        name: model.display_name || model.id,
+        contextWindow: DEFAULT_MODEL_CONTEXT,
+        maxTokens: DEFAULT_MODEL_OUTPUT,
+      }
+      if (efforts.length > 0) {
+        entry.reasoning = true
+        entry.thinking = {
+          mode: 'effort',
+          efforts,
+          requiresEffort: Boolean(model.reasoning_mandatory),
+          ...(model.reasoning_default_effort
+            ? { defaultLevel: model.reasoning_default_effort }
+            : {}),
+        }
+      }
+      return entry
+    })
   return {
     baseUrl: `${backendUrl}/v1`,
     apiKey,
@@ -558,6 +602,51 @@ function yamlScalar(value: unknown): string {
   return unsafe ? JSON.stringify(text) : text
 }
 
+function renderOmpEntry(
+  key: string,
+  value: unknown,
+  indent: string,
+  keyIndent: string,
+  lead: string
+): string[] {
+  const head = lead ? `${indent}${lead}${key}:` : `${keyIndent}${key}:`
+
+  if (isPlainObject(value) && Object.keys(value).length > 0) {
+    return [head, ...renderOmpMapping(Object.entries(value), `${keyIndent}  `)]
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return [`${head} []`]
+    if (value.every((item) => !isPlainObject(item) && !Array.isArray(item))) {
+      return [`${head} [${value.map((item) => yamlScalar(item)).join(', ')}]`]
+    }
+    const lines = [head]
+    for (const item of value) {
+      if (isPlainObject(item)) {
+        lines.push(...renderOmpMapping(Object.entries(item), `${keyIndent}  `, '- '))
+      } else {
+        lines.push(`${keyIndent}  - ${yamlScalar(item)}`)
+      }
+    }
+    return lines
+  }
+  return [`${head} ${yamlScalar(value)}`]
+}
+
+function renderOmpMapping(
+  entries: Array<[string, unknown]>,
+  indent: string,
+  firstPrefix = ''
+): string[] {
+  const keyIndent = indent + ' '.repeat(firstPrefix.length)
+  const out: string[] = []
+  let lead = firstPrefix
+  for (const [key, value] of entries) {
+    out.push(...renderOmpEntry(key, value, indent, keyIndent, lead))
+    lead = ''
+  }
+  return out
+}
+
 export function serializeOmpProviderYaml(
   providerId: string,
   provider: Record<string, unknown>,
@@ -566,20 +655,14 @@ export function serializeOmpProviderYaml(
   const inner = indent + '  '
   const out: string[] = [`${indent}${providerId}:`]
   const models = Array.isArray(provider.models) ? provider.models : []
-  for (const [key, value] of Object.entries(provider)) {
-    if (key === 'models') continue
-    out.push(`${inner}${key}: ${yamlScalar(value)}`)
-  }
+  const scalars = Object.entries(provider).filter(([key]) => key !== 'models')
+  out.push(...renderOmpMapping(scalars, inner))
   if (models.length > 0) {
     out.push(`${inner}models:`)
     const itemIndent = inner + '  '
     for (const model of models) {
       if (!isPlainObject(model)) continue
-      let first = true
-      for (const [key, value] of Object.entries(model)) {
-        out.push(`${first ? `${itemIndent}- ` : `${itemIndent}  `}${key}: ${yamlScalar(value)}`)
-        first = false
-      }
+      out.push(...renderOmpMapping(Object.entries(model), itemIndent, '- '))
     }
   }
   return out.join('\n')

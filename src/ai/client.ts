@@ -15,6 +15,11 @@ export interface AiModelConfig {
   max_output_tokens?: number
   supports_tools?: boolean
   supports_vision?: boolean
+  /** Effort levels this model accepts, highest first. Empty/absent = no control. */
+  reasoning_efforts?: string[]
+  reasoning_default_effort?: string | null
+  /** True when the model always reasons and cannot be switched off. */
+  reasoning_mandatory?: boolean
 }
 
 export interface AiConfig {
