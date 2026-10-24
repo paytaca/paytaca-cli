@@ -104,8 +104,8 @@ export function registerSwapCommand(program: Command): void {
           console.log(chalk.red('\nError: No cauldron token data found for this token.\n'))
           process.exit(1)
         }
-        const decimals = tokenData.bcmr.token.decimals
-        const symbol = tokenData.bcmr.token.symbol || tokenData.display_symbol
+        const decimals = tokenData.bcmr?.token?.decimals ?? 0
+        const symbol = tokenData.bcmr?.token?.symbol || tokenData.display_symbol
 
         // Convert decimal amount to base units
         const amount = opts.raw

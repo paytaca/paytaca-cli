@@ -177,6 +177,14 @@ describe('formatQuote', () => {
     const noFee = formatQuote(quote())
     expect(noFee).not.toContain('Platform fee')
   })
+
+  it('falls back when bcmr metadata is missing (bcmr: null)', () => {
+    const text = formatQuote(quote({
+      tokenData: { ...tokenData, bcmr: null },
+    }))
+    expect(text).toContain('500000 TT')
+    expect(text).toContain('1 BCH ≈ 2.0 TT')
+  })
 })
 
 describe('fetchCauldronFee', () => {

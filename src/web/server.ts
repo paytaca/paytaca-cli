@@ -371,8 +371,8 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
       if (isNaN(parsedAmount) || parsedAmount <= 0) throw new Error('Invalid amount')
       const tokenData = await fetchTokenData(opts.tokenId)
       if (!tokenData) throw new Error('No token data found')
-      const decimals = tokenData.bcmr.token.decimals
-      const symbol = tokenData.bcmr.token.symbol || tokenData.display_symbol
+      const decimals = tokenData.bcmr?.token?.decimals ?? 0
+      const symbol = tokenData.bcmr?.token?.symbol || tokenData.display_symbol
       const amount = BigInt(Math.round(parsedAmount * 10 ** decimals))
       const direction: SwapDirection = opts.direction === 'buy' ? 'buy' : 'sell'
       const quote = await estimateSwap({ tokenId: opts.tokenId, direction, amount })
@@ -402,7 +402,7 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
       const bchWallet = wallet.forNetwork(false)
       const tokenData = await fetchTokenData(opts.tokenId)
       if (!tokenData) throw new Error('No token data found')
-      const decimals = tokenData.bcmr.token.decimals
+      const decimals = tokenData.bcmr?.token?.decimals ?? 0
       const amount = BigInt(Math.round(parsedAmount * 10 ** decimals))
       const direction: SwapDirection = opts.direction === 'buy' ? 'buy' : 'sell'
       const result = await executeSwap({
