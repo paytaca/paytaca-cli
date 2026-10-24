@@ -47,6 +47,9 @@ export interface DoctorContext {
   apiKeyPrefix: string | null
   keyIdentity: KeyIdentity
   staleCredentials: number
+  /** Whether the local Anthropic gateway answers (Claude Code harness only). */
+  gatewayRunning?: boolean
+  gatewayUrl?: string
 }
 
 export function activePlanSummary(status: WalletStatus | null): string[] {
@@ -177,6 +180,26 @@ export function buildDoctorChecks(ctx: DoctorContext): DoctorCheck[] {
             label: 'OpenCode credentials',
             status: 'ok',
             detail: 'No stale stored credentials.',
+          }
+    )
+  }
+
+  if (ctx.harness === 'claude') {
+    checks.push(
+      ctx.gatewayRunning
+        ? {
+            id: 'gateway',
+            label: 'Anthropic gateway',
+            status: 'ok',
+            detail: `Running at ${ctx.gatewayUrl ?? 'http://127.0.0.1:7475'}.`,
+          }
+        : {
+            id: 'gateway',
+            label: 'Anthropic gateway',
+            status: 'fail',
+            detail:
+              'Claude Code cannot reach the Paytaca AI backend without the local gateway.',
+            fix: 'paytaca mcp --proxy',
           }
     )
   }

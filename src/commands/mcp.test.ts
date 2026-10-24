@@ -5,7 +5,17 @@ import { CLIENTS, buildTemplate } from './mcp.js'
 
 describe('mcp config templates', () => {
   it('exposes every supported client', () => {
-    expect(CLIENTS).toEqual(['opencode', 'pi', 'omp'])
+    expect(CLIENTS).toEqual(['opencode', 'pi', 'omp', 'claude'])
+  })
+
+  it('claude writes mcpServers to ~/.claude.json', () => {
+    const template = buildTemplate('claude', false)
+    expect(template.format).toBe('json')
+    expect(template.path).toBe(join(homedir(), '.claude.json'))
+    expect(template.json).toEqual({
+      mcpServers: { paytaca: { command: 'paytaca', args: ['mcp'] } },
+    })
+    expect(template.instructions).toMatch(/mcp add/)
   })
 
   it('opencode uses the local mcp block with an array command', () => {

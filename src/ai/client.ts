@@ -11,6 +11,10 @@ export interface AiModelConfig {
   id: string
   display_name: string
   price_tiers: PriceTier[]
+  context_input_limit?: number
+  max_output_tokens?: number
+  supports_tools?: boolean
+  supports_vision?: boolean
 }
 
 export interface AiConfig {

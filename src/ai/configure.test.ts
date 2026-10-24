@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AiConfig } from './client.js'
 import {
+  buildCreditStatusLines,
   buildOpencodeProvider,
   buildPiProvider,
   deepMerge,
@@ -411,5 +412,63 @@ describe('configure', () => {
       'cred_other',
     ])
     expect(staleOpencodeCredentialIds([], 'paytaca-ai', 'sk-pytc-current')).toEqual([])
+  })
+})
+
+describe('buildCreditStatusLines', () => {
+  const base = {
+    creditsActive: false,
+    paygEnabled: true,
+    paygBalanceUsd: 0,
+    planSuggestion: {
+      modelId: 'xiaomi/mimo-v2.6-flash',
+      displayName: 'MiMo V2.6 Flash',
+      minutes: 30,
+      priceSats: 1000,
+    },
+    canSign: true,
+  }
+
+  it('reports a funded pay-as-you-go balance as usable', () => {
+    const lines = buildCreditStatusLines({ ...base, paygBalanceUsd: 1.32 })
+    expect(lines[0]).toEqual({
+      tone: 'success',
+      text: 'Pay-as-you-go balance available — ready to use.',
+    })
+    expect(lines[1].text).toContain('$1.32')
+  })
+
+  it('treats time credits and pay-as-you-go as independent ways to pay', () => {
+    const lines = buildCreditStatusLines({
+      ...base,
+      creditsActive: true,
+      paygBalanceUsd: 0.5,
+    })
+    expect(lines[0].text).toBe('AI credits active — ready to use.')
+    expect(lines[1].text).toContain('$0.50')
+  })
+
+  it('offers both a time plan and pay-as-you-go when nothing is funded', () => {
+    const lines = buildCreditStatusLines(base)
+    expect(lines[0]).toEqual({
+      tone: 'warning',
+      text: 'No active AI credits or pay-as-you-go balance.',
+    })
+    const text = lines.map((line) => line.text).join('\n')
+    expect(text).toContain('paytaca ai purchase --model xiaomi/mimo-v2.6-flash --minutes 30')
+    expect(text).toContain('paytaca ai topup')
+  })
+
+  it('ignores a disabled or dust pay-as-you-go balance', () => {
+    const disabled = buildCreditStatusLines({ ...base, paygEnabled: false, paygBalanceUsd: 5 })
+    expect(disabled[0].tone).toBe('warning')
+
+    const dust = buildCreditStatusLines({ ...base, paygBalanceUsd: 0.0001 })
+    expect(dust[0].tone).toBe('warning')
+  })
+
+  it('points a read-only wallet at the full wallet for funding', () => {
+    const lines = buildCreditStatusLines({ ...base, canSign: false })
+    expect(lines.map((l) => l.text).join('\n')).toContain('Fund from your full wallet:')
   })
 })

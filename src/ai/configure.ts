@@ -6,13 +6,27 @@
 
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { CLIENTS, buildTemplate, type ClientTemplate, type McpClient } from '../commands/mcp.js'
+import {
+  ensureProxyRunning,
+  modelAlias,
+  modelDescription,
+  proxyBaseUrl,
+  resolveProxyPort,
+} from './anthropicProxy.js'
 import { WalletNotConfiguredError } from '../core/context.js'
 import { loadWalletRef } from '../wallet/index.js'
 import { getConfig, getWalletStatus, type AiConfig } from './client.js'
 import { resolveBackendUrl } from './config.js'
-import { hasActiveCredits, summarizeAllCredits, type CreditsSummary } from './credits.js'
+import {
+  hasActiveCredits,
+  paygBalanceUsd,
+  paygEnabled,
+  summarizeAllCredits,
+  type CreditsSummary,
+} from './credits.js'
 import { checkApiKeyWalletIdentity, type KeyIdentity } from './identity.js'
 import { selectModel, selectTier } from './models.js'
 import { provisionApiKey } from './oauth.js'
@@ -49,8 +63,68 @@ export interface ConfigureResult {
   models: { id: string; name: string }[]
   creditsActive: boolean
   credits: CreditsSummary[]
+  /** Pay-as-you-go balance in USD, when the backend reports one. */
+  paygBalanceUsd?: number
+  paygEnabled?: boolean
   planSuggestion?: PlanSuggestion
   warnings?: string[]
+}
+
+export type CreditStatusTone = 'success' | 'warning' | 'dim'
+
+export interface CreditStatusLine {
+  tone: CreditStatusTone
+  text: string
+}
+
+export const PAYG_USABLE_MIN_USD = 0.001
+
+/**
+ * How to tell the user they can (or cannot) spend. A time plan and a
+ * pay-as-you-go balance are independent ways to pay, so either one alone is
+ * enough and the empty case must offer both.
+ */
+export function buildCreditStatusLines(
+  result: Pick<
+    ConfigureResult,
+    'creditsActive' | 'paygEnabled' | 'paygBalanceUsd' | 'planSuggestion' | 'canSign'
+  >
+): CreditStatusLine[] {
+  const balance = result.paygBalanceUsd ?? 0
+  const paygUsable = Boolean(result.paygEnabled) && balance >= PAYG_USABLE_MIN_USD
+  const money = `$${balance.toFixed(2)}`
+
+  if (result.creditsActive) {
+    const lines: CreditStatusLine[] = [
+      { tone: 'success', text: 'AI credits active — ready to use.' },
+    ]
+    if (paygUsable) {
+      lines.push({ tone: 'dim', text: `Pay-as-you-go balance: ${money}` })
+    }
+    return lines
+  }
+
+  if (paygUsable) {
+    return [
+      { tone: 'success', text: 'Pay-as-you-go balance available — ready to use.' },
+      { tone: 'dim', text: `Balance: ${money}` },
+    ]
+  }
+
+  const lines: CreditStatusLine[] = [
+    { tone: 'warning', text: 'No active AI credits or pay-as-you-go balance.' },
+  ]
+  const prefix = result.canSign ? '' : 'Fund from your full wallet: '
+  if (result.planSuggestion) {
+    lines.push({
+      tone: 'dim',
+      text:
+        `Buy a time plan:  ${prefix}paytaca ai purchase ` +
+        `--model ${result.planSuggestion.modelId} --minutes ${result.planSuggestion.minutes}`,
+    })
+  }
+  lines.push({ tone: 'dim', text: `Or prepay per token: ${prefix}paytaca ai topup` })
+  return lines
 }
 
 export interface ConfigureOptions {
@@ -335,6 +409,69 @@ export function buildPiProvider(
   }
 }
 
+export const CLAUDE_SETTINGS_PATH = join(homedir(), '.claude', 'settings.json')
+
+/**
+ * Claude Code cannot talk to an OpenAI-compatible endpoint, so the provider is
+ * a local Anthropic gateway (`paytaca mcp --proxy`) plus the environment that
+ * points Claude Code at it.
+ */
+export function buildClaudeSettings(
+  config: AiConfig,
+  gatewayUrl: string,
+  apiKey: string
+): Record<string, unknown> {
+  const model = config.default_model || config.models?.[0]?.id
+  const selected = (config.models || []).find((entry) => entry?.id === model)
+  const env: Record<string, string> = {
+    ANTHROPIC_BASE_URL: gatewayUrl,
+    ANTHROPIC_AUTH_TOKEN: apiKey,
+    CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
+  }
+  if (model) {
+    // Use the gateway alias, not the provider id: Claude Code keys its picker
+    // on the id it is given, and only ids containing `claude` survive discovery.
+    const alias = modelAlias(model)
+    env.ANTHROPIC_MODEL = alias
+    env.ANTHROPIC_DEFAULT_MODEL = alias
+    env.ANTHROPIC_CUSTOM_MODEL_OPTION = alias
+    env.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME = selected?.display_name || model
+    env.ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION = modelDescription(model)
+    // Claude Code assumes 200k for a model id it does not recognise and warns
+    // at startup. Our ids are provider spellings, so declare the real window.
+    const window = selected?.context_input_limit
+    if (typeof window === 'number' && window > 0) {
+      env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(window)
+    }
+  }
+  const settings: Record<string, unknown> = { env }
+  if (model) settings.model = modelAlias(model)
+  return settings
+}
+
+export function extractClaudeApiKey(settings: Record<string, unknown>): string | null {
+  const env = settings.env
+  if (!isPlainObject(env)) return null
+  for (const key of ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY']) {
+    const value = env[key]
+    if (typeof value === 'string' && value.length > 0) return value
+  }
+  return null
+}
+
+/** Read a Claude settings file without throwing; used by `ai doctor`. */
+export function readClaudeSettings(path: string | null): Record<string, unknown> {
+  if (!path) return {}
+  return readJsonSafe(path)
+}
+
+export function extractClaudeBaseUrl(settings: Record<string, unknown>): string | null {
+  const env = settings.env
+  if (!isPlainObject(env)) return null
+  const value = env.ANTHROPIC_BASE_URL
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
 function normalizeApiKeyRef(raw: string): string | null {
   const envName = raw.trim().match(/^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/)
   if (envName) {
@@ -557,6 +694,11 @@ export function readHarnessApiKey(
 
   if (harness === 'opencode') {
     return { path: target, apiKey: extractExistingApiKey(readJsonSafe(target)) }
+  }
+
+  if (harness === 'claude') {
+    const settingsPath = options.path || CLAUDE_SETTINGS_PATH
+    return { path: settingsPath, apiKey: extractClaudeApiKey(readJsonSafe(settingsPath)) }
   }
 
   const agentDir = dirname(target)
@@ -874,11 +1016,16 @@ export async function configureHarness(options: ConfigureOptions): Promise<Confi
   const wallet = loadWalletRef()
   if (!wallet) throw new WalletNotConfiguredError()
   const template: ClientTemplate = buildTemplate(harness, isChipnet)
-  const target = options.path || template.path
+  // For claude, `--path` names settings.json; the MCP entry keeps its own
+  // fixed location in ~/.claude.json.
+  const target =
+    harness === 'claude'
+      ? template.path
+      : options.path || template.path
 
   const result: ConfigureResult = {
     harness,
-    path: target,
+    path: harness === 'claude' ? options.path || CLAUDE_SETTINGS_PATH : target,
     format: template.format,
     instructions: template.instructions,
     mcpInstalled: false,
@@ -944,6 +1091,51 @@ export async function configureHarness(options: ConfigureOptions): Promise<Confi
         ]
       }
     }
+  } else if (harness === 'claude') {
+    // Claude Code splits its config: MCP servers live in ~/.claude.json while
+    // the model and env that point it at the gateway live in settings.json.
+    // `--path` targets settings.json; MCP always follows the template path.
+    if (!target) throw new Error('No known config file for claude. Use --path.')
+    const settingsPath = options.path || CLAUDE_SETTINGS_PATH
+    const existingMcp = readJson(target)
+    const existingSettings = readJson(settingsPath)
+
+    const apiKey = await resolveApiKey(
+      extractClaudeApiKey(existingSettings),
+      options,
+      wallet,
+      backendUrl,
+      result
+    )
+
+    if (config && apiKey) {
+      const port = resolveProxyPort()
+      try {
+        const gateway = await ensureProxyRunning({ port, backendUrl })
+        writeJsonFile(
+          settingsPath,
+          deepMerge(existingSettings, buildClaudeSettings(config, gateway.url, apiKey))
+        )
+        result.path = settingsPath
+        result.models = (config.models || [])
+          .filter((m) => m?.id)
+          .map((m) => ({ id: m.id, name: m.display_name || m.id }))
+        result.providerInstalled = true
+        if (gateway.spawned) {
+          result.warnings = [
+            ...(result.warnings ?? []),
+            `Started the Paytaca Anthropic gateway at ${gateway.url}. Claude Code needs it running for every session — start it with \`paytaca mcp --proxy\` or re-run this command.`,
+          ]
+        }
+      } catch (err: any) {
+        result.providerError = err?.message || String(err)
+      }
+    } else if (!result.providerError) {
+      result.providerError = configError || 'Unable to load the AI configuration.'
+    }
+
+    writeJsonFile(target, deepMerge(existingMcp, template.json as Record<string, unknown>))
+    result.mcpInstalled = true
   } else {
     if (!target) throw new Error(`No known config file for harness "${harness}". Use --path.`)
     const existingMcp = readJson(target)
@@ -1007,6 +1199,8 @@ export async function configureHarness(options: ConfigureOptions): Promise<Confi
     const status = await getWalletStatus(wallet.walletHash, { backendUrl })
     result.credits = summarizeAllCredits(status)
     result.creditsActive = hasActiveCredits(status)
+    result.paygEnabled = paygEnabled(status)
+    result.paygBalanceUsd = paygBalanceUsd(status)
   } catch {
     result.creditsActive = false
   }

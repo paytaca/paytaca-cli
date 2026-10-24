@@ -188,7 +188,7 @@ paytaca ai auto-refill --enable --model <id> --minutes <n> --max-minutes <n>
 paytaca ai auto-refill --status     # Inspect; also --disable, --delete
 ```
 
-`ai configure` only writes configuration; buy credits separately with `paytaca ai purchase`. It accepts `--backend`, `--path`, `--api-key`, and `--chipnet`. `ai purchase` and `ai auto-refill` accept `--lift` to pay with LIFT tokens at a discount. Add `--json` to any `ai` subcommand for machine-readable output.
+`ai configure` only writes configuration; fund usage separately with either a time plan (`paytaca ai purchase`) or a prepaid pay-as-you-go balance (`paytaca ai topup`) — the two are independent, and either one alone is enough to use a model. It accepts `--backend`, `--path`, `--api-key`, and `--chipnet`. `ai purchase` and `ai auto-refill` accept `--lift` to pay with LIFT tokens at a discount. Add `--json` to any `ai` subcommand for machine-readable output.
 
 If a model fails inside a harness — most commonly a `402` (`PAYMENT-SIGNATURE header is required`) or `Invalid API key` — run the doctor:
 
@@ -199,7 +199,7 @@ paytaca ai doctor opencode --fix              # Diagnose, then repair credential
 paytaca ai doctor opencode --json             # Machine-readable report
 ```
 
-`ai doctor` compares the credits the *active wallet* holds (`paytaca ai credits`) with the wallet the *configured API key* resolves to, and flags the common causes: no wallet, no API key, an invalid key, a key left over from a different wallet, stale OpenCode stored credentials, and a model with no plan or pay-as-you-go balance. An API key resolves to the wallet that minted it, so a `402` while `ai credits` shows a plan almost always means the harness is using a key for a different wallet — `ai configure` now detects this and mints a fresh wallet-bound key automatically.
+`ai doctor` compares the credits the *active wallet* holds (`paytaca ai credits`) with the wallet the *configured API key* resolves to, and flags the common causes: no wallet, no API key, an invalid key, a key left over from a different wallet, stale OpenCode stored credentials, a stopped Claude Code gateway, and a model with no plan or pay-as-you-go balance. An API key resolves to the wallet that minted it, so a `402` while `ai credits` shows a plan almost always means the harness is using a key for a different wallet — `ai configure` now detects this and mints a fresh wallet-bound key automatically.
 
 Add `--fix` to repair the config/credential problems it finds: it re-runs `ai configure` (installing a missing key, replacing an invalid or wallet-mismatched key, and clearing stale OpenCode credentials), then re-checks and prints a before/after report. It only ever fixes credential/config state — anything that spends money (buying a plan or topping up) or needs a human (creating or importing a wallet) is still only suggested. For a read-only wallet, pass `--api-key <key>` so the fix has a key to install; otherwise it prompts (interactive) or leaves the issue in place. `--fix` also accepts `--backend`, `--path`, and `--chipnet`.
 
@@ -249,7 +249,7 @@ Video generation follows the same two-phase flow as images: an order is created 
 Configure an AI harness in one step. This installs the Paytaca MCP server and the Paytaca AI provider (model catalogue + API key) so the Paytaca AI models are usable immediately:
 
 ```bash
-paytaca ai configure opencode   # opencode | pi | omp
+paytaca ai configure opencode   # opencode | pi | omp | claude
 ```
 
 The command creates a wallet-bound API key against the Paytaca AI backend and writes the provider (base URL, models, key) and MCP server into the harness config. For omp it updates `models.yml` when that file exists (omp prefers it over `models.json`). It does not buy credits; use `paytaca ai purchase` for that.
@@ -260,6 +260,29 @@ Re-running is idempotent: an existing provider API key is reused. Before reusing
 paytaca mcp              # mainnet
 paytaca mcp --chipnet    # default MCP tools to chipnet (testnet)
 ```
+
+#### Claude Code
+
+Claude Code speaks Anthropic's `/v1/messages` API, which the Paytaca AI backend does not serve. `ai configure claude` therefore also installs a small local gateway that translates Anthropic requests into the backend's OpenAI-style `/v1/chat/completions`, streaming the reply back as Anthropic SSE events. Tool use is translated in both directions, so Claude Code's own tools work normally.
+
+```bash
+paytaca ai configure claude      # ~/.claude.json (MCP) + ~/.claude/settings.json (model, env)
+paytaca mcp --proxy              # run the gateway in the foreground
+paytaca mcp --proxy --port 7475  # pick a port (default 7475)
+paytaca mcp --stop               # stop the background gateway
+```
+
+`ai configure claude` starts the gateway in the background and records its pidfile at `~/.paytaca/anthropic-proxy.json`. The gateway must be running for Claude Code to reach Paytaca models — restart it with `paytaca mcp --proxy` after a reboot, or re-run `ai configure claude`, which reuses an already-listening gateway. `paytaca ai doctor claude` reports whether it is up.
+
+The gateway holds no secrets of its own: it forwards the `ANTHROPIC_AUTH_TOKEN` that Claude Code sends on each request, so the only copy of your key lives in `~/.claude/settings.json`.
+
+**Switching models.** All Paytaca models are selectable from the `/model` picker, listed under their display names (MiMo V2.6 Flash, DeepSeek V4 Pro, GLM 5.3, Kimi K3, …) with their id and `- via Paytaca AI` as the description, e.g. `xiaomi/mimo-v2.6-flash - via Paytaca AI`. The gateway serves them under `paytaca-claude-…` aliases because Claude Code's gateway discovery silently discards any model id that doesn't contain `claude` or `anthropic`. `claude` sits mid-string on purpose: Claude Code ignores `CLAUDE_CODE_MAX_CONTEXT_TOKENS` for ids that start with `claude-`, so a `claude-…` prefix would make it assume a 200k window. You can also pass an alias directly:
+
+```bash
+claude --model paytaca-claude-deepseek-deepseek-v4-pro
+```
+
+The aliases are derived from the model ids, so `z-ai/glm-5.3` becomes `paytaca-claude-z-ai-glm-5-3`. The alias list is cached by Claude Code in `~/.claude/cache/gateway-models.json` and refreshed on each start.
 
 **Read-only wallets:** if the active wallet cannot sign (no seed phrase in the keychain), `ai configure` asks for an API key instead of creating one. Generate it from your full wallet and hand it over:
 
@@ -384,6 +407,7 @@ src/
     pay.ts           x402 BCH payment handler for HTTP requests
     check.ts         Check if URL requires x402 payment
     ai.ts            Paytaca AI (configure, api-key, models, plans, credits, purchase, auto-refill, image)
+    anthropicProxy.ts  Anthropic↔OpenAI gateway for Claude Code (`paytaca mcp --proxy`)
     chat.ts          Nostr chat (contacts, conversations, identity, listen)
     web.ts           `paytaca web` — local browser UI launcher
     mcp.ts           `paytaca mcp` stdio entry + per-harness config templates

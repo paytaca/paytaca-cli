@@ -70,13 +70,17 @@ import {
 import { provisionApiKey } from '../ai/oauth.js'
 import {
   OPENCODE_PROVIDER_ID,
+  buildCreditStatusLines,
   configureHarness,
+  extractClaudeBaseUrl,
+  readClaudeSettings,
   readHarnessApiKey,
   readOpencodeMajor,
   shouldClearOpencodeCredentials,
   staleOpencodeCredentialIdsFromCli,
   type ConfigureResult,
 } from '../ai/configure.js'
+import { isProxyRunning, proxyBaseUrl, resolveProxyPort } from '../ai/anthropicProxy.js'
 import {
   buildDoctorChecks,
   fixableChecks,
@@ -289,7 +293,7 @@ export function registerAiCommands(program: Command): void {
       console.log(
         `   MCP:      ${result.mcpInstalled ? chalk.green('configured') : chalk.red('failed')}`
       )
-      if (result.harness === 'opencode' || result.harness === 'pi' || result.harness === 'omp') {
+      if (CLIENTS.includes(result.harness)) {
         if (result.providerInstalled) {
           const how = result.apiKeyReplaced
             ? 'replaced API key'
@@ -315,24 +319,17 @@ export function registerAiCommands(program: Command): void {
         console.log(chalk.yellow(`   Warning: ${warning}`))
       }
 
-      if (result.creditsActive) {
-        console.log(chalk.green('\n   AI credits active — ready to use.'))
-      } else if (!result.canSign) {
-        console.log(chalk.yellow('\n   No active AI credits.'))
-        if (result.planSuggestion) {
-          console.log(
-            chalk.dim(
-              `   Fund from your full wallet: paytaca ai purchase --model ${result.planSuggestion.modelId} --minutes ${result.planSuggestion.minutes}`
-            )
-          )
-        }
-      } else if (result.planSuggestion) {
-        console.log(chalk.yellow('\n   No active AI credits.'))
-        console.log(
-          chalk.dim(
-            `   Buy a plan: paytaca ai purchase --model ${result.planSuggestion.modelId} --minutes ${result.planSuggestion.minutes}`
-          )
-        )
+      console.log('')
+      for (const line of buildCreditStatusLines(result)) {
+        const paint =
+          line.tone === 'success' ? chalk.green : line.tone === 'warning' ? chalk.yellow : chalk.dim
+        console.log(paint(`   ${line.text}`))
+      }
+
+      if (result.harness === 'claude' && result.providerInstalled) {
+        console.log(chalk.dim('\n   Claude Code reaches Paytaca models through a local gateway:'))
+        console.log(chalk.dim('      paytaca mcp --proxy     # start the gateway'))
+        console.log(chalk.dim('      paytaca mcp --stop      # stop it'))
       }
 
       if (result.harness === 'pi') {
@@ -413,6 +410,15 @@ export function registerAiCommands(program: Command): void {
           }
         }
 
+        let gatewayRunning: boolean | undefined
+        let gatewayUrl: string | undefined
+        if (harness === 'claude') {
+          const settings = readClaudeSettings(configPath)
+          const port = resolveProxyPort()
+          gatewayUrl = extractClaudeBaseUrl(settings) ?? proxyBaseUrl(port)
+          gatewayRunning = await isProxyRunning(port)
+        }
+
         const ctx: DoctorContext = {
           walletConfigured: Boolean(wallet),
           walletCanSign: Boolean(wallet?.canSign),
@@ -424,6 +430,8 @@ export function registerAiCommands(program: Command): void {
           apiKeyPrefix,
           keyIdentity,
           staleCredentials,
+          gatewayRunning,
+          gatewayUrl,
         }
         return { ctx, configPath }
       }
