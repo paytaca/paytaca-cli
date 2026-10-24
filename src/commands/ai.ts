@@ -74,6 +74,7 @@ import {
   configureHarness,
   extractClaudeBaseUrl,
   harnessConfigParseError,
+  readCodexBaseUrl,
   readClaudeSettings,
   readHarnessApiKey,
   readHarnessReasoningConfig,
@@ -328,8 +329,15 @@ export function registerAiCommands(program: Command): void {
         console.log(paint(`   ${line.text}`))
       }
 
-      if (result.harness === 'claude' && result.providerInstalled) {
-        console.log(chalk.dim('\n   Claude Code reaches Paytaca models through a local gateway:'))
+      if (
+        (result.harness === 'claude' || result.harness === 'codex') &&
+        result.providerInstalled
+      ) {
+        console.log(
+          chalk.dim(
+            `\n   ${result.harness === 'codex' ? 'Codex' : 'Claude Code'} reaches Paytaca models through a local gateway:`
+          )
+        )
         console.log(chalk.dim('      paytaca mcp --proxy     # start the gateway'))
         console.log(chalk.dim('      paytaca mcp --stop      # stop it'))
       }
@@ -445,6 +453,17 @@ export function registerAiCommands(program: Command): void {
           // Probe the port the harness actually points at, not just the
           // default: a stale settings URL is a common "gateway is running but
           // Claude Code still fails" cause.
+          let probePort = port
+          try {
+            const parsed = gatewayUrl ? new URL(gatewayUrl) : null
+            if (parsed?.port) probePort = Number(parsed.port)
+          } catch {
+            probePort = port
+          }
+          gatewayRunning = await isProxyRunning(probePort)
+        } else if (harness === 'codex') {
+          const port = resolveProxyPort()
+          gatewayUrl = (configPath ? readCodexBaseUrl(configPath) : null) ?? proxyBaseUrl(port)
           let probePort = port
           try {
             const parsed = gatewayUrl ? new URL(gatewayUrl) : null

@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AiConfig } from './client.js'
 import {
+  buildCodexConfigToml,
+  buildCodexModelCatalog,
   buildCreditStatusLines,
   buildOpencodeProvider,
   buildPiProvider,
@@ -19,6 +21,7 @@ import {
   parseJsonConfig,
   parseOpencodeAuthExport,
   parseOpencodeMajor,
+  readCodexConfig,
   readHarnessApiKey,
   readHarnessReasoningConfig,
   reasoningEfforts,
@@ -741,6 +744,168 @@ describe('harnessConfigParseError', () => {
       writeFileSync(path, '{\n // comment\n "providers": {},\n}\n')
       expect(harnessConfigParseError('opencode', { path })).toBeNull()
       expect(harnessConfigParseError('opencode', { path: join(dir, 'absent.json') })).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('codex configuration', () => {
+  const bundled = {
+    models: [
+      {
+        slug: 'base-model',
+        display_name: 'Base',
+        description: 'Base',
+        visibility: 'list',
+        use_responses_lite: false,
+        model_messages: { instructions_template: 'You are Codex.' },
+        supported_reasoning_levels: [{ effort: 'low', description: 'low' }],
+      },
+    ],
+  }
+
+  const config: AiConfig = {
+    models: [
+      {
+        id: 'deepseek/deepseek-v4.1-flash',
+        display_name: 'DeepSeek V4.1 Flash',
+        price_tiers: [],
+        context_input_limit: 1_000_000,
+        max_output_tokens: 65_536,
+        reasoning_efforts: ['max', 'high', 'low', 'none'],
+        reasoning_default_effort: 'high',
+      },
+      {
+        id: 'xiaomi/mimo-v2.6-flash',
+        display_name: 'MiMo V2.6 Flash',
+        price_tiers: [],
+      },
+    ],
+    default_model: 'deepseek/deepseek-v4.1-flash',
+  }
+
+  it('clones the bundled catalogue entry for every Paytaca model', () => {
+    const catalog = buildCodexModelCatalog(config, bundled) as {
+      models: Record<string, any>[]
+    }
+    expect(catalog.models).toHaveLength(2)
+    expect(catalog.models[0]).toMatchObject({
+      slug: 'deepseek/deepseek-v4.1-flash',
+      display_name: 'DeepSeek V4.1 Flash',
+      description: 'deepseek/deepseek-v4.1-flash - via Paytaca AI',
+      visibility: 'list',
+      supported_in_api: true,
+      default_reasoning_level: 'high',
+      context_window: 128_000,
+      max_context_window: 128_000,
+      use_responses_lite: false,
+      tool_mode: 'direct',
+      model_messages: { instructions_template: 'You are Codex.' },
+    })
+    expect(catalog.models[0].supported_reasoning_levels.map((level: any) => level.effort)).toEqual([
+      'max',
+      'high',
+      'low',
+      'none',
+    ])
+    expect(catalog.models[1]).toMatchObject({
+      slug: 'xiaomi/mimo-v2.6-flash',
+      default_reasoning_level: null,
+      supported_reasoning_levels: [],
+    })
+  })
+
+  it('writes provider, model and MCP tables while preserving unrelated config', () => {
+    const existing = [
+      '# my codex config',
+      'model = "old-model"',
+      'approval_policy = "never"',
+      '',
+      '[model_providers.other]',
+      'name = "Other"',
+      '',
+      '[model_providers.paytaca-ai]',
+      'name = "Old"',
+      'base_url = "http://old"',
+      '',
+      '[mcp_servers.paytaca]',
+      'command = "old"',
+      '',
+      '[profiles.fast]',
+      'model = "mini"',
+    ].join('\n')
+    const toml = buildCodexConfigToml(existing, {
+      config,
+      apiKey: 'sk-test',
+      gatewayUrl: 'http://127.0.0.1:7475',
+      catalogPath: '/tmp/codex-models.json',
+    })
+    expect(toml).toContain('# my codex config')
+    expect(toml).toContain('approval_policy = "never"')
+    expect(toml).toContain('[model_providers.other]')
+    expect(toml).toContain('[profiles.fast]')
+    expect(toml).not.toContain('model = "old-model"')
+    expect(toml.match(/\[model_providers\.paytaca-ai\]/g)).toHaveLength(1)
+    expect(toml).toContain('model = "deepseek/deepseek-v4.1-flash"')
+    expect(toml).toContain('model_reasoning_effort = "high"')
+    expect(toml).toContain('model_context_window = 128000')
+    expect(toml).toContain('wire_api = "responses"')
+    expect(toml).toContain('base_url = "http://127.0.0.1:7475/v1"')
+    expect(toml).toContain('http_headers = { Authorization = "Bearer sk-test" }')
+    expect(toml).toContain('[mcp_servers.paytaca]')
+    expect(toml).toContain('args = ["mcp"]')
+  })
+
+  it('mcpOnly leaves an existing provider config untouched', () => {
+    const existing = [
+      'model = "deepseek/deepseek-v4.1-flash"',
+      '',
+      '[model_providers.paytaca-ai]',
+      'name = "Paytaca AI"',
+      'http_headers = { Authorization = "Bearer keep-me" }',
+      '',
+      '[mcp_servers.paytaca]',
+      'command = "old"',
+    ].join('\n')
+    const toml = buildCodexConfigToml(existing, { mcpOnly: true })
+    expect(toml).toContain('Authorization = "Bearer keep-me"')
+    expect(toml).toContain('command = "paytaca"')
+    expect(toml).not.toContain('command = "old"')
+  })
+
+  it('reads the API key, base URL, model and catalog path', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'paytaca-codex-'))
+    try {
+      const path = join(dir, 'config.toml')
+      writeFileSync(
+        path,
+        [
+          'model = "glm"',
+          'model_catalog_json = "/tmp/models.json"',
+          '',
+          '[model_providers.paytaca-ai]',
+          'base_url = "http://127.0.0.1:7475/v1"',
+          'http_headers = { Authorization = "Bearer sk-read" }',
+        ].join('\n')
+      )
+      expect(readCodexConfig(path)).toMatchObject({
+        apiKey: 'sk-read',
+        baseUrl: 'http://127.0.0.1:7475/v1',
+        model: 'glm',
+        catalogPath: '/tmp/models.json',
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('reports a malformed TOML table header', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'paytaca-codex-'))
+    try {
+      const path = join(dir, 'config.toml')
+      writeFileSync(path, '[mcp_servers.paytaca\ncommand = "paytaca"\n')
+      expect(harnessConfigParseError('codex', { path })).toContain('could not be parsed')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

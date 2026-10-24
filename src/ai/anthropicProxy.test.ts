@@ -3,6 +3,9 @@ import { buildClaudeSettings } from './configure.js'
 import {
   buildAnthropicMessage,
   buildOpenAIRequest,
+  buildResponsesChatRequest,
+  buildResponsesResponse,
+  createResponsesStreamTranslator,
   buildSystemPrompt,
   createStreamTranslator,
   extractApiKey,
@@ -11,6 +14,8 @@ import {
   modelAlias,
   modelDescription,
   resolveModel,
+  responsesInputToMessages,
+  responsesToolsToChat,
   toOpenAIMessages,
   toOpenAITools,
 } from './anthropicProxy.js'
@@ -378,5 +383,172 @@ describe('proxy configuration', () => {
       'sk-pytc-key'
     )
     expect((settings.env as Record<string, string>).CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('128000')
+  })
+})
+
+describe('responses request translation', () => {
+  it('maps instructions, messages, calls and outputs to chat messages', () => {
+    const messages = responsesInputToMessages(
+      [
+        { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'be brief' }] },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'read a.txt' }] },
+        {
+          type: 'function_call',
+          call_id: 'call_1',
+          name: 'read_file',
+          arguments: '{"path":"a.txt"}',
+        },
+        { type: 'function_call_output', call_id: 'call_1', output: 'hello' },
+      ],
+      'system instructions'
+    )
+    expect(messages).toEqual([
+      { role: 'system', content: 'system instructions' },
+      { role: 'system', content: 'be brief' },
+      { role: 'user', content: 'read a.txt' },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call_1',
+            type: 'function',
+            function: { name: 'read_file', arguments: '{"path":"a.txt"}' },
+          },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'call_1', content: 'hello' },
+    ])
+  })
+
+  it('wraps freeform custom tools as a structured function', () => {
+    const { tools, customTools } = responsesToolsToChat([
+      {
+        type: 'function',
+        name: 'read_file',
+        description: 'Read a file',
+        parameters: { type: 'object', properties: { path: { type: 'string' } } },
+      },
+      { type: 'custom', name: 'apply_patch', description: 'Apply a patch', format: {} },
+    ])
+    expect(customTools).toEqual(new Set(['apply_patch']))
+    expect(tools?.[0].function.name).toBe('read_file')
+    expect(tools?.[1].function.name).toBe('apply_patch')
+    expect(tools?.[1].function.parameters).toMatchObject({
+      required: ['input'],
+      properties: { input: { type: 'string' } },
+    })
+  })
+
+  it('forwards reasoning effort and limits to the backend request', () => {
+    const { request } = buildResponsesChatRequest(
+      {
+        model: 'glm',
+        instructions: 'sys',
+        input: [{ type: 'message', role: 'user', content: 'hi' }],
+        stream: true,
+        max_output_tokens: 4096,
+        reasoning: { effort: 'max' },
+      },
+      'z-ai/glm-5.3'
+    )
+    expect(request).toMatchObject({
+      model: 'z-ai/glm-5.3',
+      stream: true,
+      max_tokens: 4096,
+      reasoning: { effort: 'max' },
+    })
+  })
+})
+
+describe('responses streaming translation', () => {
+  it('emits message and completed events for text', () => {
+    const translator = createResponsesStreamTranslator('resp_1', 'glm')
+    let stream = translator.start()
+    stream += translator.handleChunk({
+      choices: [{ delta: { content: 'hello' } }],
+    })
+    stream += translator.handleChunk({
+      choices: [{ delta: {} }],
+      usage: {
+        prompt_tokens: 3,
+        completion_tokens: 2,
+        total_tokens: 5,
+        completion_tokens_details: { reasoning_tokens: 1 },
+      },
+    })
+    stream += translator.finish()
+
+    expect(stream).toContain('event: response.created')
+    expect(stream).toContain('event: response.output_item.added')
+    expect(stream).toContain('event: response.output_text.delta')
+    expect(stream).toContain('"delta":"hello"')
+    expect(stream).toContain('event: response.output_item.done')
+    expect(stream).toContain('event: response.completed')
+    expect(stream).toContain('"input_tokens":3')
+    expect(stream).toContain('"output_tokens":2')
+    expect(stream).toContain('"reasoning_tokens":1')
+    expect(stream).toContain('"total_tokens":5')
+  })
+
+  it('emits a custom tool call for freeform tools', () => {
+    const translator = createResponsesStreamTranslator(
+      'resp_2',
+      'glm',
+      new Set(['apply_patch'])
+    )
+    let stream = translator.start()
+    stream += translator.handleChunk({
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id: 'call_2',
+                function: { name: 'apply_patch', arguments: '{"input":"*** Begin Patch"}' },
+              },
+            ],
+          },
+        },
+      ],
+    })
+    stream += translator.finish()
+    expect(stream).toContain('"type":"custom_tool_call"')
+    expect(stream).toContain('"call_id":"call_2"')
+    expect(stream).toContain('"input":"*** Begin Patch"')
+    expect(stream).toContain('event: response.completed')
+  })
+})
+
+describe('responses non-streaming translation', () => {
+  it('maps chat completions to a response object', () => {
+    const response = buildResponsesResponse('resp_3', 'glm', {
+      choices: [
+        {
+          message: {
+            content: 'done',
+            tool_calls: [
+              { id: 'call_3', function: { name: 'read_file', arguments: '{"path":"a"}' } },
+            ],
+          },
+        },
+      ],
+      usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+    }) as any
+    expect(response.object).toBe('response')
+    expect(response.status).toBe('completed')
+    expect(response.output[0].content[0].text).toBe('done')
+    expect(response.output[1]).toMatchObject({
+      type: 'function_call',
+      call_id: 'call_3',
+      name: 'read_file',
+      arguments: '{"path":"a"}',
+    })
+    expect(response.usage).toMatchObject({
+      input_tokens: 1,
+      output_tokens: 2,
+      total_tokens: 3,
+    })
   })
 })

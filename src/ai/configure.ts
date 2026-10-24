@@ -7,7 +7,7 @@
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { CLIENTS, buildTemplate, type ClientTemplate, type McpClient } from '../commands/mcp.js'
 import {
   ensureProxyRunning,
@@ -89,7 +89,7 @@ export interface PlanSuggestion {
 export interface ConfigureResult {
   harness: McpClient
   path: string | null
-  format: 'json'
+  format: 'json' | 'toml'
   instructions: string
   mcpInstalled: boolean
   providerInstalled: boolean
@@ -816,6 +816,396 @@ function readJsonSafe(path: string): Record<string, unknown> {
  * Mirrors the file locations used by {@link configureHarness}, so `ai doctor`
  * inspects exactly what the harness will read at runtime.
  */
+export const CODEX_PROVIDER_ID = 'paytaca-ai'
+export const CODEX_CONFIG_PATH = join(homedir(), '.codex', 'config.toml')
+export const CODEX_MODEL_CATALOG_FILE = 'paytaca-models.json'
+
+export interface CodexConfigInfo {
+  path: string
+  apiKey: string | null
+  baseUrl: string | null
+  model: string | null
+  catalogPath: string | null
+}
+
+interface TomlTable {
+  header: string
+  lines: string[]
+}
+
+function tomlQuote(value: string): string {
+  return JSON.stringify(value)
+}
+
+function tomlArray(values: string[]): string {
+  return `[${values.map(tomlQuote).join(', ')}]`
+}
+
+function unquoteToml(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const value = raw.trim().replace(/\s+#.*$/, '')
+  if (value.startsWith('"') && value.endsWith('"')) {
+    try {
+      const parsed = JSON.parse(value)
+      return typeof parsed === 'string' ? parsed : null
+    } catch {
+      return null
+    }
+  }
+  if (value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1)
+  }
+  return null
+}
+
+function splitToml(text: string): { top: string[]; tables: TomlTable[] } {
+  const top: string[] = []
+  const tables: TomlTable[] = []
+  let current: TomlTable | null = null
+  for (const line of text.split(/\r?\n/)) {
+    const header = line.trim().match(/^\[\[?\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$/)
+    if (header) {
+      current = { header: header[1].trim(), lines: [] }
+      tables.push(current)
+      continue
+    }
+    if (current) current.lines.push(line)
+    else top.push(line)
+  }
+  return { top, tables }
+}
+
+function tomlLineValue(lines: string[], key: string): string | null {
+  const pattern = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=\\s*(.+)$`)
+  for (const line of lines) {
+    const match = line.match(pattern)
+    if (match) return match[1].trim()
+  }
+  return null
+}
+
+function getTomlTable(tables: TomlTable[], header: string): TomlTable | null {
+  return tables.find((table) => table.header === header) ?? null
+}
+
+function tomlBearer(raw: string | null): string | null {
+  if (!raw) return null
+  const match = raw.match(/Authorization\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*')/i)
+  const value = unquoteToml(match ? match[1] : raw)
+  if (!value) return null
+  const bearer = value.match(/^Bearer\s+(.+)$/i)
+  return (bearer ? bearer[1] : value).trim() || null
+}
+
+export function readCodexConfig(path: string = CODEX_CONFIG_PATH): CodexConfigInfo {
+  let text = ''
+  try {
+    text = readFileSync(path, 'utf-8')
+  } catch {
+    return { path, apiKey: null, baseUrl: null, model: null, catalogPath: null }
+  }
+
+  const { top, tables } = splitToml(text)
+  const model = unquoteToml(tomlLineValue(top, 'model'))
+  const catalogPath = unquoteToml(tomlLineValue(top, 'model_catalog_json'))
+  const provider = getTomlTable(tables, `model_providers.${CODEX_PROVIDER_ID}`)
+
+  let apiKey: string | null = null
+  let baseUrl: string | null = null
+  if (provider) {
+    baseUrl = unquoteToml(tomlLineValue(provider.lines, 'base_url'))
+    apiKey = tomlBearer(tomlLineValue(provider.lines, 'http_headers'))
+    if (!apiKey) {
+      apiKey = unquoteToml(tomlLineValue(provider.lines, 'experimental_bearer_token'))
+    }
+    const envKey = unquoteToml(tomlLineValue(provider.lines, 'env_key'))
+    if (!apiKey && envKey && process.env[envKey]) apiKey = process.env[envKey] as string
+  }
+
+  if (!apiKey) {
+    const headers = getTomlTable(
+      tables,
+      `model_providers.${CODEX_PROVIDER_ID}.http_headers`
+    )
+    if (headers) {
+      apiKey = tomlBearer(
+        tomlLineValue(headers.lines, 'Authorization') ??
+          tomlLineValue(headers.lines, 'authorization')
+      )
+    }
+  }
+
+  return { path, apiKey, baseUrl, model, catalogPath }
+}
+
+export function readCodexApiKey(path?: string): string | null {
+  return readCodexConfig(path).apiKey
+}
+
+export function readCodexBaseUrl(path?: string): string | null {
+  return readCodexConfig(path).baseUrl
+}
+
+export function codexConfigParseError(path: string): string | null {
+  if (!existsSync(path)) return null
+  let text = ''
+  try {
+    text = readFileSync(path, 'utf-8')
+  } catch {
+    return `Config at ${path} could not be read.`
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed.startsWith('[')) continue
+    if (!/^\[\[?.+\]\]?\s*(?:#.*)?$/.test(trimmed)) {
+      return `Config at ${path} could not be parsed (invalid TOML table header).`
+    }
+  }
+  return null
+}
+
+const EFFORT_DESCRIPTIONS: Record<string, string> = {
+  none: 'Reasoning disabled for fast, low-cost answers',
+  minimal: 'Minimal reasoning for simple tasks',
+  low: 'Fast responses with lighter reasoning',
+  medium: 'Balances speed and reasoning depth',
+  high: 'Greater reasoning depth for complex problems',
+  xhigh: 'Extra high reasoning depth for difficult problems',
+  max: 'Maximum reasoning depth for the hardest problems',
+  ultra: 'Maximum reasoning with automatic task delegation',
+}
+
+export function readBundledCodexCatalog(): { models?: Record<string, any>[] } | null {
+  try {
+    const raw = String(
+      execFileSync('codex', ['debug', 'models', '--bundled'], {
+        encoding: 'utf-8',
+        timeout: 20_000,
+        maxBuffer: 32 * 1024 * 1024,
+      })
+    )
+    const start = raw.indexOf('{')
+    if (start < 0) return null
+    const parsed = JSON.parse(raw.slice(start))
+    return parsed && Array.isArray(parsed.models) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Build a Codex model catalogue from the catalogue bundled with the installed
+ * Codex binary. Cloning a real entry preserves the instructions template and
+ * tool metadata Codex expects; only the Paytaca-specific fields are replaced.
+ */
+export function buildCodexModelCatalog(
+  config: AiConfig,
+  bundled: { models?: Record<string, any>[] } | null
+): Record<string, unknown> | null {
+  const bundle = bundled?.models
+  if (!Array.isArray(bundle) || bundle.length === 0) return null
+
+  const base =
+    bundle.find(
+      (entry) =>
+        entry &&
+        entry.visibility === 'list' &&
+        entry.use_responses_lite === false &&
+        entry.model_messages &&
+        typeof entry.model_messages.instructions_template === 'string'
+    ) ??
+    bundle.find(
+      (entry) =>
+        entry &&
+        entry.visibility === 'list' &&
+        entry.model_messages &&
+        typeof entry.model_messages.instructions_template === 'string'
+    ) ??
+    bundle[0]
+  if (!base) return null
+
+  const models: Record<string, unknown>[] = []
+  for (const [index, model] of (config.models || []).entries()) {
+    if (!model?.id) continue
+    const efforts = reasoningEfforts(model)
+    const limits = harnessLimits(model)
+    const entry = JSON.parse(JSON.stringify(base)) as Record<string, any>
+    const defaultEffort =
+      model.reasoning_default_effort && efforts.includes(model.reasoning_default_effort)
+        ? model.reasoning_default_effort
+        : efforts[0] ?? null
+
+    entry.slug = model.id
+    entry.display_name = model.display_name || model.id
+    entry.description = modelDescription(model.id)
+    entry.visibility = 'list'
+    entry.supported_in_api = true
+    entry.priority = index
+    entry.default_reasoning_level = defaultEffort
+    entry.supported_reasoning_levels = efforts.map((effort) => ({
+      effort,
+      description: EFFORT_DESCRIPTIONS[effort] || effort,
+    }))
+    entry.context_window = limits.context
+    entry.max_context_window = limits.context
+    entry.effective_context_window_percent = 95
+    entry.additional_speed_tiers = []
+    entry.service_tiers = []
+    entry.availability_nux = null
+    entry.upgrade = null
+    entry.include_skills_usage_instructions = false
+    entry.include_plugin_usage_instructions = false
+    entry.include_apps_usage_instructions = false
+    entry.default_reasoning_summary = 'none'
+    entry.supports_reasoning_summary_parameter = false
+    entry.support_verbosity = false
+    entry.default_verbosity = null
+    entry.apply_patch_tool_type = 'freeform'
+    entry.web_search_tool_type = 'text'
+    entry.supports_search_tool = false
+    entry.truncation_policy = { mode: 'tokens', limit: 10_000 }
+    entry.supports_image_detail_original = false
+    entry.experimental_supported_tools = []
+    entry.input_modalities = ['text']
+    entry.supports_experimental_context = false
+    entry.use_responses_lite = false
+    entry.supports_reasoning_effort_updates = false
+    entry.node_repl_auto_review_required = false
+    entry.node_repl_disabled = true
+    entry.tool_mode = 'direct'
+    entry.multi_agent_version = null
+    entry.multi_agent_reasoning_effort = null
+    entry.comp_hash = null
+    models.push(entry)
+  }
+
+  return { models }
+}
+
+export interface CodexConfigInput {
+  config?: AiConfig
+  apiKey?: string | null
+  gatewayUrl?: string | null
+  catalogPath?: string | null
+  chipnet?: boolean
+  /** Update only the MCP server table, leaving any provider config intact. */
+  mcpOnly?: boolean
+}
+
+const MANAGED_TOP_KEYS = [
+  'model_provider',
+  'model',
+  'model_reasoning_effort',
+  'model_context_window',
+  'model_catalog_json',
+]
+
+const MANAGED_TABLES = [
+  `model_providers.${CODEX_PROVIDER_ID}`,
+  'mcp_servers.paytaca',
+]
+
+export function buildCodexConfigToml(
+  existing: string,
+  input: CodexConfigInput
+): string {
+  const mcpArgs = input.chipnet ? ['mcp', '--chipnet'] : ['mcp']
+  const mcp = [
+    '[mcp_servers.paytaca]',
+    'command = "paytaca"',
+    `args = ${tomlArray(mcpArgs)}`,
+  ]
+
+  if (input.mcpOnly) {
+    const kept: string[] = []
+    let skipTable = false
+    for (const line of existing.split(/\r?\n/)) {
+      const header = line.trim().match(/^\[\[?\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$/)
+      if (header) {
+        const name = header[1].trim()
+        skipTable =
+          name === 'mcp_servers.paytaca' || name.startsWith('mcp_servers.paytaca.')
+        if (skipTable) continue
+      }
+      if (skipTable) continue
+      kept.push(line)
+    }
+    return [...kept, '', ...mcp].join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n'
+  }
+
+  const config = input.config ?? { models: [] }
+  const modelId = config.default_model || config.models?.[0]?.id
+  const selected = (config.models || []).find((model) => model?.id === modelId)
+  const efforts = selected ? reasoningEfforts(selected) : []
+  const defaultEffort =
+    selected?.reasoning_default_effort && efforts.includes(selected.reasoning_default_effort)
+      ? selected.reasoning_default_effort
+      : efforts[0] ?? null
+  const limits = harnessLimits(selected)
+
+  const topLevel = [`model_provider = ${tomlQuote(CODEX_PROVIDER_ID)}`]
+  if (modelId) topLevel.push(`model = ${tomlQuote(modelId)}`)
+  if (defaultEffort) topLevel.push(`model_reasoning_effort = ${tomlQuote(defaultEffort)}`)
+  topLevel.push(`model_context_window = ${limits.context}`)
+  if (input.catalogPath) {
+    topLevel.push(`model_catalog_json = ${tomlQuote(input.catalogPath)}`)
+  }
+
+  const provider: string[] = []
+  if (input.apiKey && input.gatewayUrl) {
+    provider.push(
+      `[model_providers.${CODEX_PROVIDER_ID}]`,
+      'name = "Paytaca AI"',
+      `base_url = ${tomlQuote(`${input.gatewayUrl}/v1`)}`,
+      'wire_api = "responses"',
+      `http_headers = { Authorization = ${tomlQuote(`Bearer ${input.apiKey}`)} }`,
+      'request_max_retries = 2',
+      'stream_max_retries = 2',
+      'stream_idle_timeout_ms = 600000'
+    )
+  }
+
+  const lines = existing.split(/\r?\n/)
+  let firstTable = lines.findIndex((line) =>
+    /^\[\[?\s*[^\]]+\s*\]\]?\s*(?:#.*)?$/.test(line.trim())
+  )
+  if (firstTable < 0) firstTable = lines.length
+  const topRegion = lines
+    .slice(0, firstTable)
+    .filter((line) => {
+      const key = line.trim().match(/^([A-Za-z0-9_-]+)\s*=/)
+      return !key || !MANAGED_TOP_KEYS.includes(key[1])
+    })
+  const rest: string[] = []
+  let skipTable = false
+  for (const line of lines.slice(firstTable)) {
+    const header = line.trim().match(/^\[\[?\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$/)
+    if (header) {
+      const name = header[1].trim()
+      skipTable = MANAGED_TABLES.some(
+        (managed) => name === managed || name.startsWith(`${managed}.`)
+      )
+      if (skipTable) continue
+    }
+    if (skipTable) continue
+    rest.push(line)
+  }
+
+  const head = [...topRegion]
+  while (head.length > 0 && head[0].trim() === '') head.shift()
+  while (head.length > 0 && head[head.length - 1].trim() === '') head.pop()
+
+  const output = [
+    ...head,
+    ...topLevel,
+    ...(rest.length > 0 ? ['', ...rest] : []),
+    ...(provider.length > 0 ? ['', ...provider] : []),
+    '',
+    ...mcp,
+  ]
+  return output.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n'
+}
+
 export function readHarnessApiKey(
   harness: McpClient,
   options: { path?: string } = {}
@@ -831,6 +1221,10 @@ export function readHarnessApiKey(
   if (harness === 'claude') {
     const settingsPath = options.path || CLAUDE_SETTINGS_PATH
     return { path: settingsPath, apiKey: extractClaudeApiKey(readJsonSafe(settingsPath)) }
+  }
+
+  if (harness === 'codex') {
+    return { path: target, apiKey: readCodexApiKey(target) }
   }
 
   const agentDir = dirname(target)
@@ -873,6 +1267,9 @@ export function harnessConfigParseError(
   options: { path?: string } = {}
 ): string | null {
   if (harness === 'omp') return null
+  if (harness === 'codex') {
+    return codexConfigParseError(options.path || CODEX_CONFIG_PATH)
+  }
   const target = options.path || buildTemplate(harness, false).path
   if (!target) return null
   const paths = [target]
@@ -930,6 +1327,35 @@ export function readHarnessReasoningConfig(
   if (harness === 'claude') return null
   const target = options.path || buildTemplate(harness, false).path
   if (!target) return null
+
+  if (harness === 'codex') {
+    const info = readCodexConfig(target)
+    if (!info.catalogPath) return { coarse: false, models: {} }
+    const catalogPath =
+      info.catalogPath.startsWith('~')
+        ? join(homedir(), info.catalogPath.slice(1))
+        : isAbsolute(info.catalogPath)
+          ? info.catalogPath
+          : join(dirname(target), info.catalogPath)
+    const catalog = readJsonSafe(catalogPath)
+    const entries = Array.isArray(catalog.models) ? catalog.models : []
+    const models: Record<string, HarnessModelReasoning> = {}
+    for (const raw of entries) {
+      if (!isPlainObject(raw) || typeof raw.slug !== 'string') continue
+      const levels = Array.isArray(raw.supported_reasoning_levels)
+        ? raw.supported_reasoning_levels
+            .map((level) =>
+              isPlainObject(level) && typeof level.effort === 'string' ? level.effort : null
+            )
+            .filter((level): level is string => typeof level === 'string' && level.length > 0)
+        : []
+      models[raw.slug] = {
+        supported: levels.length > 0,
+        efforts: levels.length > 0 ? levels : null,
+      }
+    }
+    return { coarse: false, models }
+  }
 
   if (harness === 'opencode') {
     const config = readJsonSafe(target)
@@ -1400,6 +1826,72 @@ export async function configureHarness(options: ConfigureOptions): Promise<Confi
     }
 
     writeJsonFile(target, deepMerge(existingMcp, template.json as Record<string, unknown>))
+    result.mcpInstalled = true
+  } else if (harness === 'codex') {
+    if (!target) throw new Error('No known config file for codex. Use --path.')
+    const existing = existsSync(target) ? readFileSync(target, 'utf-8') : ''
+
+    const apiKey = await resolveApiKey(
+      readCodexApiKey(target),
+      options,
+      wallet,
+      backendUrl,
+      result
+    )
+
+    if (config && apiKey) {
+      const port = resolveProxyPort()
+      try {
+        const gateway = await ensureProxyRunning({ port, backendUrl })
+        const catalogPath = join(dirname(target), CODEX_MODEL_CATALOG_FILE)
+        const bundled = readBundledCodexCatalog()
+        const catalog = bundled ? buildCodexModelCatalog(config, bundled) : null
+        if (catalog) writeJsonFile(catalogPath, catalog)
+        writeFileSync(
+          target,
+          buildCodexConfigToml(existing, {
+            config,
+            apiKey,
+            gatewayUrl: gateway.url,
+            catalogPath: catalog ? catalogPath : null,
+            chipnet: isChipnet,
+          }),
+          { encoding: 'utf-8', mode: 0o600 }
+        )
+        chmodSync(target, 0o600)
+        result.path = target
+        result.models = (config.models || [])
+          .filter((m) => m?.id)
+          .map((m) => ({ id: m.id, name: m.display_name || m.id }))
+        result.providerInstalled = true
+        if (gateway.spawned) {
+          result.warnings = [
+            ...(result.warnings ?? []),
+            `Started the Paytaca gateway at ${gateway.url}. Codex needs it running for every session — start it with \`paytaca mcp --proxy\` or re-run this command.`,
+          ]
+        }
+        if (!catalog) {
+          result.warnings = [
+            ...(result.warnings ?? []),
+            'Could not read the model catalogue bundled with Codex. The provider still works, but Codex will not list Paytaca models in its picker until you update Codex and re-run this command.',
+          ]
+        }
+      } catch (err: any) {
+        result.providerError = err?.message || String(err)
+      }
+    } else if (!result.providerError) {
+      result.providerError = configError || 'Unable to load the AI configuration.'
+    }
+
+    if (!result.providerInstalled) {
+      writeFileSync(
+        target,
+        buildCodexConfigToml(existing, { mcpOnly: true, chipnet: isChipnet }),
+        { encoding: 'utf-8', mode: 0o600 }
+      )
+      chmodSync(target, 0o600)
+    }
+    result.path = target
     result.mcpInstalled = true
   } else {
     if (!target) throw new Error(`No known config file for harness "${harness}". Use --path.`)

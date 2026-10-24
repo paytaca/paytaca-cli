@@ -199,7 +199,7 @@ paytaca ai doctor opencode --fix              # Diagnose, then repair credential
 paytaca ai doctor opencode --json             # Machine-readable report
 ```
 
-`ai doctor` compares the credits the *active wallet* holds (`paytaca ai credits`) with the wallet the *configured API key* resolves to, and flags the common causes: an unreachable backend, no wallet, no API key, an invalid key, a key left over from a different wallet, a harness config that cannot be parsed, stale OpenCode stored credentials, a stopped Claude Code gateway, a model that is not in the catalogue, an effort menu that predates reasoning support, and a model with no plan or pay-as-you-go balance. An API key resolves to the wallet that minted it, so a `402` while `ai credits` shows a plan almost always means the harness is using a key for a different wallet — `ai configure` now detects this and mints a fresh wallet-bound key automatically.
+`ai doctor` compares the credits the *active wallet* holds (`paytaca ai credits`) with the wallet the *configured API key* resolves to, and flags the common causes: an unreachable backend, no wallet, no API key, an invalid key, a key left over from a different wallet, a harness config that cannot be parsed, stale OpenCode stored credentials, a stopped local gateway (Claude Code or Codex), a model that is not in the catalogue, an effort menu that predates reasoning support, and a model with no plan or pay-as-you-go balance. An API key resolves to the wallet that minted it, so a `402` while `ai credits` shows a plan almost always means the harness is using a key for a different wallet — `ai configure` now detects this and mints a fresh wallet-bound key automatically.
 
 Add `--fix` to repair the config/credential problems it finds: it re-runs `ai configure` (installing a missing key, replacing an invalid or wallet-mismatched key, clearing stale OpenCode credentials, and refreshing an out-of-date reasoning menu), then re-checks and prints a before/after report. It only ever fixes credential/config state — anything that spends money (buying a plan or topping up) or needs a human (creating or importing a wallet) is still only suggested. For a read-only wallet, pass `--api-key <key>` so the fix has a key to install; otherwise it prompts (interactive) or leaves the issue in place. `--fix` also accepts `--backend`, `--path`, and `--chipnet`.
 
@@ -249,7 +249,7 @@ Video generation follows the same two-phase flow as images: an order is created 
 Configure an AI harness in one step. This installs the Paytaca MCP server and the Paytaca AI provider (model catalogue + API key) so the Paytaca AI models are usable immediately:
 
 ```bash
-paytaca ai configure opencode   # opencode | pi | omp | claude
+paytaca ai configure opencode   # opencode | pi | omp | claude | codex
 ```
 
 The command creates a wallet-bound API key against the Paytaca AI backend and writes the provider (base URL, models, key) and MCP server into the harness config. For omp it updates `models.yml` when that file exists (omp prefers it over `models.json`). It does not buy credits; use `paytaca ai purchase` for that.
@@ -276,6 +276,17 @@ paytaca mcp --stop               # stop the background gateway
 
 The gateway holds no secrets of its own: it forwards the `ANTHROPIC_AUTH_TOKEN` that Claude Code sends on each request, so the only copy of your key lives in `~/.claude/settings.json`.
 
+#### Codex
+
+Codex speaks the OpenAI Responses API (`/v1/responses`), which the backend does not serve. The same local gateway handles it: `ai configure codex` writes a Responses→chat translation route and points Codex at it, so both Claude Code and Codex can share one gateway process on port 7475.
+
+```bash
+paytaca ai configure codex       # ~/.codex/config.toml (provider, model, MCP)
+paytaca mcp --proxy              # run the gateway in the foreground
+```
+
+Because Codex removed `wire_api = "chat"`, the provider is written with `wire_api = "responses"` and a literal bearer header. Paytaca models are not in Codex's bundled catalogue, so configure also clones its bundled entry into `~/.codex/paytaca-models.json` with the Paytaca model ids, effort levels, and the cost-safe context window. Codex reads that file through `model_catalog_json`, which is what makes the models appear in its picker with a working effort menu. If the bundled catalogue cannot be read, the provider still works but Codex will not list the models until Codex is updated and configure is re-run. `paytaca ai doctor codex` reports whether the gateway and catalogue are in place.
+
 **Switching models.** All Paytaca models are selectable from the `/model` picker, listed under their display names (MiMo V2.6 Flash, DeepSeek V4 Pro, GLM 5.3, Kimi K3, …) with their id and `- via Paytaca AI` as the description, e.g. `xiaomi/mimo-v2.6-flash - via Paytaca AI`. The gateway serves them under `paytaca-claude-…` aliases because Claude Code's gateway discovery silently discards any model id that doesn't contain `claude` or `anthropic`. `claude` sits mid-string on purpose: Claude Code ignores `CLAUDE_CODE_MAX_CONTEXT_TOKENS` for ids that start with `claude-`, so a `claude-…` prefix would make it assume a 200k window. You can also pass an alias directly:
 
 ```bash
@@ -289,6 +300,7 @@ The aliases are derived from the model ids, so `z-ai/glm-5.3` becomes `paytaca-c
 | Harness | How effort is declared | How it is sent |
 | --- | --- | --- |
 | Claude Code | gateway picks it up automatically | `thinking` + `output_config.effort` translated to `reasoning.effort` |
+| Codex | `supported_reasoning_levels` in the generated model catalogue | `reasoning.effort` in the Responses request |
 | opencode | `capabilities.reasoning` with `effort` + `toggle` (v2) or `reasoning: true` (v1) | `reasoning_effort` |
 | pi / omp | `thinking: { mode: 'effort', efforts: [...] }` | `reasoning_effort` |
 
@@ -425,7 +437,7 @@ src/
     pay.ts           x402 BCH payment handler for HTTP requests
     check.ts         Check if URL requires x402 payment
     ai.ts            Paytaca AI (configure, api-key, models, plans, credits, purchase, auto-refill, image)
-    anthropicProxy.ts  Anthropic↔OpenAI gateway for Claude Code (`paytaca mcp --proxy`)
+    anthropicProxy.ts  Anthropic/Responses↔OpenAI gateway for Claude Code and Codex (`paytaca mcp --proxy`)
     chat.ts          Nostr chat (contacts, conversations, identity, listen)
     web.ts           `paytaca web` — local browser UI launcher
     mcp.ts           `paytaca mcp` stdio entry + per-harness config templates

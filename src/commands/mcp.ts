@@ -4,13 +4,13 @@ import { Command } from 'commander'
 import { runMcpServer } from '../mcp/server.js'
 import { DEFAULT_PROXY_PORT, startProxy, stopProxy } from '../ai/anthropicProxy.js'
 
-export type McpClient = 'opencode' | 'pi' | 'omp' | 'claude'
+export type McpClient = 'opencode' | 'pi' | 'omp' | 'claude' | 'codex'
 
-export const CLIENTS: McpClient[] = ['opencode', 'pi', 'omp', 'claude']
+export const CLIENTS: McpClient[] = ['opencode', 'pi', 'omp', 'claude', 'codex']
 
 export interface ClientTemplate {
   client: McpClient
-  format: 'json'
+  format: 'json' | 'toml'
   path: string | null
   json?: Record<string, unknown>
   snippet: string
@@ -100,6 +100,22 @@ export function buildTemplate(
           'Claude Code reads mcpServers from ~/.claude.json and model/env settings from ~/.claude/settings.json.\nRestart `claude` and verify the server with /mcp.\nYou can also install it directly: claude mcp add -s user paytaca -- paytaca mcp',
       }
     }
+    case 'codex': {
+      const argsToml = '[' + args.map((arg) => JSON.stringify(arg)).join(', ') + ']'
+      const snippet = [
+        '[mcp_servers.paytaca]',
+        'command = "paytaca"',
+        `args = ${argsToml}`,
+      ].join('\n')
+      return {
+        client,
+        format: 'toml',
+        path: join(homedir(), '.codex', 'config.toml'),
+        snippet,
+        instructions:
+          'Codex reads config.toml from ~/.codex/config.toml.\nRestart `codex` and verify the server with /mcp.\nCodex reaches Paytaca models through the local gateway (`paytaca mcp --proxy`).',
+      }
+    }
   }
   throw new Error(`Unsupported harness "${client}".`)
 }
@@ -109,17 +125,17 @@ export function registerMcpCommand(program: Command): void {
     .command('mcp')
     .description('Run the Paytaca MCP server (stdio) for AI agents')
     .option('--chipnet', 'Default tools to chipnet (testnet) instead of mainnet')
-    .option('--proxy', 'Run the Anthropic-compatible gateway for Claude Code instead of stdio')
-    .option('--port <port>', 'Port for the Anthropic gateway', String(DEFAULT_PROXY_PORT))
+    .option('--proxy', 'Run the local gateway for Claude Code and Codex instead of stdio')
+    .option('--port <port>', 'Port for the local gateway', String(DEFAULT_PROXY_PORT))
     .option('--backend <url>', 'Override backend URL for the gateway')
-    .option('--stop', 'Stop a running Anthropic gateway')
+    .option('--stop', 'Stop a running local gateway')
     .action(async (opts) => {
       if (opts.stop) {
         const result = stopProxy()
         if (result.stopped) {
-          console.error(`[paytaca] Anthropic gateway stopped (pid ${result.pid}).`)
+          console.error(`[paytaca] Gateway stopped (pid ${result.pid}).`)
         } else {
-          console.error('[paytaca] No Anthropic gateway is running.')
+          console.error('[paytaca] No Paytaca gateway is running.')
         }
         return
       }
@@ -136,7 +152,7 @@ export function registerMcpCommand(program: Command): void {
           backendUrl: opts.backend,
           onListening: () => {
             console.error(
-              `[paytaca] Anthropic gateway listening on http://127.0.0.1:${port}`
+              `[paytaca] Gateway listening on http://127.0.0.1:${port}`
             )
           },
         })
@@ -145,7 +161,7 @@ export function registerMcpCommand(program: Command): void {
             error.code === 'EADDRINUSE'
               ? `Port ${port} is already in use.`
               : error.message
-          console.error(`[paytaca] Anthropic gateway failed: ${message}`)
+          console.error(`[paytaca] Gateway failed: ${message}`)
           process.exitCode = 1
         })
         return

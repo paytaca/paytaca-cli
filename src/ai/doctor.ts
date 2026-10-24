@@ -51,7 +51,7 @@ export interface DoctorContext {
   apiKeyPrefix: string | null
   keyIdentity: KeyIdentity
   staleCredentials: number
-  /** Whether the local Anthropic gateway answers (Claude Code harness only). */
+  /** Whether the local Paytaca gateway answers (Claude Code and Codex). */
   gatewayRunning?: boolean
   gatewayUrl?: string
   /** Backend URL used for the checks, shown when the catalogue is unreachable. */
@@ -236,21 +236,20 @@ export function buildDoctorChecks(ctx: DoctorContext): DoctorCheck[] {
     )
   }
 
-  if (ctx.harness === 'claude') {
+  if (ctx.harness === 'claude' || ctx.harness === 'codex') {
     checks.push(
       ctx.gatewayRunning
         ? {
             id: 'gateway',
-            label: 'Anthropic gateway',
+            label: 'Paytaca gateway',
             status: 'ok',
             detail: `Running at ${ctx.gatewayUrl ?? 'http://127.0.0.1:7475'}.`,
           }
         : {
             id: 'gateway',
-            label: 'Anthropic gateway',
+            label: 'Paytaca gateway',
             status: 'fail',
-            detail:
-              'Claude Code cannot reach the Paytaca AI backend without the local gateway.',
+            detail: `${ctx.harness === 'codex' ? 'Codex' : 'Claude Code'} cannot reach the Paytaca AI backend without the local gateway.`,
             fix: 'paytaca mcp --proxy',
           }
     )
