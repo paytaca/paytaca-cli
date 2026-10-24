@@ -71,6 +71,10 @@ const MLS_REPLY_PREFIX = '\u200bpaytaca:mls-reply:'
 const MLS_EDIT_PREFIX = '\u200bpaytaca:mls-edit:'
 const MLS_JOIN_PREFIX = '\u200bpaytaca:mls-join:'
 
+function isControlMessage(content: string): boolean {
+  return content.startsWith(MLS_META_PREFIX) || content.startsWith(MLS_JOIN_PREFIX)
+}
+
 function arraysEqual(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false
   return a.every((value, index) => value === b[index])
@@ -182,7 +186,8 @@ interface PersistedState {
   displayNameCache: Record<string, string>
   bchAddressCache: Record<string, string>
   readMessageIds: Record<string, Record<string, boolean>>
-  sentMessages: Record<string, Message[]>
+  messages?: Record<string, Message[]>
+  sentMessages?: Record<string, Message[]>
   mls?: Partial<PersistedMlsState>
 }
 
@@ -206,7 +211,6 @@ export class ChatStore {
   contacts: Contact[] = []
   rooms: Room[] = []
   messages: Record<string, Message[]> = {}
-  sentMessages: Record<string, Message[]> = {}
   readMessageIds: Record<string, Record<string, boolean>> = {}
   mls: PersistedMlsState = emptyMlsState()
   mlsReady = false
@@ -248,25 +252,36 @@ export class ChatStore {
         this.readMessageIds = data.readMessageIds || {}
         this.displayNameCache = data.displayNameCache || {}
         this.bchAddressCache = data.bchAddressCache || {}
-        this.sentMessages = data.sentMessages || {}
         this.mls = { ...emptyMlsState(), ...(data.mls || {}) }
 
-        // Merge sent messages into messages in-memory
-        for (const [roomId, msgs] of Object.entries(this.sentMessages)) {
-          if (!this.messages[roomId]) this.messages[roomId] = []
-          for (const msg of msgs) {
-            const exists = this.messages[roomId].find(m => m.id === msg.id)
-            if (!exists) {
-              const arr = this.messages[roomId]
-              let i = arr.length
-              while (i > 0 && arr[i - 1].created_at > msg.created_at) i--
-              arr.splice(i, 0, msg)
-            }
-          }
-        }
+        this.mergePersistedMessages(data.messages)
+        this.mergePersistedMessages(data.sentMessages)
       }
     } catch (err) {
       console.error('[store] loadPersistedData failed:', err)
+    }
+  }
+
+  private mergePersistedMessages(persisted?: Record<string, Message[]>): void {
+    if (!persisted) return
+    for (const [roomId, msgs] of Object.entries(persisted)) {
+      if (!Array.isArray(msgs)) continue
+      for (const msg of msgs) {
+        if (!msg?.id || isControlMessage(msg.content || '')) continue
+        this.insertMessage(roomId, msg)
+      }
+    }
+  }
+
+  private insertMessage(roomId: string, message: Message): void {
+    if (!this.messages[roomId]) this.messages[roomId] = []
+    const arr = this.messages[roomId]
+    if (arr.some(m => m.id === message.id)) return
+    let i = arr.length
+    while (i > 0 && arr[i - 1].created_at > message.created_at) i--
+    arr.splice(i, 0, message)
+    if (arr.length > MAX_MESSAGES_PER_ROOM) {
+      arr.splice(0, arr.length - MAX_MESSAGES_PER_ROOM)
     }
   }
 
@@ -278,7 +293,7 @@ export class ChatStore {
         displayNameCache: this.displayNameCache,
         bchAddressCache: this.bchAddressCache,
         readMessageIds: this.readMessageIds,
-        sentMessages: this.sentMessages,
+        messages: this.messages,
         mls: this.mls,
       }
       if (!fs.existsSync(DATA_DIR)) {
@@ -318,6 +333,7 @@ export class ChatStore {
     }
 
     this.initialized = true
+    this.saveState()
   }
 
   private handleGiftWrap(event: NostrEvent): void {
@@ -409,8 +425,7 @@ export class ChatStore {
       localSentAt: Date.now(),
     }
 
-    if (!this.sentMessages[roomId]) this.sentMessages[roomId] = []
-    this.sentMessages[roomId].push(message)
+    this.insertMessage(roomId, message)
 
     return { giftWraps, message }
   }
@@ -479,6 +494,7 @@ export class ChatStore {
         target.content = rumor.content
         target.editOf = rumor.id
         room.updatedAt = Math.max(room.updatedAt, rumor.created_at)
+        if (this.initialized) this.saveState()
         if (this.onNewMessageCallback) {
           this.onNewMessageCallback(room, target)
         }
@@ -506,19 +522,7 @@ export class ChatStore {
       localReceivedAt: Date.now(),
     }
 
-    if (!this.messages[roomId]) {
-      this.messages[roomId] = []
-    }
-    const exists = this.messages[roomId].find(m => m.id === message.id)
-    if (!exists) {
-      const arr = this.messages[roomId]
-      let i = arr.length
-      while (i > 0 && arr[i - 1].created_at > message.created_at) i--
-      arr.splice(i, 0, message)
-      if (arr.length > MAX_MESSAGES_PER_ROOM) {
-        arr.splice(0, arr.length - MAX_MESSAGES_PER_ROOM)
-      }
-    }
+    this.insertMessage(roomId, message)
 
     room.updatedAt = Math.max(room.updatedAt, message.created_at)
 
@@ -546,6 +550,8 @@ export class ChatStore {
     if (this.onNewMessageCallback) {
       this.onNewMessageCallback(room, message)
     }
+
+    if (this.initialized) this.saveState()
   }
 
   getRooms(): Room[] {
@@ -1195,11 +1201,8 @@ export class ChatStore {
       localSentAt: Date.now(),
     }
 
-    if (!this.sentMessages[roomId]) this.sentMessages[roomId] = []
-    this.sentMessages[roomId].push(message)
-    if (!this.messages[roomId]) this.messages[roomId] = []
-    if (!this.messages[roomId].some(m => m.id === message.id)) {
-      this.messages[roomId].push(message)
+    if (!isControlMessage(text)) {
+      this.insertMessage(roomId, message)
     }
 
     const room = this.rooms.find(r => r.id === roomId)
@@ -1326,16 +1329,7 @@ export class ChatStore {
         localReceivedAt: Date.now(),
       }
 
-      if (!this.messages[roomId]) this.messages[roomId] = []
-      if (!this.messages[roomId].some(m => m.id === message.id)) {
-        const arr = this.messages[roomId]
-        let i = arr.length
-        while (i > 0 && arr[i - 1].created_at > message.created_at) i--
-        arr.splice(i, 0, message)
-        if (arr.length > MAX_MESSAGES_PER_ROOM) {
-          arr.splice(0, arr.length - MAX_MESSAGES_PER_ROOM)
-        }
-      }
+      this.insertMessage(roomId, message)
       room.updatedAt = Math.max(room.updatedAt, message.created_at)
       this.saveState()
 
