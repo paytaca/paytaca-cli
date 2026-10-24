@@ -43,7 +43,7 @@
   "dependencies": {
     "@bitauth/libauth": "2.0.0-alpha.8",
     "@cashlab/cauldron": "^1.0.3",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@napi-rs/keyring": "^1.2.0",
     "alpinejs": "^3.17.3",
     "bip39": "^3.1.0",
@@ -62,6 +62,10 @@
     "@vitest/ui": "^4.1.2",
     "typescript": "^5.9.3",
     "vitest": "^4.1.2"
+  },
+  "overrides": {
+    "axios": "^1.20.0",
+    "follow-redirects": "^1.16.1"
   },
   "engines": {
     "node": ">=20.0.0"
