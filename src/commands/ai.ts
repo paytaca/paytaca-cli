@@ -647,14 +647,21 @@ export function registerAiCommands(program: Command): void {
           backendUrl: opts.backend,
           name: opts.name,
         })
+        const providerUrl = `${resolveBackendUrl(opts.backend)}/v1`
         if (opts.json) {
-          outputJson(created)
+          outputJson({ ...created, providerUrl })
           return
         }
         console.log(chalk.bold('\n   Paytaca AI API key created\n'))
-        console.log(`   Name:    ${created.name}`)
-        console.log(`   Prefix:  ${created.keyPrefix}`)
-        console.log(`   API key: ${chalk.bold(created.key)}`)
+        console.log(`   Name:     ${created.name}`)
+        console.log(`   Prefix:   ${created.keyPrefix}`)
+        console.log(`   API key:  ${chalk.bold(created.key)}`)
+        console.log(`   Provider: ${chalk.bold(providerUrl)}`)
+        console.log(
+          chalk.dim(
+            '             OpenAI-compatible base URL for other agents (Cursor, Cline, scripts).'
+          )
+        )
         console.log(chalk.yellow('\n   Copy this key now — it will not be shown again.'))
         console.log(
           chalk.dim(

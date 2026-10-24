@@ -321,6 +321,8 @@ paytaca ai api-key create                          # full wallet: prints sk-pytc
 paytaca ai configure opencode --api-key sk-pytc-…  # read-only wallet
 ```
 
+The create output also prints the OpenAI-compatible provider URL (`https://api.paytaca.ai/v1`) so the same key can be used with any other agent or script that accepts a custom OpenAI base URL.
+
 Read-only wallets report credits from the shared wallet hash but can't buy plans — fund credits from the full wallet.
 
 **MCP tools:** wallet (`get_balance`, `get_transactions`, `get_receiving_address`, `get_tokens`, `send`) plus Paytaca AI (`get_models`, `get_plans`, `get_credits`, `buy_plan`, `auto_refill`, `await_refill`, `get_help`, `generate_image`, `get_image_status`, `get_image_models`, `get_image_history`).
