@@ -471,7 +471,9 @@ export function buildPiProvider(
   const models = (config.models || [])
     .filter((model) => model?.id)
     .map((model) => {
-      const efforts = reasoningEfforts(model)
+      // omp rejects "none" as an effort level: switching reasoning off is not
+      // one of the values its menu accepts, so only real levels are written.
+      const efforts = reasoningEfforts(model).filter((effort) => effort !== 'none')
       const limits = harnessLimits(model)
       const entry: Record<string, unknown> = {
         id: model.id,
@@ -480,14 +482,16 @@ export function buildPiProvider(
         maxTokens: limits.output,
       }
       if (efforts.length > 0) {
+        const defaultLevel =
+          model.reasoning_default_effort && efforts.includes(model.reasoning_default_effort)
+            ? model.reasoning_default_effort
+            : undefined
         entry.reasoning = true
         entry.thinking = {
           mode: 'effort',
           efforts,
           requiresEffort: Boolean(model.reasoning_mandatory),
-          ...(model.reasoning_default_effort
-            ? { defaultLevel: model.reasoning_default_effort }
-            : {}),
+          ...(defaultLevel ? { defaultLevel } : {}),
         }
       }
       return entry

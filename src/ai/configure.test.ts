@@ -502,6 +502,8 @@ describe('reasoning capability', () => {
       defaultLevel: 'max',
     })
     expect(models[1].thinking.requiresEffort).toBe(false)
+    expect(models[1].thinking.efforts).toEqual(['xhigh', 'high'])
+    expect(models[1].thinking.defaultLevel).toBe('high')
     expect(models[2].reasoning).toBeUndefined()
     expect(models[2].thinking).toBeUndefined()
   })
