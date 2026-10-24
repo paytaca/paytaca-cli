@@ -357,7 +357,7 @@ describe('proxy configuration', () => {
     })
   })
 
-  it('declares the real context window so Claude Code stops assuming 200k', () => {
+  it('caps the declared window at the cost-safe context limit', () => {
     const settings = buildClaudeSettings(
       {
         models: [
@@ -368,15 +368,15 @@ describe('proxy configuration', () => {
       'http://127.0.0.1:7475',
       'sk-pytc-key'
     )
-    expect((settings.env as Record<string, string>).CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('1050000')
+    expect((settings.env as Record<string, string>).CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('128000')
   })
 
-  it('omits the window when the catalogue does not report one', () => {
+  it('uses the cost-safe window when the catalogue does not report one', () => {
     const settings = buildClaudeSettings(
       { models: [{ id: 'm1', display_name: 'M1', price_tiers: [] }], default_model: 'm1' },
       'http://127.0.0.1:7475',
       'sk-pytc-key'
     )
-    expect((settings.env as Record<string, string>).CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined()
+    expect((settings.env as Record<string, string>).CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('128000')
   })
 })

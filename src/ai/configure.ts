@@ -36,8 +36,47 @@ export const PI_PROVIDER_ID = 'paytaca-ai'
 export const OMP_PROVIDER_ID = 'paytaca-ai'
 export const OPENCODE_PROVIDER_NPM = '@ai-sdk/openai-compatible'
 export const OPENCODE_PROVIDER_PACKAGE = '@opencode/ai/providers/openai-compatible'
-export const DEFAULT_MODEL_CONTEXT = 128000
-export const DEFAULT_MODEL_OUTPUT = 8192
+
+/**
+ * Context window advertised to harnesses. The catalogue often reports ~1M
+ * tokens, but agentic harnesses re-send the whole transcript on every turn, so
+ * advertising the full window lets one session burn a plan in a handful of
+ * turns. This is a deliberate cost cap, not a stale default: raise it only
+ * after re-checking the plan budgets in the backend.
+ */
+export const COST_SAFE_CONTEXT = 128_000
+
+/**
+ * Largest output budget advertised to harnesses. Matches the backend's
+ * `MAX_OUTPUT_TOKENS` default; the backend caps any `max_tokens` at the
+ * model's own ceiling regardless of what a harness asks for.
+ */
+export const HARNESS_MAX_OUTPUT = 16_384
+
+/**
+ * Per-model limits written into a harness config, bounded by the cost caps
+ * above. A model with a smaller real window keeps that smaller window.
+ */
+export function harnessLimits(model?: AiModelConfig): {
+  context: number
+  output: number
+} {
+  const context = Math.min(
+    positiveInt(model?.context_input_limit) ?? COST_SAFE_CONTEXT,
+    COST_SAFE_CONTEXT
+  )
+  const output = Math.min(
+    positiveInt(model?.max_output_tokens) ?? HARNESS_MAX_OUTPUT,
+    HARNESS_MAX_OUTPUT
+  )
+  return { context, output }
+}
+
+function positiveInt(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : null
+}
 
 export interface PlanSuggestion {
   modelId: string
@@ -234,12 +273,19 @@ export function buildOpencodeProvider(
     const efforts = reasoningEfforts(model)
     const entry: Record<string, unknown> = {
       name: model.display_name || model.id,
-      limit: { context: DEFAULT_MODEL_CONTEXT, output: DEFAULT_MODEL_OUTPUT },
+      limit: harnessLimits(model),
     }
     if (efforts.length > 0) {
       if (opencodeMajor >= 2) {
         // v2 describes capability; the agent then offers the menu itself.
-        entry.capabilities = { reasoning: { supported: true, effort: efforts } }
+        // `effort` lists real levels; switching reasoning off is `toggle`,
+        // which renders a separate "none" variant. Listing "none" as an
+        // effort level is not the documented shape and may be ignored.
+        const levels = efforts.filter((effort) => effort !== 'none')
+        const reasoning: Record<string, unknown> = { supported: true }
+        if (levels.length > 0) reasoning.effort = levels
+        if (levels.length < efforts.length) reasoning.toggle = true
+        entry.capabilities = { reasoning }
       } else {
         entry.reasoning = true
       }
@@ -426,11 +472,12 @@ export function buildPiProvider(
     .filter((model) => model?.id)
     .map((model) => {
       const efforts = reasoningEfforts(model)
+      const limits = harnessLimits(model)
       const entry: Record<string, unknown> = {
         id: model.id,
         name: model.display_name || model.id,
-        contextWindow: DEFAULT_MODEL_CONTEXT,
-        maxTokens: DEFAULT_MODEL_OUTPUT,
+        contextWindow: limits.context,
+        maxTokens: limits.output,
       }
       if (efforts.length > 0) {
         entry.reasoning = true
@@ -482,11 +529,13 @@ export function buildClaudeSettings(
     env.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME = selected?.display_name || model
     env.ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION = modelDescription(model)
     // Claude Code assumes 200k for a model id it does not recognise and warns
-    // at startup. Our ids are provider spellings, so declare the real window.
-    const window = selected?.context_input_limit
-    if (typeof window === 'number' && window > 0) {
-      env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(window)
-    }
+    // at startup. Declare the window, capped at the same cost-safe limit the
+    // other harnesses get: claiming the full ~1M window stops compaction and
+    // makes every turn re-send the whole transcript.
+    const window = positiveInt(selected?.context_input_limit)
+    env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(
+      Math.min(window ?? COST_SAFE_CONTEXT, COST_SAFE_CONTEXT)
+    )
   }
   const settings: Record<string, unknown> = { env }
   if (model) settings.model = modelAlias(model)
@@ -812,6 +861,139 @@ export function readHarnessApiKey(
   }
 
   return { path: modelsPath, apiKey: extractPiApiKey(readJsonSafe(modelsPath)) }
+}
+
+/**
+ * Diagnose a harness file that exists but cannot be parsed. `readJsonSafe`
+ * silently treats that as an empty config, which makes `ai doctor` report a
+ * missing API key and hide the real (show-stopping) cause.
+ */
+export function harnessConfigParseError(
+  harness: McpClient,
+  options: { path?: string } = {}
+): string | null {
+  if (harness === 'omp') return null
+  const target = options.path || buildTemplate(harness, false).path
+  if (!target) return null
+  const paths = [target]
+  if (harness === 'pi') {
+    const modelsPath = join(dirname(target), 'models.json')
+    if (existsSync(modelsPath)) paths.push(modelsPath)
+  }
+  for (const path of paths) {
+    if (!existsSync(path)) continue
+    try {
+      parseJsonConfig(readFileSync(path, 'utf-8'))
+    } catch {
+      return `Config at ${path} could not be parsed (invalid JSON).`
+    }
+  }
+  return null
+}
+
+export interface HarnessModelReasoning {
+  /** Whether the model entry declares reasoning support at all. */
+  supported: boolean
+  /** Declared effort levels, or null when the format has no per-level list. */
+  efforts: string[] | null
+}
+
+export interface HarnessReasoningConfig {
+  /** True when the format has no per-model entries we can inspect (omp YAML). */
+  coarse: boolean
+  /** For coarse formats: whether any reasoning directive is present. */
+  supportedAll?: boolean
+  models: Record<string, HarnessModelReasoning>
+}
+
+function stringList(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null
+  const levels = value.filter(
+    (entry): entry is string => typeof entry === 'string' && entry.length > 0
+  )
+  return levels.length > 0 ? levels : null
+}
+
+/**
+ * Read the reasoning capability stored in a harness config, without modifying
+ * it. `ai doctor` compares this to the backend catalogue: a config written by
+ * a release that predates reasoning support will keep hiding the effort menu
+ * until `ai configure` runs again.
+ *
+ * Returns null for Claude Code (its menu is driven by the gateway) and for
+ * unreadable paths.
+ */
+export function readHarnessReasoningConfig(
+  harness: McpClient,
+  options: { path?: string } = {}
+): HarnessReasoningConfig | null {
+  if (harness === 'claude') return null
+  const target = options.path || buildTemplate(harness, false).path
+  if (!target) return null
+
+  if (harness === 'opencode') {
+    const config = readJsonSafe(target)
+    const providers = isPlainObject(config.providers)
+      ? config.providers
+      : isPlainObject(config.provider)
+        ? config.provider
+        : null
+    const provider = providers ? providers[OPENCODE_PROVIDER_ID] : null
+    const modelEntries =
+      isPlainObject(provider) && isPlainObject(provider.models) ? provider.models : {}
+    const models: Record<string, HarnessModelReasoning> = {}
+    for (const [id, raw] of Object.entries(modelEntries)) {
+      if (!isPlainObject(raw)) continue
+      const capabilities = isPlainObject(raw.capabilities) ? raw.capabilities : null
+      const reasoning =
+        capabilities && isPlainObject(capabilities.reasoning) ? capabilities.reasoning : null
+      if (reasoning && reasoning.supported === true) {
+        const levels = stringList(reasoning.effort) ?? []
+        if (reasoning.toggle === true && !levels.includes('none')) levels.push('none')
+        models[id] = { supported: true, efforts: levels.length > 0 ? levels : null }
+      } else {
+        models[id] = { supported: raw.reasoning === true, efforts: null }
+      }
+    }
+    return { coarse: false, models }
+  }
+
+  const agentDir = dirname(target)
+
+  if (harness === 'omp') {
+    const yamlPath =
+      ['models.yml', 'models.yaml']
+        .map((name) => join(agentDir, name))
+        .find((path) => existsSync(path)) ?? null
+    if (!yamlPath) return { coarse: true, supportedAll: false, models: {} }
+    let yaml = ''
+    try {
+      yaml = readFileSync(yamlPath, 'utf-8')
+    } catch {
+      return { coarse: true, supportedAll: false, models: {} }
+    }
+    return {
+      coarse: true,
+      supportedAll: /^\s+thinking\s*:/m.test(yaml) || /^\s+reasoning\s*:\s*true\s*$/m.test(yaml),
+      models: {},
+    }
+  }
+
+  const config = readJsonSafe(join(agentDir, 'models.json'))
+  const provider = isPlainObject(config.providers) ? config.providers[PI_PROVIDER_ID] : null
+  const entries =
+    isPlainObject(provider) && Array.isArray(provider.models) ? provider.models : []
+  const models: Record<string, HarnessModelReasoning> = {}
+  for (const raw of entries) {
+    if (!isPlainObject(raw) || typeof raw.id !== 'string') continue
+    const thinking = isPlainObject(raw.thinking) ? raw.thinking : null
+    const efforts = thinking ? stringList(thinking.efforts) : null
+    models[raw.id] = {
+      supported: raw.reasoning === true || Boolean(thinking),
+      efforts,
+    }
+  }
+  return { coarse: false, models }
 }
 
 /**

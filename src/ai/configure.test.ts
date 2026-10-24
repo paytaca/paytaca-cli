@@ -12,6 +12,7 @@ import {
   extractOmpDefaultModel,
   extractOmpProviderApiKey,
   extractPiApiKey,
+  harnessConfigParseError,
   isValidApiKey,
   OPENCODE_PROVIDER_NPM,
   OPENCODE_PROVIDER_PACKAGE,
@@ -19,7 +20,9 @@ import {
   parseOpencodeAuthExport,
   parseOpencodeMajor,
   readHarnessApiKey,
+  readHarnessReasoningConfig,
   reasoningEfforts,
+  harnessLimits,
   replaceOmpDefaultModel,
   resolveOpencodeMajor,
   serializeOmpProviderYaml,
@@ -205,13 +208,13 @@ describe('configure', () => {
         id: 'deepseek/deepseek-v4-flash',
         name: 'DeepSeek V4 Flash',
         contextWindow: 128000,
-        maxTokens: 8192,
+        maxTokens: 16384,
       },
       {
         id: 'z-ai/glm-5.3-flash',
         name: 'GLM 5.3 Flash',
         contextWindow: 128000,
-        maxTokens: 8192,
+        maxTokens: 16384,
       },
     ])
   })
@@ -296,11 +299,11 @@ describe('configure', () => {
         '      - id: deepseek/deepseek-v4-flash',
         '        name: DeepSeek V4 Flash',
         '        contextWindow: 128000',
-        '        maxTokens: 8192',
+        '        maxTokens: 16384',
         '      - id: z-ai/glm-5.3-flash',
         '        name: GLM 5.3 Flash',
         '        contextWindow: 128000',
-        '        maxTokens: 8192',
+        '        maxTokens: 16384',
       ].join('\n')
     )
   })
@@ -321,7 +324,7 @@ describe('configure', () => {
       '    baseUrl: https://other.example/v1',
       '',
     ].join('\n')
-    const provider = { baseUrl: 'https://api.paytaca.ai/v1', apiKey: 'sk-pytc-new', api: 'openai-completions', models: [{ id: 'z-ai/glm-5.3', name: 'GLM 5.3', contextWindow: 128000, maxTokens: 8192 }] }
+    const provider = { baseUrl: 'https://api.paytaca.ai/v1', apiKey: 'sk-pytc-new', api: 'openai-completions', models: [{ id: 'z-ai/glm-5.3', name: 'GLM 5.3', contextWindow: 128000, maxTokens: 16384 }] }
     const updated = upsertOmpProviderYaml(existing, 'paytaca-ai', provider)
     expect(updated).toContain('    apiKey: sk-pytc-new')
     expect(updated).not.toContain('sk-pytc-old')
@@ -463,8 +466,9 @@ describe('reasoning capability', () => {
     expect(models['z-ai/glm-5.3'].capabilities).toEqual({
       reasoning: { supported: true, effort: ['max', 'high', 'low'] },
     })
-    expect(models['deepseek/deepseek-v4-pro'].capabilities.reasoning.effort)
-      .toEqual(['xhigh', 'high', 'none'])
+    expect(models['deepseek/deepseek-v4-pro'].capabilities).toEqual({
+      reasoning: { supported: true, effort: ['xhigh', 'high'], toggle: true },
+    })
     expect(models['xiaomi/mimo-v2.6-flash'].capabilities).toBeUndefined()
   })
 
@@ -513,7 +517,7 @@ describe('reasoning capability', () => {
         '      - id: z-ai/glm-5.3',
         '        name: GLM 5.3',
         '        contextWindow: 128000',
-        '        maxTokens: 8192',
+        '        maxTokens: 16384',
         '        reasoning: true',
         '        thinking:',
         '          mode: effort',
@@ -527,7 +531,7 @@ describe('reasoning capability', () => {
         '      - id: xiaomi/mimo-v2.6-flash',
         '        name: MiMo V2.6 Flash',
         '        contextWindow: 128000',
-        '        maxTokens: 8192',
+        '        maxTokens: 16384',
       ].join('\n')
     )
   })
@@ -588,5 +592,157 @@ describe('buildCreditStatusLines', () => {
   it('points a read-only wallet at the full wallet for funding', () => {
     const lines = buildCreditStatusLines({ ...base, canSign: false })
     expect(lines.map((l) => l.text).join('\n')).toContain('Fund from your full wallet:')
+  })
+})
+
+describe('harness limits', () => {
+  it('caps context and output at cost-safe values', () => {
+    expect(
+      harnessLimits({
+        id: 'm',
+        display_name: 'M',
+        price_tiers: [],
+        context_input_limit: 1_050_000,
+        max_output_tokens: 943_718,
+      })
+    ).toEqual({ context: 128_000, output: 16_384 })
+  })
+
+  it('keeps a smaller real model window', () => {
+    expect(
+      harnessLimits({
+        id: 'm',
+        display_name: 'M',
+        price_tiers: [],
+        context_input_limit: 32_000,
+        max_output_tokens: 4_096,
+      })
+    ).toEqual({ context: 32_000, output: 4_096 })
+  })
+
+  it('falls back to the defaults when the catalogue omits limits', () => {
+    expect(harnessLimits(undefined)).toEqual({ context: 128_000, output: 16_384 })
+  })
+})
+
+describe('readHarnessReasoningConfig', () => {
+  it('reads opencode v2 capabilities, counting toggle as "none"', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'paytaca-reasoning-'))
+    try {
+      const path = join(dir, 'opencode.json')
+      writeFileSync(
+        path,
+        JSON.stringify({
+          providers: {
+            'paytaca-ai': {
+              models: {
+                glm: {
+                  capabilities: {
+                    reasoning: { supported: true, effort: ['max', 'high', 'low'] },
+                  },
+                },
+                deepseek: {
+                  capabilities: {
+                    reasoning: { supported: true, effort: ['xhigh', 'high'], toggle: true },
+                  },
+                },
+                mimo: {},
+              },
+            },
+          },
+        })
+      )
+      expect(readHarnessReasoningConfig('opencode', { path })).toEqual({
+        coarse: false,
+        models: {
+          glm: { supported: true, efforts: ['max', 'high', 'low'] },
+          deepseek: { supported: true, efforts: ['xhigh', 'high', 'none'] },
+          mimo: { supported: false, efforts: null },
+        },
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('reads pi thinking efforts from models.json', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'paytaca-reasoning-'))
+    try {
+      writeFileSync(
+        join(dir, 'models.json'),
+        JSON.stringify({
+          providers: {
+            'paytaca-ai': {
+              models: [
+                {
+                  id: 'glm',
+                  reasoning: true,
+                  thinking: { mode: 'effort', efforts: ['max', 'high', 'low'] },
+                },
+                { id: 'mimo' },
+              ],
+            },
+          },
+        })
+      )
+      expect(readHarnessReasoningConfig('pi', { path: join(dir, 'mcp.json') })).toEqual({
+        coarse: false,
+        models: {
+          glm: { supported: true, efforts: ['max', 'high', 'low'] },
+          mimo: { supported: false, efforts: null },
+        },
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('detects a coarse omp reasoning directive', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'paytaca-reasoning-'))
+    try {
+      writeFileSync(
+        join(dir, 'models.yml'),
+        [
+          'providers:',
+          '  paytaca-ai:',
+          '    models:',
+          '      - id: glm',
+          '        thinking:',
+          '          mode: effort',
+        ].join('\n')
+      )
+      expect(readHarnessReasoningConfig('omp', { path: join(dir, 'mcp.json') })).toEqual({
+        coarse: true,
+        supportedAll: true,
+        models: {},
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('harnessConfigParseError', () => {
+  it('reports a corrupt json config instead of hiding it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'paytaca-parse-'))
+    try {
+      const path = join(dir, 'opencode.json')
+      writeFileSync(path, '{ "providers": ')
+      expect(harnessConfigParseError('opencode', { path })).toContain('could not be parsed')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('accepts jsonc and missing files', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'paytaca-parse-'))
+    try {
+      const path = join(dir, 'opencode.json')
+      writeFileSync(path, '{\n // comment\n "providers": {},\n}\n')
+      expect(harnessConfigParseError('opencode', { path })).toBeNull()
+      expect(harnessConfigParseError('opencode', { path: join(dir, 'absent.json') })).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

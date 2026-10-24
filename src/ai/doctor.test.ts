@@ -60,6 +60,14 @@ describe('buildDoctorChecks', () => {
     expect(summarizeDoctor(checks)).toBe('fail')
   })
 
+  it('fails on a config file that cannot be parsed', () => {
+    const checks = buildDoctorChecks(
+      context({ configError: 'Config at /tmp/opencode.json could not be parsed (invalid JSON).' })
+    )
+    expect(find(checks, 'config')?.status).toBe('fail')
+    expect(find(checks, 'config')?.detail).toContain('/tmp/opencode.json')
+  })
+
   it('fails when the harness has no API key', () => {
     const checks = buildDoctorChecks(context({ apiKey: null, apiKeyPrefix: null }))
     expect(find(checks, 'api-key')?.status).toBe('fail')
@@ -118,6 +126,110 @@ describe('buildDoctorChecks', () => {
       context({ walletStatus: null, walletStatusError: 'Backend unreachable' })
     )
     expect(find(checks, 'credits')?.status).toBe('warn')
+  })
+
+  it('fails the backend check when the catalogue is unreachable', () => {
+    const checks = buildDoctorChecks(
+      context({
+        backendUrl: 'https://api.example',
+        catalogue: null,
+        catalogueError: 'Backend unreachable: fetch failed',
+        walletStatus: null,
+      })
+    )
+    expect(find(checks, 'backend')?.status).toBe('fail')
+    expect(find(checks, 'backend')?.detail).toContain('https://api.example')
+    expect(find(checks, 'backend')?.detail).toContain('fetch failed')
+  })
+
+  it('fails a model id that is missing from the catalogue', () => {
+    const checks = buildDoctorChecks(
+      context({
+        modelId: 'retired/model',
+        catalogue: {
+          models: [
+            {
+              id: 'deepseek/deepseek-v4.1-flash',
+              display_name: 'DeepSeek V4.1 Flash',
+              price_tiers: [],
+              reasoning_efforts: ['max', 'high', 'low', 'none'],
+            },
+          ],
+        },
+      })
+    )
+    expect(find(checks, 'catalogue-model')?.status).toBe('fail')
+  })
+
+  it('warns when the harness config has no effort menu', () => {
+    const checks = buildDoctorChecks(
+      context({
+        catalogue: {
+          models: [
+            {
+              id: 'deepseek/deepseek-v4.1-flash',
+              display_name: 'DeepSeek V4.1 Flash',
+              price_tiers: [],
+              reasoning_efforts: ['max', 'high', 'low', 'none'],
+            },
+          ],
+        },
+        harnessReasoning: { coarse: false, models: {} },
+      })
+    )
+    expect(find(checks, 'reasoning')?.status).toBe('warn')
+    expect(find(checks, 'reasoning')?.fix).toContain('ai configure opencode')
+  })
+
+  it('warns when the declared effort menu is out of date', () => {
+    const checks = buildDoctorChecks(
+      context({
+        catalogue: {
+          models: [
+            {
+              id: 'deepseek/deepseek-v4.1-flash',
+              display_name: 'DeepSeek V4.1 Flash',
+              price_tiers: [],
+              reasoning_efforts: ['max', 'high', 'low'],
+            },
+          ],
+        },
+        harnessReasoning: {
+          coarse: false,
+          models: {
+            'deepseek/deepseek-v4.1-flash': { supported: true, efforts: ['max', 'high'] },
+          },
+        },
+      })
+    )
+    expect(find(checks, 'reasoning')?.status).toBe('warn')
+  })
+
+  it('passes when the effort menu matches the catalogue', () => {
+    const checks = buildDoctorChecks(
+      context({
+        catalogue: {
+          models: [
+            {
+              id: 'deepseek/deepseek-v4.1-flash',
+              display_name: 'DeepSeek V4.1 Flash',
+              price_tiers: [],
+              reasoning_efforts: ['max', 'high', 'low', 'none'],
+            },
+          ],
+        },
+        harnessReasoning: {
+          coarse: false,
+          models: {
+            'deepseek/deepseek-v4.1-flash': {
+              supported: true,
+              efforts: ['max', 'high', 'low', 'none'],
+            },
+          },
+        },
+      })
+    )
+    expect(find(checks, 'reasoning')?.status).toBe('ok')
   })
 })
 

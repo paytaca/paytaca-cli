@@ -9,7 +9,11 @@
  */
 
 import { formatUsd } from '../utils/prices.js'
-import type { WalletStatus } from './client.js'
+import type { AiConfig, WalletStatus } from './client.js'
+import {
+  reasoningEfforts,
+  type HarnessReasoningConfig,
+} from './configure.js'
 import {
   formatRemaining,
   hasActiveCredits,
@@ -50,6 +54,21 @@ export interface DoctorContext {
   /** Whether the local Anthropic gateway answers (Claude Code harness only). */
   gatewayRunning?: boolean
   gatewayUrl?: string
+  /** Backend URL used for the checks, shown when the catalogue is unreachable. */
+  backendUrl?: string
+  /** Full model catalogue, or null when it could not be fetched. */
+  catalogue?: AiConfig | null
+  catalogueError?: string
+  /** A parse error in the harness config file, if any. */
+  configError?: string
+  /** Reasoning capability stored in the harness config (null for Claude). */
+  harnessReasoning?: HarnessReasoningConfig | null
+}
+
+function sameEfforts(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  const set = new Set(b)
+  return a.every((level) => set.has(level))
 }
 
 export function activePlanSummary(status: WalletStatus | null): string[] {
@@ -80,12 +99,35 @@ export function buildDoctorChecks(ctx: DoctorContext): DoctorCheck[] {
         }
   )
 
+  if (ctx.catalogue !== undefined) {
+    checks.push(
+      ctx.catalogue
+        ? {
+            id: 'backend',
+            label: 'Backend',
+            status: 'ok',
+            detail: `Reachable at ${ctx.backendUrl ?? 'the configured URL'}.`,
+          }
+        : {
+            id: 'backend',
+            label: 'Backend',
+            status: 'fail',
+            detail: `Cannot reach ${ctx.backendUrl ?? 'the backend'}: ${
+              ctx.catalogueError || 'no response'
+            }`,
+            fix: 'Check your network and the backend URL, then run `paytaca ai models`.',
+          }
+    )
+  }
+
   if (ctx.walletStatusError) {
     checks.push({
       id: 'credits',
       label: 'AI credits',
       status: 'warn',
-      detail: `Could not read credits from the backend: ${ctx.walletStatusError}`,
+      detail: `Could not read credits${ctx.backendUrl ? ` from ${ctx.backendUrl}` : ''}: ${
+        ctx.walletStatusError
+      }`,
     })
   } else {
     const plans = activePlanSummary(ctx.walletStatus)
@@ -110,6 +152,16 @@ export function buildDoctorChecks(ctx: DoctorContext): DoctorCheck[] {
         detail: parts.join(', '),
       })
     }
+  }
+
+  if (ctx.configError) {
+    checks.push({
+      id: 'config',
+      label: 'Harness config',
+      status: 'fail',
+      detail: ctx.configError,
+      fix: `Fix or remove the file, then re-run \`paytaca ai configure ${ctx.harness}\`.`,
+    })
   }
 
   if (!ctx.apiKey) {
@@ -227,6 +279,82 @@ export function buildDoctorChecks(ctx: DoctorContext): DoctorCheck[] {
         detail: 'No active plan and no pay-as-you-go balance for this model.',
         fix: `paytaca ai purchase --model ${ctx.modelId} --minutes <n>`,
       })
+    }
+  }
+
+  if (ctx.modelId && ctx.catalogue) {
+    const known = (ctx.catalogue.models || []).some((model) => model?.id === ctx.modelId)
+    if (!known) {
+      checks.push({
+        id: 'catalogue-model',
+        label: `Model ${ctx.modelId}`,
+        status: 'fail',
+        detail: 'This model is not in the backend catalogue — the id may have been renamed or retired.',
+        fix: 'paytaca ai models',
+      })
+    }
+  }
+
+  if (ctx.harness !== 'claude' && ctx.apiKey && ctx.catalogue && ctx.harnessReasoning !== undefined) {
+    const capable = (ctx.catalogue.models || []).filter(
+      (model) => reasoningEfforts(model).length > 0
+    )
+    if (capable.length > 0) {
+      const state = ctx.harnessReasoning
+      if (!state) {
+        checks.push({
+          id: 'reasoning',
+          label: 'Reasoning effort',
+          status: 'info',
+          detail: `Could not read the ${ctx.harness} config, so the effort menu is unknown.`,
+        })
+      } else if (state.coarse) {
+        checks.push(
+          state.supportedAll
+            ? {
+                id: 'reasoning',
+                label: 'Reasoning effort',
+                status: 'ok',
+                detail: 'Effort settings are present in the harness config.',
+              }
+            : {
+                id: 'reasoning',
+                label: 'Reasoning effort',
+                status: 'warn',
+                detail:
+                  'The config predates reasoning support, so the harness hides the effort menu. Re-run configure to add it.',
+                fix: `paytaca ai configure ${ctx.harness}`,
+                autoFix: 'configure',
+              }
+        )
+      } else {
+        const missing = capable.filter((model) => !state.models[model.id]?.supported)
+        const stale = capable.filter((model) => {
+          const declared = state.models[model.id]?.efforts
+          return declared ? !sameEfforts(declared, reasoningEfforts(model)) : false
+        })
+        if (missing.length === 0 && stale.length === 0) {
+          checks.push({
+            id: 'reasoning',
+            label: 'Reasoning effort',
+            status: 'ok',
+            detail: `Effort menu matches the catalogue for ${capable.length} model(s).`,
+          })
+        } else {
+          const affected = [...new Set([...missing, ...stale].map((model) => model.id))]
+          const preview = affected.slice(0, 3).join(', ')
+          const more = affected.length > 3 ? ` and ${affected.length - 3} more` : ''
+          const reason = missing.length > 0 ? 'missing' : 'out of date'
+          checks.push({
+            id: 'reasoning',
+            label: 'Reasoning effort',
+            status: 'warn',
+            detail: `Effort settings are ${reason} for ${preview}${more}. Re-run configure to refresh the menu.`,
+            fix: `paytaca ai configure ${ctx.harness}`,
+            autoFix: 'configure',
+          })
+        }
+      }
     }
   }
 

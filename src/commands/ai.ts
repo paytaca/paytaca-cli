@@ -73,8 +73,10 @@ import {
   buildCreditStatusLines,
   configureHarness,
   extractClaudeBaseUrl,
+  harnessConfigParseError,
   readClaudeSettings,
   readHarnessApiKey,
+  readHarnessReasoningConfig,
   readOpencodeMajor,
   shouldClearOpencodeCredentials,
   staleOpencodeCredentialIdsFromCli,
@@ -376,6 +378,30 @@ export function registerAiCommands(program: Command): void {
         const { path: configPath, apiKey } = readHarnessApiKey(harness, { path: opts.path })
         const apiKeyPrefix = apiKey ? apiKey.slice(0, 12) : null
 
+        let catalogue: AiConfig | null = null
+        let catalogueError: string | undefined
+        try {
+          catalogue = await getConfig({ backendUrl })
+        } catch (err: any) {
+          catalogueError = err?.message || String(err)
+        }
+
+        let harnessReasoning: ReturnType<typeof readHarnessReasoningConfig> = null
+        if (harness !== 'claude') {
+          try {
+            harnessReasoning = readHarnessReasoningConfig(harness, { path: opts.path })
+          } catch {
+            harnessReasoning = null
+          }
+        }
+
+        let configError: string | undefined
+        try {
+          configError = harnessConfigParseError(harness, { path: opts.path }) ?? undefined
+        } catch {
+          configError = undefined
+        }
+
         let walletStatus: WalletStatus | null = null
         let walletStatusError: string | undefined
         if (wallet) {
@@ -416,7 +442,17 @@ export function registerAiCommands(program: Command): void {
           const settings = readClaudeSettings(configPath)
           const port = resolveProxyPort()
           gatewayUrl = extractClaudeBaseUrl(settings) ?? proxyBaseUrl(port)
-          gatewayRunning = await isProxyRunning(port)
+          // Probe the port the harness actually points at, not just the
+          // default: a stale settings URL is a common "gateway is running but
+          // Claude Code still fails" cause.
+          let probePort = port
+          try {
+            const parsed = gatewayUrl ? new URL(gatewayUrl) : null
+            if (parsed?.port) probePort = Number(parsed.port)
+          } catch {
+            probePort = port
+          }
+          gatewayRunning = await isProxyRunning(probePort)
         }
 
         const ctx: DoctorContext = {
@@ -432,6 +468,11 @@ export function registerAiCommands(program: Command): void {
           staleCredentials,
           gatewayRunning,
           gatewayUrl,
+          backendUrl,
+          catalogue,
+          catalogueError,
+          configError,
+          harnessReasoning,
         }
         return { ctx, configPath }
       }
