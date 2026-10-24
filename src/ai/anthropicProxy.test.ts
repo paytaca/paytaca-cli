@@ -440,6 +440,56 @@ describe('responses request translation', () => {
     })
   })
 
+  it('flattens namespace tools with a reversible prefix', () => {
+    const { tools, namespaces } = responsesToolsToChat([
+      {
+        type: 'namespace',
+        name: 'mcp__paytaca',
+        tools: [
+          {
+            type: 'function',
+            name: 'get_image_models',
+            description: 'List image models',
+            parameters: { type: 'object', properties: {} },
+          },
+        ],
+      },
+    ])
+    expect(tools?.[0].function.name).toBe('mcp__paytaca__get_image_models')
+    expect(namespaces.get('mcp__paytaca__get_image_models')).toEqual({
+      namespace: 'mcp__paytaca',
+      name: 'get_image_models',
+    })
+  })
+
+  it('replays namespaced tool calls with the flattened name', () => {
+    expect(
+      responsesInputToMessages([
+        {
+          type: 'function_call',
+          name: 'get_image_models',
+          namespace: 'mcp__paytaca',
+          call_id: 'call_1',
+          arguments: '{}',
+        },
+        { type: 'function_call_output', call_id: 'call_1', output: 'ok' },
+      ])
+    ).toEqual([
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call_1',
+            type: 'function',
+            function: { name: 'mcp__paytaca__get_image_models', arguments: '{}' },
+          },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'call_1', content: 'ok' },
+    ])
+  })
+
   it('forwards reasoning effort and limits to the backend request', () => {
     const { request } = buildResponsesChatRequest(
       {
@@ -519,6 +569,37 @@ describe('responses streaming translation', () => {
     expect(stream).toContain('"input":"*** Begin Patch"')
     expect(stream).toContain('event: response.completed')
   })
+  it('restores the namespace when emitting a namespaced tool call', () => {
+    const { namespaces } = responsesToolsToChat([
+      { type: 'namespace', name: 'mcp__paytaca', tools: [{ type: 'function', name: 'get_image_models' }] },
+    ])
+    const translator = createResponsesStreamTranslator(
+      'resp_4',
+      'glm',
+      new Set(),
+      namespaces
+    )
+    let stream = translator.start()
+    stream += translator.handleChunk({
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id: 'call_4',
+                function: { name: 'mcp__paytaca__get_image_models', arguments: '{}' },
+              },
+            ],
+          },
+        },
+      ],
+    })
+    stream += translator.finish()
+    expect(stream).toContain('"name":"get_image_models"')
+    expect(stream).toContain('"namespace":"mcp__paytaca"')
+    expect(stream).not.toContain('mcp__paytaca__get_image_models')
+  })
 })
 
 describe('responses non-streaming translation', () => {
@@ -549,6 +630,39 @@ describe('responses non-streaming translation', () => {
       input_tokens: 1,
       output_tokens: 2,
       total_tokens: 3,
+    })
+  })
+
+  it('restores the namespace on non-streaming namespaced tool calls', () => {
+    const { namespaces } = responsesToolsToChat([
+      { type: 'namespace', name: 'mcp__paytaca', tools: [{ type: 'function', name: 'get_image_models' }] },
+    ])
+    const response = buildResponsesResponse(
+      'resp_5',
+      'glm',
+      {
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'call_5',
+                  function: { name: 'mcp__paytaca__get_image_models', arguments: '{}' },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      new Set(),
+      namespaces
+    ) as any
+    expect(response.output[1]).toMatchObject({
+      type: 'function_call',
+      call_id: 'call_5',
+      name: 'get_image_models',
+      namespace: 'mcp__paytaca',
     })
   })
 })

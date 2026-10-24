@@ -590,9 +590,32 @@ export function createStreamTranslator(id: string, model: string): StreamTransla
 // speaks chat completions, so this section translates requests and turns
 // chat streaming chunks into the Responses SSE events Codex consumes.
 
+export interface NamespacedTool {
+  namespace: string
+  name: string
+}
+
 export interface ResponsesToolTranslation {
   tools?: OpenAIRequest['tools']
   customTools: Set<string>
+  namespaces: Map<string, NamespacedTool>
+}
+
+// Codex routes MCP tool calls only when the returned function_call item carries
+// its namespace, so flattening a namespace to a plain chat-completions tool
+// name must be reversible. Chat function names cannot carry the namespace
+// field, so encode it as a prefix and decode it again on the way back.
+export function flattenNamespaceToolName(namespace: string, name: string): string {
+  return `${namespace}__${name}`
+}
+
+function namespacedToolFields(
+  chatName: string,
+  namespaces: Map<string, NamespacedTool>
+): Record<string, string> {
+  const nested = namespaces.get(chatName)
+  if (!nested) return {}
+  return { name: nested.name, namespace: nested.namespace }
 }
 
 function responsesContentText(content: unknown): string {
@@ -697,7 +720,11 @@ export function responsesInputToMessages(
     }
 
     if (type === 'function_call' || type === 'custom_tool_call') {
-      const name = String(item.name || 'unknown')
+      const rawName = String(item.name || 'unknown')
+      const name =
+        typeof item.namespace === 'string' && item.namespace
+          ? flattenNamespaceToolName(item.namespace, rawName)
+          : rawName
       const callId =
         typeof item.call_id === 'string' && item.call_id
           ? item.call_id
@@ -745,16 +772,24 @@ export function responsesInputToMessages(
 
 export function responsesToolsToChat(tools: unknown): ResponsesToolTranslation {
   const customTools = new Set<string>()
+  const namespaces = new Map<string, NamespacedTool>()
   const out: NonNullable<OpenAIRequest['tools']> = []
 
-  const visit = (raw: unknown) => {
+  const visit = (raw: unknown, namespace?: string) => {
     if (!raw || typeof raw !== 'object') return
     const tool = raw as Record<string, any>
-    if (tool.type === 'function' && typeof tool.name === 'string') {
+    const name =
+      typeof tool.name === 'string'
+        ? namespace
+          ? flattenNamespaceToolName(namespace, tool.name)
+          : tool.name
+        : null
+    if (tool.type === 'function' && name) {
+      if (namespace) namespaces.set(name, { namespace, name: tool.name })
       out.push({
         type: 'function',
         function: {
-          name: tool.name,
+          name,
           description:
             typeof tool.description === 'string' ? tool.description : undefined,
           parameters:
@@ -765,12 +800,13 @@ export function responsesToolsToChat(tools: unknown): ResponsesToolTranslation {
       })
       return
     }
-    if (tool.type === 'custom' && typeof tool.name === 'string') {
-      customTools.add(tool.name)
+    if (tool.type === 'custom' && name) {
+      if (namespace) namespaces.set(name, { namespace, name: tool.name })
+      customTools.add(name)
       out.push({
         type: 'function',
         function: {
-          name: tool.name,
+          name,
           description:
             `${typeof tool.description === 'string' ? tool.description : tool.name}\n\n` +
             'Provide the complete raw tool input in the "input" string field.',
@@ -789,13 +825,13 @@ export function responsesToolsToChat(tools: unknown): ResponsesToolTranslation {
       })
       return
     }
-    if (tool.type === 'namespace' && Array.isArray(tool.tools)) {
-      for (const nested of tool.tools) visit(nested)
+    if (tool.type === 'namespace' && Array.isArray(tool.tools) && typeof tool.name === 'string') {
+      for (const nested of tool.tools) visit(nested, tool.name)
     }
   }
 
   for (const tool of Array.isArray(tools) ? tools : []) visit(tool)
-  return { tools: out.length > 0 ? out : undefined, customTools }
+  return { tools: out.length > 0 ? out : undefined, customTools, namespaces }
 }
 
 function responsesToolChoice(choice: unknown): unknown {
@@ -831,13 +867,14 @@ function responsesResponseFormat(text: unknown): unknown {
 export interface ResponsesTranslation {
   request: OpenAIRequest
   customTools: Set<string>
+  namespaces: Map<string, NamespacedTool>
 }
 
 export function buildResponsesChatRequest(
   body: Record<string, any>,
   model: string
 ): ResponsesTranslation {
-  const { tools, customTools } = responsesToolsToChat(body.tools)
+  const { tools, customTools, namespaces } = responsesToolsToChat(body.tools)
   const request: OpenAIRequest = {
     model,
     messages: responsesInputToMessages(body.input, body.instructions),
@@ -861,7 +898,7 @@ export function buildResponsesChatRequest(
   }
   const responseFormat = responsesResponseFormat(body.text)
   if (responseFormat !== undefined) request.response_format = responseFormat
-  return { request, customTools }
+  return { request, customTools, namespaces }
 }
 
 function responsesUsage(
@@ -933,7 +970,8 @@ export interface ResponsesStreamTranslator {
 export function createResponsesStreamTranslator(
   id: string,
   model: string,
-  customTools: Set<string> = new Set()
+  customTools: Set<string> = new Set(),
+  namespaces: Map<string, NamespacedTool> = new Map()
 ): ResponsesStreamTranslator {
   const message = {
     id: `msg_${randomBytes(12).toString('hex')}`,
@@ -1075,6 +1113,7 @@ export function createResponsesStreamTranslator(
           status: 'in_progress',
           call_id: state.callId,
           name: state.name,
+          ...namespacedToolFields(state.name, namespaces),
           arguments: '',
         }
     events += sse('response.output_item.added', {
@@ -1125,6 +1164,7 @@ export function createResponsesStreamTranslator(
           status: 'completed',
           call_id: state.callId,
           name: state.name,
+          ...namespacedToolFields(state.name, namespaces),
           arguments: state.args || '{}',
         }
     output.push(item)
@@ -1251,7 +1291,8 @@ export function buildResponsesResponse(
   id: string,
   model: string,
   data: any,
-  customTools: Set<string> = new Set()
+  customTools: Set<string> = new Set(),
+  namespaces: Map<string, NamespacedTool> = new Map()
 ): Record<string, unknown> {
   const choice = (data?.choices || [])[0] || {}
   const message = choice.message || {}
@@ -1288,7 +1329,12 @@ export function buildResponsesResponse(
       }
       output.push({ ...common, type: 'custom_tool_call', input })
     } else {
-      output.push({ ...common, type: 'function_call', arguments: args || '{}' })
+      output.push({
+        ...common,
+        ...namespacedToolFields(name, namespaces),
+        type: 'function_call',
+        arguments: args || '{}',
+      })
     }
   }
 
@@ -1615,7 +1661,7 @@ async function handleResponses(
     return
   }
 
-  const { request: payload, customTools } = buildResponsesChatRequest(body, model)
+  const { request: payload, customTools, namespaces } = buildResponsesChatRequest(body, model)
   const upstream = await fetch(apiUrl(ctx.backendUrl, '/v1/chat/completions'), {
     method: 'POST',
     headers: {
@@ -1655,7 +1701,7 @@ async function handleResponses(
       res.end()
       return
     }
-    const translator = createResponsesStreamTranslator(id, model, customTools)
+    const translator = createResponsesStreamTranslator(id, model, customTools, namespaces)
     res.write(translator.start())
     try {
       for await (const data of readSseData(upstream.body)) {
@@ -1676,7 +1722,7 @@ async function handleResponses(
   }
 
   const data = await upstream.json().catch(() => null)
-  const response = buildResponsesResponse(id, model, data, customTools)
+  const response = buildResponsesResponse(id, model, data, customTools, namespaces)
   const bodyText = JSON.stringify(response)
   res.writeHead(200, {
     'content-type': 'application/json',
