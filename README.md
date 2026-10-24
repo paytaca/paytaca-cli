@@ -360,7 +360,7 @@ If auto-refill is armed for the model, `get_credits` also returns a `resumeHint`
 
 ### Nostr Chat
 
-End-to-end encrypted Nostr chat keyed from the wallet mnemonic (HD path `m/44'/1237'/0'/0/0`; keys are derived in memory and never stored). Conversation metadata (contacts, rooms, messages) is persisted at `~/.paytaca/chat-state.json`.
+End-to-end encrypted Nostr chat keyed from the wallet mnemonic (HD path `m/44'/1237'/0'/0/0` for Nostr identity and `m/44'/1237'/0'/0/1` for MLS signing; keys are derived in memory and never stored). One-to-one conversations use NIP-17 gift-wrapped DMs. Group chats use MLS (NIP-EE, kinds 443/444/445/10051) and interoperate with the Paytaca app. Conversation metadata (contacts, rooms, messages) is persisted at `~/.paytaca/chat-state.json`. MLS group state — which contains epoch secrets and the leaf signing key — is encrypted at rest (AES-256-GCM) with a key derived from the wallet mnemonic via HKDF (`paytaca-mls-state-key`).
 
 ```bash
 paytaca chat identity                     # Show your npub and pubkey
@@ -370,12 +370,24 @@ paytaca chat add-contact <npub> [name]    # Add a contact
 paytaca chat start <npub>                 # Start a 1:1 conversation
 paytaca chat list                         # List conversations
 paytaca chat open <room-id> --tail 20     # Show recent messages (--tail, --json)
-paytaca chat send <room-id> <text>        # Send a message
+paytaca chat send <room-id> <text>        # Send a message (DM or group)
 paytaca chat listen [--contact <npub|name>]  # Subscribe to new messages (long-running)
 paytaca chat set-display-name <name>      # Publish profile name to relays (NIP-78)
 paytaca chat set-bch-address <address>    # Publish a BCH address to relays (NIP-78)
 paytaca chat remove-display-name          # Remove published name
 paytaca chat remove-bch-address           # Remove published address
+
+paytaca chat group create <name> [--member <npub>]...  # Create an MLS group
+paytaca chat group add-member <room-id> <npub>         # Add a group member
+paytaca chat group remove-member <room-id> <npub>      # Remove a group member
+paytaca chat group leave <room-id> [--successor <npub>]  # Leave a group
+paytaca chat group info <room-id> [--json]             # Show members and roles
+paytaca chat group rename <room-id> <name>             # Rename a group
+paytaca chat group set-admin <room-id> <npub> [--remove]  # Grant/revoke admin
+paytaca chat group transfer-owner <room-id> <npub>     # Transfer ownership
+paytaca chat invites list [--json]        # List pending group invitations
+paytaca chat invites accept <room-id>     # Accept a group invitation
+paytaca chat invites decline <room-id>    # Decline a group invitation
 ```
 
 ### Web UI
@@ -419,7 +431,7 @@ Seed phrases are stored in the OS native keychain:
 
 Powered by [@napi-rs/keyring](https://github.com/Brooooooklyn/keyring-node) (prebuilt Rust binaries, no node-gyp required).
 
-Nostr chat keys are **not** persisted — they are re-derived from the wallet mnemonic at runtime via HD path `m/44'/1237'/0'/0/0` and held only in memory for the duration of a session. Non-secret chat metadata (contacts, rooms, messages) is written to `~/.paytaca/chat-state.json` with mode `0600`; no key material is ever written there.
+Nostr chat keys are **not** persisted — they are re-derived from the wallet mnemonic at runtime via HD path `m/44'/1237'/0'/0/0` and held only in memory for the duration of a session. Non-secret chat metadata (contacts, rooms, messages) is written to `~/.paytaca/chat-state.json` with mode `0600`. MLS group state does hold key material (epoch secrets, leaf signing key), so it is never written in the clear: each group's serialized state is encrypted with AES-256-GCM under a wallet-derived key (HKDF label `paytaca-mls-state-key`, AAD = MLS group id).
 
 The `paytaca web` server listens on `127.0.0.1` only and requires a random per-session token in the `X-Paytaca-Token` header; requests whose `Host` header is not `127.0.0.1`/`localhost` are rejected, request bodies are capped at 1 MB, and internal error details are logged to stderr rather than returned to the client.
 
@@ -440,7 +452,7 @@ src/
     check.ts         Check if URL requires x402 payment
     ai.ts            Paytaca AI (configure, api-key, models, plans, credits, purchase, auto-refill, image)
     anthropicProxy.ts  Anthropic/Responses↔OpenAI gateway for Claude Code and Codex (`paytaca mcp --proxy`)
-    chat.ts          Nostr chat (contacts, conversations, identity, listen)
+    chat.ts          Nostr chat (contacts, DMs, MLS groups, invitations, listen)
     web.ts           `paytaca web` — local browser UI launcher
     mcp.ts           `paytaca mcp` stdio entry + per-harness config templates
     update.ts        Self-update from npm registry
@@ -488,7 +500,14 @@ src/
     keys.ts          Nostr key derivation from wallet mnemonic (in memory)
     chat.ts          DM event building/signing (NIP-17 style)
     relay.ts         Relay connection/subscription service
-    store.ts         Contact/room/message JSON store (~/.paytaca)
+    store.ts         Contact/room/message/MLS JSON store (~/.paytaca)
+    mls/
+      context.ts       Ciphersuite, capabilities, and MLS client config
+      keys.ts          Deterministic Ed25519 and HPKE key derivation
+      key-package.ts   KeyPackage generation and encoding
+      transport.ts     NIP-EE wire format (kinds 443/444/445/10051)
+      group.ts         Group create/join/add/remove/export
+      message.ts       Application message encrypt/decrypt
 ```
 
 ## Key Dependencies
@@ -503,6 +522,8 @@ src/
 | `alpinejs` | Reactive web UI (`paytaca web`), vendored inline |
 | `bip39` | Mnemonic generation and validation |
 | `nostr-tools` | Nostr chat events, keys, and relay transport |
+| `ts-mls` | MLS protocol implementation for group chat (NIP-EE) |
+| `@noble/curves` / `@noble/hashes` | MLS Ed25519 signing and HKDF key derivation |
 | `js-sha256` | Hashing for key derivation and payment headers |
 | `commander` | CLI framework |
 | `chalk` | Terminal colors |

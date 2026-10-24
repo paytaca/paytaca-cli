@@ -7,6 +7,20 @@ import { loadMnemonic } from '../wallet/index.js'
 import { ChatStore } from '../nostr/store.js'
 import { relayService } from '../nostr/relay.js'
 
+function toPubKeyHex(value: string): string {
+  const trimmed = value.trim()
+  if (/^[0-9a-f]{64}$/i.test(trimmed)) return trimmed.toLowerCase()
+  const decoded = nip19Decode(trimmed)
+  if (decoded.type !== 'npub' || typeof decoded.data !== 'string') {
+    throw new Error(`Invalid npub: ${value}`)
+  }
+  return decoded.data
+}
+
+function collectOption(value: string, previous: string[]): string[] {
+  return [...previous, value]
+}
+
 function formatTimestamp(unix: number): string {
   const d = new Date(unix * 1000)
   const now = new Date()
@@ -36,6 +50,7 @@ export function registerChatCommands(program: Command): void {
 
       const store = new ChatStore()
       await store.initialize(data.mnemonic)
+      await store.initializeMls()
 
       const rooms = store.getRooms()
 
@@ -124,6 +139,7 @@ export function registerChatCommands(program: Command): void {
 
       const store = new ChatStore()
       await store.initialize(data.mnemonic)
+      await store.initializeMls()
 
       const room = store.getRoom(roomId)
       if (!room) {
@@ -179,6 +195,10 @@ export function registerChatCommands(program: Command): void {
       if (room.subject) {
         console.log(chalk.dim(`   Subject: ${room.subject}`))
       }
+      if (room.type === 'mls-group') {
+        const memberNames = room.members.map(m => store.getContactName(m)).join(', ')
+        console.log(chalk.dim(`   Members (${room.members.length}): ${memberNames}`))
+      }
       console.log()
 
       for (const msg of msgs) {
@@ -217,6 +237,7 @@ export function registerChatCommands(program: Command): void {
 
       const store = new ChatStore()
       await store.initialize(data.mnemonic)
+      await store.initializeMls()
 
       const room = store.getRoom(roomId)
       if (!room) {
@@ -224,8 +245,18 @@ export function registerChatCommands(program: Command): void {
         process.exit(1)
       }
 
-      const { giftWraps, message } = await store.sendMessage(room.id, text)
-      const { accepted, errors } = await store.publishGiftWraps(giftWraps)
+      let accepted: string[] = []
+      let errors: { relay: string; reason: string }[] = []
+      try {
+        const result = await store.sendMessage(room.id, text)
+        const publish = result.publish ?? await store.publishGiftWraps(result.giftWraps)
+        accepted = publish.accepted
+        errors = publish.errors
+      } catch (err: any) {
+        store.cleanup()
+        console.log(chalk.red(`\n   Send failed: ${err.message || err}\n`))
+        process.exit(1)
+      }
 
       store.saveState()
       store.cleanup()
@@ -638,6 +669,7 @@ export function registerChatCommands(program: Command): void {
 
       const store = new ChatStore()
       await store.initialize(data.mnemonic)
+      await store.initializeMls()
 
       let filterPubKey = store.keys?.pubKeyHex || null
       if (opts.contact) {
@@ -719,5 +751,412 @@ export function registerChatCommands(program: Command): void {
       process.on('SIGTERM', shutdown)
 
       await new Promise(() => {})
+    })
+
+  const group = chat
+    .command('group')
+    .description('Manage MLS group chats')
+
+  group
+    .command('create')
+    .description('Create a new MLS group')
+    .argument('<name>', 'Group name')
+    .option('--member <npub>', 'Invite a member (repeatable)', collectOption, [])
+    .action(async (name: string, opts) => {
+      const data = loadMnemonic()
+      if (!data) {
+        console.log(chalk.red('\nNo wallet found.\n'))
+        process.exit(1)
+      }
+
+      const store = new ChatStore()
+      await store.initialize(data.mnemonic)
+      await store.initializeMls()
+
+      try {
+        const members = (opts.member as string[]).map(toPubKeyHex)
+        const room = await store.createMlsGroup(name, members)
+        console.log(chalk.green(`\n   Group created: ${room.name}\n`))
+        console.log(chalk.dim(`   Room ID: ${room.id}\n`))
+        if (members.length > 0) {
+          console.log(chalk.dim(`   Invited ${members.length} member(s).\n`))
+        }
+      } catch (err: any) {
+        console.log(chalk.red(`\n   Error: ${err.message || err}\n`))
+        process.exitCode = 1
+      } finally {
+        store.cleanup()
+      }
+    })
+
+  group
+    .command('add-member')
+    .description('Add a member to an MLS group')
+    .argument('<room-id>', 'Room ID (full or prefix)')
+    .argument('<npub>', "Member's npub")
+    .action(async (roomId: string, npub: string) => {
+      const data = loadMnemonic()
+      if (!data) {
+        console.log(chalk.red('\nNo wallet found.\n'))
+        process.exit(1)
+      }
+
+      const store = new ChatStore()
+      await store.initialize(data.mnemonic)
+      await store.initializeMls()
+
+      const room = store.getRoom(roomId)
+      if (!room || room.type !== 'mls-group') {
+        console.log(chalk.red(`\nMLS group not found: ${roomId}\n`))
+        store.cleanup()
+        process.exit(1)
+      }
+
+      try {
+        await store.addMlsGroupMember(room.id, toPubKeyHex(npub))
+        console.log(chalk.green(`\n   Member added to ${room.name}.\n`))
+      } catch (err: any) {
+        console.log(chalk.red(`\n   Error: ${err.message || err}\n`))
+        process.exitCode = 1
+      } finally {
+        store.cleanup()
+      }
+    })
+
+  group
+    .command('remove-member')
+    .description('Remove a member from an MLS group')
+    .argument('<room-id>', 'Room ID (full or prefix)')
+    .argument('<npub>', "Member's npub")
+    .action(async (roomId: string, npub: string) => {
+      const data = loadMnemonic()
+      if (!data) {
+        console.log(chalk.red('\nNo wallet found.\n'))
+        process.exit(1)
+      }
+
+      const store = new ChatStore()
+      await store.initialize(data.mnemonic)
+      await store.initializeMls()
+
+      const room = store.getRoom(roomId)
+      if (!room || room.type !== 'mls-group') {
+        console.log(chalk.red(`\nMLS group not found: ${roomId}\n`))
+        store.cleanup()
+        process.exit(1)
+      }
+
+      try {
+        await store.removeMlsGroupMember(room.id, toPubKeyHex(npub))
+        console.log(chalk.green(`\n   Member removed from ${room.name}.\n`))
+      } catch (err: any) {
+        console.log(chalk.red(`\n   Error: ${err.message || err}\n`))
+        process.exitCode = 1
+      } finally {
+        store.cleanup()
+      }
+    })
+
+  group
+    .command('leave')
+    .description('Leave an MLS group')
+    .argument('<room-id>', 'Room ID (full or prefix)')
+    .option('--successor <npub>', 'New owner (required when the owner leaves)')
+    .action(async (roomId: string, opts) => {
+      const data = loadMnemonic()
+      if (!data) {
+        console.log(chalk.red('\nNo wallet found.\n'))
+        process.exit(1)
+      }
+
+      const store = new ChatStore()
+      await store.initialize(data.mnemonic)
+      await store.initializeMls()
+
+      const room = store.getRoom(roomId)
+      if (!room || room.type !== 'mls-group') {
+        console.log(chalk.red(`\nMLS group not found: ${roomId}\n`))
+        store.cleanup()
+        process.exit(1)
+      }
+
+      try {
+        const successor = opts.successor ? toPubKeyHex(opts.successor) : undefined
+        await store.leaveMlsGroup(room.id, successor)
+        console.log(chalk.green(`\n   Left ${room.name}.\n`))
+      } catch (err: any) {
+        console.log(chalk.red(`\n   Error: ${err.message || err}\n`))
+        process.exitCode = 1
+      } finally {
+        store.cleanup()
+      }
+    })
+
+  group
+    .command('info')
+    .description('Show MLS group details')
+    .argument('<room-id>', 'Room ID (full or prefix)')
+    .option('--json', 'Output as JSON')
+    .action(async (roomId: string, opts) => {
+      const data = loadMnemonic()
+      if (!data) {
+        console.log(chalk.red('\nNo wallet found.\n'))
+        process.exit(1)
+      }
+
+      const store = new ChatStore()
+      await store.initialize(data.mnemonic)
+      await store.initializeMls()
+
+      const room = store.getRoom(roomId)
+      if (!room || room.type !== 'mls-group') {
+        console.log(chalk.red(`\nMLS group not found: ${roomId}\n`))
+        store.cleanup()
+        process.exit(1)
+      }
+
+      const info = await store.getMlsGroupInfo(room.id)
+      if (!info) {
+        console.log(chalk.red(`\nMLS group state not found: ${roomId}\n`))
+        store.cleanup()
+        process.exit(1)
+      }
+
+      if (opts.json) {
+        console.log(JSON.stringify(info))
+        store.cleanup()
+        process.exit(0)
+      }
+
+      console.log()
+      console.log(`  ${chalk.bold(info.name)}`)
+      console.log(chalk.dim(`   Room ID:   ${info.roomId}`))
+      console.log(chalk.dim(`   MLS group: ${info.mlsGroupIdHex}`))
+      console.log(chalk.dim(`   Members (${info.members.length}):`))
+      for (const member of info.members) {
+        const role = member === info.owner
+          ? chalk.yellow(' (owner)')
+          : info.admins.includes(member)
+            ? chalk.cyan(' (admin)')
+            : ''
+        console.log(`     ${store.getContactName(member)}${role}`)
+        console.log(chalk.dim(`       ${member}`))
+      }
+      if (info.pendingInvitees.length > 0) {
+        console.log(chalk.dim(`   Pending invitations (${info.pendingInvitees.length}):`))
+        for (const member of info.pendingInvitees) {
+          console.log(`     ${store.getContactName(member)}`)
+        }
+      }
+      console.log()
+      store.cleanup()
+      process.exit(0)
+    })
+
+  group
+    .command('rename')
+    .description('Rename an MLS group')
+    .argument('<room-id>', 'Room ID (full or prefix)')
+    .argument('<name>', 'New group name')
+    .action(async (roomId: string, name: string) => {
+      const data = loadMnemonic()
+      if (!data) {
+        console.log(chalk.red('\nNo wallet found.\n'))
+        process.exit(1)
+      }
+
+      const store = new ChatStore()
+      await store.initialize(data.mnemonic)
+      await store.initializeMls()
+
+      const room = store.getRoom(roomId)
+      if (!room || room.type !== 'mls-group') {
+        console.log(chalk.red(`\nMLS group not found: ${roomId}\n`))
+        store.cleanup()
+        process.exit(1)
+      }
+
+      try {
+        await store.renameMlsGroup(room.id, name)
+        console.log(chalk.green(`\n   Group renamed to ${name}.\n`))
+      } catch (err: any) {
+        console.log(chalk.red(`\n   Error: ${err.message || err}\n`))
+        process.exitCode = 1
+      } finally {
+        store.cleanup()
+      }
+    })
+
+  group
+    .command('set-admin')
+    .description('Grant or revoke admin rights in an MLS group')
+    .argument('<room-id>', 'Room ID (full or prefix)')
+    .argument('<npub>', "Member's npub")
+    .option('--remove', 'Revoke admin rights instead of granting them')
+    .action(async (roomId: string, npub: string, opts) => {
+      const data = loadMnemonic()
+      if (!data) {
+        console.log(chalk.red('\nNo wallet found.\n'))
+        process.exit(1)
+      }
+
+      const store = new ChatStore()
+      await store.initialize(data.mnemonic)
+      await store.initializeMls()
+
+      const room = store.getRoom(roomId)
+      if (!room || room.type !== 'mls-group') {
+        console.log(chalk.red(`\nMLS group not found: ${roomId}\n`))
+        store.cleanup()
+        process.exit(1)
+      }
+
+      try {
+        await store.setMlsAdmin(room.id, toPubKeyHex(npub), !opts.remove)
+        console.log(chalk.green(`\n   Admin role ${opts.remove ? 'revoked' : 'granted'}.\n`))
+      } catch (err: any) {
+        console.log(chalk.red(`\n   Error: ${err.message || err}\n`))
+        process.exitCode = 1
+      } finally {
+        store.cleanup()
+      }
+    })
+
+  group
+    .command('transfer-owner')
+    .description('Transfer MLS group ownership')
+    .argument('<room-id>', 'Room ID (full or prefix)')
+    .argument('<npub>', "New owner's npub")
+    .action(async (roomId: string, npub: string) => {
+      const data = loadMnemonic()
+      if (!data) {
+        console.log(chalk.red('\nNo wallet found.\n'))
+        process.exit(1)
+      }
+
+      const store = new ChatStore()
+      await store.initialize(data.mnemonic)
+      await store.initializeMls()
+
+      const room = store.getRoom(roomId)
+      if (!room || room.type !== 'mls-group') {
+        console.log(chalk.red(`\nMLS group not found: ${roomId}\n`))
+        store.cleanup()
+        process.exit(1)
+      }
+
+      try {
+        await store.transferMlsOwnership(room.id, toPubKeyHex(npub))
+        console.log(chalk.green(`\n   Ownership transferred.\n`))
+      } catch (err: any) {
+        console.log(chalk.red(`\n   Error: ${err.message || err}\n`))
+        process.exitCode = 1
+      } finally {
+        store.cleanup()
+      }
+    })
+
+  const invites = chat
+    .command('invites')
+    .description('Manage MLS group invitations')
+
+  invites
+    .command('list')
+    .description('List pending MLS group invitations')
+    .option('--json', 'Output as JSON')
+    .action(async (opts) => {
+      const data = loadMnemonic()
+      if (!data) {
+        console.log(chalk.red('\nNo wallet found.\n'))
+        process.exit(1)
+      }
+
+      const store = new ChatStore()
+      await store.initialize(data.mnemonic)
+
+      const pending = store.getInvitations()
+      if (opts.json) {
+        console.log(JSON.stringify(pending.map(i => ({
+          roomId: i.roomId,
+          name: i.name,
+          inviter: i.inviterPubKey,
+          inviterName: store.getContactName(i.inviterPubKey),
+          createdAt: i.createdAt,
+        }))))
+        store.cleanup()
+        process.exit(0)
+      }
+
+      if (pending.length === 0) {
+        console.log(chalk.dim('\n   No pending invitations.\n'))
+        store.cleanup()
+        process.exit(0)
+      }
+
+      await Promise.allSettled(
+        pending.map(i => store.resolveDisplayName(i.inviterPubKey))
+      )
+
+      console.log()
+      for (const invite of pending) {
+        console.log(`  ${chalk.bold(invite.name)}`)
+        console.log(chalk.dim(`   Invited by ${store.getContactName(invite.inviterPubKey)}`))
+        console.log(chalk.dim(`   Room ID: ${invite.roomId}`))
+        console.log()
+      }
+      store.cleanup()
+      process.exit(0)
+    })
+
+  invites
+    .command('accept')
+    .description('Accept an MLS group invitation')
+    .argument('<room-id>', 'Invitation room ID (full or prefix)')
+    .action(async (roomId: string) => {
+      const data = loadMnemonic()
+      if (!data) {
+        console.log(chalk.red('\nNo wallet found.\n'))
+        process.exit(1)
+      }
+
+      const store = new ChatStore()
+      await store.initialize(data.mnemonic)
+      await store.initializeMls()
+
+      try {
+        const room = await store.acceptInvitation(roomId)
+        console.log(chalk.green(`\n   Joined ${room.name}.\n`))
+        console.log(chalk.dim(`   Room ID: ${room.id}\n`))
+      } catch (err: any) {
+        console.log(chalk.red(`\n   Error: ${err.message || err}\n`))
+        process.exitCode = 1
+      } finally {
+        store.cleanup()
+      }
+    })
+
+  invites
+    .command('decline')
+    .description('Decline an MLS group invitation')
+    .argument('<room-id>', 'Invitation room ID (full or prefix)')
+    .action(async (roomId: string) => {
+      const data = loadMnemonic()
+      if (!data) {
+        console.log(chalk.red('\nNo wallet found.\n'))
+        process.exit(1)
+      }
+
+      const store = new ChatStore()
+      await store.initialize(data.mnemonic)
+
+      try {
+        await store.declineInvitation(roomId)
+        console.log(chalk.green('\n   Invitation declined.\n'))
+      } catch (err: any) {
+        console.log(chalk.red(`\n   Error: ${err.message || err}\n`))
+        process.exitCode = 1
+      } finally {
+        store.cleanup()
+      }
     })
 }

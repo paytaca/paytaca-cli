@@ -41,7 +41,7 @@
   - Mnemonic: `mn_{walletHash}`; Active wallet: `active_wallet`.
   (`src/storage/keychain.ts`, `src/wallet/index.ts`)
 - Nostr chat keys are **not stored** — they are re-derived from the wallet mnemonic at runtime via HD path `m/44'/1237'/0'/0/0` and held only in memory during a chat session (`src/nostr/keys.ts`).
-- Chat state (contacts, rooms, messages) is persisted as JSON at `~/.paytaca/chat-state.json` (mode 0600) — this is non-secret metadata only;never write keys to it.
+- Chat state (contacts, rooms, messages) is persisted as JSON at `~/.paytaca/chat-state.json` (mode 0600) — this is non-secret metadata only; never write keys to it in the clear. The one exception is MLS group state, which is inherently key material and must be stored only AES-256-GCM-encrypted under the wallet-derived key (`deriveMlsStateKey`, `src/nostr/mls/state-crypto.ts`).
 
 ## Automated Code Review (Security)
 
@@ -49,7 +49,7 @@ Every pull request undergoes an AI-assisted security review. Pay particular atte
 
 - Entropy and recovery-phrase generation (`bip39`, `src/wallet/index.ts`)
 - Private-key derivation (`src/wallet/keys.ts`, `src/nostr/keys.ts`) — HD paths, WIF encoding, in-memory key material
-- Recovery-phrase storage and retrieval (`src/storage/keychain.ts`, `src/wallet/index.ts`) — keychain-only, no plaintext files, no logging of phrases, no persistence beyond the keychain aside from `~/.paytaca/chat-state.json` metadata
+- Recovery-phrase storage and retrieval (`src/storage/keychain.ts`, `src/wallet/index.ts`) — keychain-only, no plaintext files, no logging of phrases, no persistence beyond the keychain aside from `~/.paytaca/chat-state.json` metadata and encrypted MLS group state
 - Encryption and signing (transactions via `watchtower-cash-js`/libauth, x402 payment signing, Nostr event signing in memory)
 - Transaction construction (UTXO selection, change addresses, token-aware z-prefix addresses, `src/wallet/cauldron/*`)
 - Smart contracts / token pools (Cauldron DEX swaps in `src/wallet/cauldron/*`)
