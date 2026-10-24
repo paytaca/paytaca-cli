@@ -115,7 +115,8 @@ export function registerChatCommands(program: Command): void {
         }).length
 
         const unreadBadge = unread > 0 ? ` [${unread}]` : ''
-        console.log(`  ${chalk.bold(displayName)}${unreadBadge}`)
+        const groupBadge = room.type === 'mls-group' ? chalk.magenta(' (group)') : ''
+        console.log(`  ${chalk.bold(displayName)}${groupBadge}${unreadBadge}`)
         console.log(`  ${room.id}`)
         console.log(`  ${preview}  ${chalk.dim(time)}`)
         console.log()
