@@ -103,11 +103,19 @@ body{font-family:var(--sans);background:var(--bg);color:var(--ink);font-size:14p
 .live-pill .live-dot{width:6px;height:6px;border-radius:50%;background:var(--ink-3)}
 .live-pill.ws-live{color:var(--ink-2)}
 .live-pill.ws-live .live-dot{background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
-.tx-toast{position:fixed;top:74px;right:30px;z-index:150;display:flex;flex-direction:column;gap:4px;min-width:240px;max-width:320px;padding:14px 16px;background:var(--surface-3);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid var(--line);color:var(--ink);border-radius:var(--r);box-shadow:0 10px 32px rgba(0,0,0,0.28);animation:modalIn .2s cubic-bezier(.16,1,.3,1)}
-.tx-toast .t{font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:var(--ink-3)}
-.tx-toast .a{font-size:17px;font-weight:500;letter-spacing:-0.02em;font-variant-numeric:tabular-nums}
-.tx-toast a{font-family:var(--mono);font-size:10.5px;color:var(--accent);text-decoration:underline;text-underline-offset:2px}
+.tx-toast{position:fixed;top:78px;right:24px;z-index:300;width:min(360px,calc(100vw - 32px));display:flex;flex-direction:column;gap:12px;padding:16px 18px 15px;background:var(--surface-3);backdrop-filter:blur(18px) saturate(180%);-webkit-backdrop-filter:blur(18px) saturate(180%);border:1px solid var(--line);border-radius:14px;color:var(--ink);box-shadow:0 24px 60px -20px rgba(15,25,35,0.38),0 2px 8px rgba(15,25,35,0.06),var(--glass-hi);animation:toastSlideIn .3s cubic-bezier(.16,1,.3,1)}
+.tx-toast-head{display:flex;align-items:center;gap:9px}
+.tx-toast-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);flex:none}
+.tx-toast-in .tx-toast-dot{background:var(--ok);box-shadow:0 0 0 3px var(--ok-soft)}
+.tx-toast .t{font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:var(--ink-3);flex:1;min-width:0}
+.tx-toast-close{flex:none;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:50%;background:transparent;color:var(--ink-3);font-size:11px;line-height:1;cursor:pointer;transition:background .12s ease-out,color .12s ease-out}
+.tx-toast-close:hover{background:var(--surface-2);color:var(--ink)}
+.tx-toast .a{font-size:20px;font-weight:500;letter-spacing:-0.025em;line-height:1.25;font-variant-numeric:tabular-nums}
+.tx-toast-foot{display:flex;align-items:center;gap:12px}
+.tx-toast a{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10.5px;color:var(--accent);text-decoration:none}
 .tx-toast a:hover{color:var(--accent-strong)}
+.tx-toast a::after{content:'↗';font-size:11px;line-height:1}
+@keyframes toastSlideIn{from{opacity:0;transform:translateY(-8px) scale(.97)}to{opacity:1;transform:none}}
 .content{width:100%;max-width:1400px;margin:0 auto;padding:26px 30px 56px}
 .grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:16px}
 .span-4{grid-column:span 4}.span-5{grid-column:span 5}.span-6{grid-column:span 6}.span-7{grid-column:span 7}.span-8{grid-column:span 8}.span-12{grid-column:span 12}
@@ -297,6 +305,7 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
   .inline-row{flex-direction:column}
   .balance-card .value{font-size:30px}
   .action-bar{gap:8px}
+  .tx-toast{top:70px;left:12px;right:12px;width:auto;max-width:none}
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 </style>
@@ -780,10 +789,10 @@ input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,
   </div>
 </div>
 <template x-if="toastVisible"><div class="toast" :class="toastOk ? 'toast-ok' : 'toast-err'" x-text="toastMsg"></div></template>
-<template x-if="notify">
-    <div class="t" x-text="notify.title"></div>
+<template x-if="notify"><div class="tx-toast" :class="{ 'tx-toast-in': notify.incoming }" role="status" aria-live="polite">
+    <div class="tx-toast-head"><span class="tx-toast-dot"></span><div class="t" x-text="notify.title"></div><button class="tx-toast-close" @click="notify=null" aria-label="Dismiss notification">✕</button></div>
     <div class="a" x-text="notify.amountText"></div>
-    <a :href="notify.explorer" target="_blank" rel="noopener" x-text="notify.txidShort"></a>
+    <div class="tx-toast-foot"><a :href="notify.explorer" target="_blank" rel="noopener" x-text="notify.txidShort"></a></div>
   </div>
 </template>
 </div>
@@ -857,7 +866,7 @@ copyText(text){if(text){navigator.clipboard.writeText(text);this.toast('Copied!'
 connectWatch(addr){if(!this.state)return;var address=addr||this.rcvView?.address||this.wsAddress;if(!address)return;if(this.ws&&this.wsAddress===address&&(this.ws.readyState===0||this.ws.readyState===1))return;var self=this;var host=this.state.network==='chipnet'?'wss://chipnet.watchtower.cash':'wss://watchtower.cash';this.wsStatus='connecting';this.wsAddress=address;if(this.ws){this.ws.onclose=null;try{this.ws.close()}catch(e){};this.ws=null}try{this.ws=new WebSocket(host+'/ws/watch/bch/'+address+'/')}catch(e){console.debug('[ws] ctor error',e);this.wsStatus='off';return}this.ws.onopen=function(){console.debug('[ws] open');self.wsStatus='live';self.startWsPing()};this.ws.onmessage=function(ev){var m=null;try{m=JSON.parse(ev.data)}catch(e){return}self.handleWsUpdate(m)};this.ws.onclose=function(ev){console.debug('[ws] close',ev.code,ev.reason||'');if(self.wsPingTimer)clearTimeout(self.wsPingTimer);if(self.wsAddress!==address)return;self.wsStatus='off';if(self.wsReconnectTimer)clearTimeout(self.wsReconnectTimer);self.wsReconnectTimer=setTimeout(function(){if(self.state)self.connectWatch()},3000)};this.ws.onerror=function(){console.debug('[ws] error')}},
 startWsPing(){var self=this;if(this.wsPingTimer)clearTimeout(this.wsPingTimer);this.wsPingTimer=setTimeout(function(){if(self.ws&&self.ws.readyState===1){try{self.ws.send('ping')}catch(e){}self.startWsPing()}},30000)},
 handleWsUpdate(m){if(!m||!m.txid)return;var key=m.txid+'|'+(m.address||'')+'|'+(m.index==null?'':m.index);if(this.wsSeen[key])return;this.wsSeen[key]=1;if(Object.keys(this.wsSeen).length>400)this.wsSeen={};this.showTxToast(m,Array.isArray(m.senders)&&m.senders.length>0)},
-showTxToast(m,incoming){var self=this;var sym=(m.token_symbol||'').toLowerCase();var tname=(m.token_name||'').toLowerCase();var isBch=!m.token_symbol||sym==='bch'||tname==='bch'||tname==='bitcoin cash'||m.token==='bch';var amountText;if(isBch){var sats=m.value!=null?Number(m.value):null;var bch=sats!=null&&isFinite(sats)?sats/1e8:null;amountText=bch!=null?bch.toFixed(8).replace(/\.?0+$/,'')+' BCH':'New activity';if(bch!=null&&this.state&&this.state.bchPriceUsd){var usd=bch*this.state.bchPriceUsd;if(usd>0.0001){var usdStr=usd.toFixed(2);if(usdStr.slice(-3)==='.00')usdStr=usdStr.slice(0,-3);amountText+=' ('+usdStr+' USD)'}}}else{amountText=m.amount!=null?(m.amount+' '+m.token_symbol):(m.token_symbol||'Token')+' transfer'}var base=this.state&&this.state.network==='chipnet'?'https://chipnet.bchexplorer.info/tx/':'https://bchexplorer.info/tx/';var id=m.txid||'';var tid=++self._ntid;var n={title:incoming?'Incoming transaction':'Wallet activity',amountText:amountText,txidShort:id.slice(0,10)+'…'+id.slice(-6),explorer:base+id};this.notify=n;if(this.wsRefreshTimer)clearTimeout(this.wsRefreshTimer);this.wsRefreshTimer=setTimeout(function(){self.load()},1200);if(this.wsLateTimer)clearTimeout(this.wsLateTimer);this.wsLateTimer=setTimeout(function(){self.load()},5000);setTimeout(function(){if(self._ntid===tid)self.notify=null},6000)},
+showTxToast(m,incoming){var self=this;var sym=(m.token_symbol||'').toLowerCase();var tname=(m.token_name||'').toLowerCase();var isBch=!m.token_symbol||sym==='bch'||tname==='bch'||tname==='bitcoin cash'||m.token==='bch';var amountText;if(isBch){var sats=m.value!=null?Number(m.value):null;var bch=sats!=null&&isFinite(sats)?sats/1e8:null;amountText=bch!=null?bch.toFixed(8).replace(/\.?0+$/,'')+' BCH':'New activity';if(bch!=null&&this.state&&this.state.bchPriceUsd){var usd=bch*this.state.bchPriceUsd;if(usd>0.0001){var usdStr=usd.toFixed(2);if(usdStr.slice(-3)==='.00')usdStr=usdStr.slice(0,-3);amountText+=' ('+usdStr+' USD)'}}}else{amountText=m.amount!=null?(m.amount+' '+m.token_symbol):(m.token_symbol||'Token')+' transfer'}var base=this.state&&this.state.network==='chipnet'?'https://chipnet.bchexplorer.info/tx/':'https://bchexplorer.info/tx/';var id=m.txid||'';var tid=++self._ntid;var n={title:incoming?'Incoming transaction':'Wallet activity',incoming:!!incoming,amountText:amountText,txidShort:id.slice(0,10)+'…'+id.slice(-6),explorer:base+id};this.notify=n;if(this.wsRefreshTimer)clearTimeout(this.wsRefreshTimer);this.wsRefreshTimer=setTimeout(function(){self.load()},1200);if(this.wsLateTimer)clearTimeout(this.wsLateTimer);this.wsLateTimer=setTimeout(function(){self.load()},5000);setTimeout(function(){if(self._ntid===tid)self.notify=null},6000)},
 async onRcvChange(){this.rcvView=null;this.rcvQrSvg='';var params=new URLSearchParams();if(this.rcvType==='token'){params.set('token','1');if(this.rcvCategory)params.set('category',this.rcvCategory)}if(this.rcvAmount)params.set('amount',this.rcvAmount);try{var view=await this.api('GET','/api/wallet/receive?'+params.toString());this.rcvView=view;if(view.address){try{this.rcvQrSvg=QR.toSVG(QR.encode(view.address))}catch(ex){}}if(view&&view.address&&this.wsAddress!==view.address)this.connectWatch(view.address)}catch(e){this.rcvView={address:'Error: '+e.message}}},
 fillMaxSend(){var bal=this.state&&this.state.balance;if(!bal)return;if(this.sendCurrency==='bch'){this.sendAmount=String(bal.spendableBch||'')}else if(this.sendCurrency==='sats'){this.sendAmount=String(bal.spendableSats||0)}else{var bch=parseFloat(bal.spendableBch)||0;var price=this.state.bchPriceUsd||0;this.sendAmount=price?(bch*price).toFixed(2):''}},
 doSend(){this.sendError='';this.sendSuccess='';var address=(this.sendAddress||'').trim();if(!address){this.sendError='Enter a recipient address';return}if(this.sendType==='bch'){var amount=parseFloat(this.sendAmount);var currency=this.sendCurrency;if(!amount||amount<=0){this.sendError='Enter a valid amount';return}this.pendingSend={type:'bch',address:address,amount:amount,currency:currency};this.showSendModal=true}else{var category=(this.sendCategory||'').trim();var tokenAmount=(this.sendTokenAmount||'').trim();if(!category||!/^[a-fA-F0-9]{64}$/.test(category)){this.sendError='Enter a valid 64-char hex category ID';return}if(!tokenAmount){this.sendError='Enter a token amount';return}this.pendingSend={type:'token',category:category,tokenAmount:tokenAmount,address:address};this.showSendModal=true}},
