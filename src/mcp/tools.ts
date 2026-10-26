@@ -31,26 +31,31 @@ import {
 } from '../ai/credits.js'
 import { buyPlan, topUpBalance } from '../ai/purchase.js'
 import {
-  generateImage,
+  fulfillImageOrder,
   getImageHistory,
   getImageOrderStatus,
   isStillProcessing,
   listImageModels,
 } from '../ai/images.js'
 import {
-  generateVideo,
+  fulfillVideoOrder,
   getVideoHistory,
   getVideoOrderStatus,
   isStillProcessing as isVideoStillProcessing,
   listVideoModels,
 } from '../ai/videos.js'
 import {
-  generateAudio,
+  fulfillAudioOrder,
   getAudioHistory,
   getAudioOrderStatus,
   isStillProcessing as isAudioStillProcessing,
   listAudioModels,
 } from '../ai/audio.js'
+import {
+  approveAudioGeneration,
+  approveImageGeneration,
+  approveVideoGeneration,
+} from './media.js'
 import {
   armAutoRefill,
   autoRefillTickOne,
@@ -428,6 +433,43 @@ function fail(err: unknown): ToolResult {
   return { content: [{ type: 'text', text: message }], isError: true }
 }
 
+/**
+ * Turn a blocked media spend into a tool result. A user declining is not a
+ * failure; a host without elicitation is (no spend can be approved there).
+ */
+function spendNotApproved(
+  outcome:
+    | { status: 'declined'; reason: string }
+    | { status: 'unavailable'; reason: string; cliCommand: string },
+  kind: string
+): ToolResult {
+  if (outcome.status === 'declined') {
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `No ${kind} was generated — ${outcome.reason} Do not retry unless the user asks again.`,
+        },
+      ],
+      structuredContent: { canceled: true },
+    }
+  }
+  return {
+    content: [
+      {
+        type: 'text' as const,
+        text: [
+          `No ${kind} was generated: ${outcome.reason}`,
+          'Nothing was charged.',
+          `To approve and pay from a terminal instead, run: ${outcome.cliCommand}`,
+        ].join('\n'),
+      },
+    ],
+    isError: true,
+    structuredContent: { canceled: true, approvalRequired: true },
+  }
+}
+
 async function resolvePurchaseHint(
   modelQuery: string | undefined,
   backend: string | undefined
@@ -487,11 +529,23 @@ Media downloads:
   Content is cached server-side for a limited time, so download it promptly;
   call get_*_status again if it was already delivered or expired.
 
+Approval for media generation:
+  generate_image, generate_video, and generate_audio spend real funds. The
+  server quotes the order first (no funds move) and then asks the user, through
+  MCP elicitation, to approve that exact cost. The form shows the prompt, model,
+  quoted price, and network, and lets the user pick the recommended model or a
+  cheaper alternative plus optional parameters (aspect ratio, resolution,
+  duration, voice, speed, ...). Nothing is charged unless the user accepts;
+  declining or cancelling returns canceled=true and spends nothing. A host
+  without elicitation support is refused with the equivalent CLI command to run
+  in a terminal instead. Do not ask the user for a separate confirmation before
+  calling these tools — the approval prompt is the confirmation.
+
 Notes:
   - All tools accept an optional "chipnet" flag (default mainnet).
-  - send, buy_plan, topup, generate_image, generate_video, and generate_audio
-    spend real funds from the active wallet; the MCP host is responsible for
-    asking the user for approval before invoking them.
+  - send, buy_plan, and topup spend real funds from the active wallet; the MCP
+    host is responsible for asking the user for approval before invoking them.
+    Media generation tools enforce approval in the server instead.
   - get_credits reports a pay-as-you-go "balance_usd" alongside plan sessions.
     When the balance covers usage, no purchaseHint is returned: the model is
     already usable, so just continue the task.
@@ -1342,7 +1396,7 @@ export function registerTools(
     {
       title: 'Generate an image',
       description:
-        'Generate an image from a text prompt with a Paytaca AI image model. Optionally pass input_references (image URLs) to edit, remix, or compose from existing images. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). Returns metadata only (no image bytes); download the image from the command line with `paytaca ai image status <order_id>`. The MCP host must obtain user approval before calling this.',
+        'Generate an image from a text prompt with a Paytaca AI image model. Optionally pass input_references (image URLs) to edit, remix, or compose from existing images. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). The server enforces approval: it quotes the order, then asks the user to approve the exact cost and pick the model (recommended or cheaper) and optional parameters. Nothing is charged unless the user accepts; declining returns canceled=true. Hosts without elicitation support are refused. Returns metadata only (no image bytes); download the image from the command line with `paytaca ai image status <order_id>`.',
       inputSchema: {
         prompt: z.string().min(1),
         model: z.string().optional(),
@@ -1367,13 +1421,21 @@ export function registerTools(
     },
     async ({ prompt, model, aspect_ratio, quality, resolution, input_references, chipnet, backend }) => {
       try {
-        const result = await generateImage({
+        const approval = await approveImageGeneration(server, {
           prompt,
           model,
-          aspectRatio: aspect_ratio,
+          aspect_ratio,
           quality,
           resolution,
-          inputReferences: input_references,
+          input_references,
+          isChipnet: cn(chipnet),
+          backendUrl: backend,
+        })
+        if (approval.status !== 'approved') {
+          return spendNotApproved(approval, 'image')
+        }
+
+        const result = await fulfillImageOrder(approval.quote, {
           isChipnet: cn(chipnet),
           backendUrl: backend,
           deferDownload: true,
@@ -1563,7 +1625,7 @@ export function registerTools(
     {
       title: 'Generate a video',
       description:
-        'Generate a video from a text prompt with a Paytaca AI video model. Optionally pass input_references (reference/keyframe images) to guide the result. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). Returns metadata only (no video bytes); download the video from the command line with `paytaca ai video status <order_id>`. The MCP host must obtain user approval before calling this.',
+        'Generate a video from a text prompt with a Paytaca AI video model. Optionally pass input_references (reference/keyframe images) to guide the result. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). The server enforces approval: it quotes the order, then asks the user to approve the exact cost and pick the model (recommended or cheaper) and optional parameters. Nothing is charged unless the user accepts; declining returns canceled=true. Hosts without elicitation support are refused. Returns metadata only (no video bytes); download the video from the command line with `paytaca ai video status <order_id>`.',
       inputSchema: {
         prompt: z.string().min(1),
         model: z.string().optional(),
@@ -1607,16 +1669,24 @@ export function registerTools(
       backend,
     }) => {
       try {
-        const result = await generateVideo({
+        const approval = await approveVideoGeneration(server, {
           prompt,
           model,
           duration,
           resolution,
-          aspectRatio: aspect_ratio,
-          generateAudio: generate_audio,
-          inputReferences: input_references?.map((ref) =>
+          aspect_ratio,
+          generate_audio,
+          input_references: input_references?.map((ref) =>
             typeof ref === 'string' ? { url: ref } : ref
           ),
+          isChipnet: cn(chipnet),
+          backendUrl: backend,
+        })
+        if (approval.status !== 'approved') {
+          return spendNotApproved(approval, 'video')
+        }
+
+        const result = await fulfillVideoOrder(approval.quote, {
           isChipnet: cn(chipnet),
           backendUrl: backend,
           deferDownload: true,
@@ -1806,7 +1876,7 @@ export function registerTools(
     {
       title: 'Generate speech from text',
       description:
-        'Generate speech from a text prompt with a Paytaca AI audio (text-to-speech) model. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). Returns metadata only (no audio bytes); download the audio from the command line with `paytaca ai audio status <order_id>`. The MCP host must obtain user approval before calling this.',
+        'Generate speech from a text prompt with a Paytaca AI audio (text-to-speech) model. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). The server enforces approval: it quotes the order, then asks the user to approve the exact cost and pick the model (recommended or cheaper) and optional parameters. Nothing is charged unless the user accepts; declining returns canceled=true. Hosts without elicitation support are refused. Returns metadata only (no audio bytes); download the audio from the command line with `paytaca ai audio status <order_id>`.',
       inputSchema: {
         prompt: z.string().min(1),
         model: z.string().optional(),
@@ -1825,12 +1895,20 @@ export function registerTools(
     },
     async ({ prompt, model, voice, response_format, speed, chipnet, backend }) => {
       try {
-        const result = await generateAudio({
+        const approval = await approveAudioGeneration(server, {
           prompt,
           model,
           voice,
-          responseFormat: response_format,
+          response_format,
           speed,
+          isChipnet: cn(chipnet),
+          backendUrl: backend,
+        })
+        if (approval.status !== 'approved') {
+          return spendNotApproved(approval, 'audio')
+        }
+
+        const result = await fulfillAudioOrder(approval.quote, {
           isChipnet: cn(chipnet),
           backendUrl: backend,
           deferDownload: true,
