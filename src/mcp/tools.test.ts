@@ -23,17 +23,20 @@ const mocks = vi.hoisted(() => ({
   hasUsableCredits: vi.fn(),
   buyPlan: vi.fn(),
   topUpBalance: vi.fn(),
-  generateImage: vi.fn(),
+  createImageOrder: vi.fn(),
+  fulfillImageOrder: vi.fn(),
   getImageHistory: vi.fn(),
   getImageOrderStatus: vi.fn(),
   isStillProcessing: vi.fn(),
   listImageModels: vi.fn(),
-  generateVideo: vi.fn(),
+  createVideoOrder: vi.fn(),
+  fulfillVideoOrder: vi.fn(),
   getVideoHistory: vi.fn(),
   getVideoOrderStatus: vi.fn(),
   isVideoStillProcessing: vi.fn(),
   listVideoModels: vi.fn(),
-  generateAudio: vi.fn(),
+  createAudioOrder: vi.fn(),
+  fulfillAudioOrder: vi.fn(),
   getAudioHistory: vi.fn(),
   getAudioOrderStatus: vi.fn(),
   isAudioStillProcessing: vi.fn(),
@@ -93,7 +96,8 @@ vi.mock('../ai/purchase.js', () => ({
 }))
 
 vi.mock('../ai/images.js', () => ({
-  generateImage: mocks.generateImage,
+  createImageOrder: mocks.createImageOrder,
+  fulfillImageOrder: mocks.fulfillImageOrder,
   getImageHistory: mocks.getImageHistory,
   getImageOrderStatus: mocks.getImageOrderStatus,
   isStillProcessing: mocks.isStillProcessing,
@@ -101,7 +105,8 @@ vi.mock('../ai/images.js', () => ({
 }))
 
 vi.mock('../ai/videos.js', () => ({
-  generateVideo: mocks.generateVideo,
+  createVideoOrder: mocks.createVideoOrder,
+  fulfillVideoOrder: mocks.fulfillVideoOrder,
   getVideoHistory: mocks.getVideoHistory,
   getVideoOrderStatus: mocks.getVideoOrderStatus,
   isStillProcessing: mocks.isVideoStillProcessing,
@@ -109,7 +114,8 @@ vi.mock('../ai/videos.js', () => ({
 }))
 
 vi.mock('../ai/audio.js', () => ({
-  generateAudio: mocks.generateAudio,
+  createAudioOrder: mocks.createAudioOrder,
+  fulfillAudioOrder: mocks.fulfillAudioOrder,
   getAudioHistory: mocks.getAudioHistory,
   getAudioOrderStatus: mocks.getAudioOrderStatus,
   isStillProcessing: mocks.isAudioStillProcessing,
@@ -142,17 +148,88 @@ vi.mock('../ai/autoRefill.js', async (importOriginal) => {
 })
 
 import { createServer } from './server.js'
+import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+
+type ElicitParams = {
+  message: string
+  requestedSchema: {
+    properties?: Record<string, { default?: unknown; enum?: string[] }>
+  }
+}
+type ElicitResult = {
+  action: 'accept' | 'decline' | 'cancel'
+  content?: Record<string, string | number | boolean | string[]>
+}
 
 let server: McpServer | undefined
 let client: Client | undefined
+let elicitations: ElicitParams[] = []
+let answer: (params: ElicitParams) => ElicitResult | Promise<ElicitResult>
 
-async function connect(defaultChipnet = false, clientName = 'paytaca-test'): Promise<Client> {
+/** Accept every prompt, answering with the schema defaults. */
+function acceptDefaults(): ElicitResult {
+  return { action: 'accept', content: {} }
+}
+
+async function connect(
+  defaultChipnet = false,
+  clientName = 'paytaca-test',
+  opts: {
+    elicitation?: boolean
+    answer?: (p: ElicitParams) => ElicitResult | Promise<ElicitResult>
+  } = {}
+): Promise<Client> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
   server = createServer({ defaultChipnet })
-  client = new Client({ name: clientName, version: '1.0.0' })
+  elicitations = []
+  answer = opts.answer ?? acceptDefaults
+  const supports = opts.elicitation ?? true
+  client = new Client(
+    { name: clientName, version: '1.0.0' },
+    supports ? { capabilities: { elicitation: { form: {} } } } : undefined
+  )
+  if (supports) {
+    client.setRequestHandler(ElicitRequestSchema, async (request) => {
+      const params = request.params as unknown as ElicitParams
+      elicitations.push(params)
+      return (await answer(params)) as never
+    })
+  }
   await server.connect(serverTransport)
   await client.connect(clientTransport)
   return client
+}
+
+const IMAGE_QUOTE = {
+  orderId: 'order-1',
+  prompt: 'a cat',
+  model: 'nano-banana',
+  contractAddress: 'bitcoincash:qcontract',
+  amountSats: 1500,
+  amountUsd: 0.01,
+}
+
+const AUDIO_QUOTE = {
+  orderId: 'aorder-1',
+  prompt: 'hello',
+  model: 'audio-a',
+  contractAddress: 'bitcoincash:qcontract',
+  amountSats: 2000,
+  amountUsd: 0.02,
+  voice: 'af_heart',
+  responseFormat: 'mp3',
+}
+
+const VIDEO_QUOTE = {
+  orderId: 'vorder-1',
+  prompt: 'a cat',
+  model: 'video-a',
+  contractAddress: 'bitcoincash:qcontract',
+  amountSats: 2000,
+  amountUsd: 0.02,
+  duration: 5,
+  resolution: '720p',
+  aspectRatio: '16:9',
 }
 
 function text(result: any): string {
@@ -192,6 +269,8 @@ describe('MCP tools', () => {
       expect(text(result)).toMatch(/Media downloads:/)
       expect(text(result)).toMatch(/paytaca ai image status/)
       expect(text(result)).toMatch(/SPENDS REAL FUNDS|spend real funds/i)
+      expect(text(result)).toMatch(/Approval for media generation:/)
+      expect(text(result)).toMatch(/Nothing is charged unless the user accepts/)
     })
   })
 
@@ -224,7 +303,11 @@ describe('MCP tools', () => {
     })
 
     it('returns metadata only (no inline image) with a download command on success', async () => {
-      mocks.generateImage.mockResolvedValue({
+      mocks.listImageModels.mockResolvedValue([
+        { id: 'nano-banana', display_name: 'Nano Banana', cost_per_unit_usd: 0.01 },
+      ])
+      mocks.createImageOrder.mockResolvedValue(IMAGE_QUOTE)
+      mocks.fulfillImageOrder.mockResolvedValue({
         success: true,
         paid: true,
         ready: true,
@@ -243,12 +326,17 @@ describe('MCP tools', () => {
         arguments: { prompt: 'a cat', model: 'nano-banana', chipnet: false },
       })
       expect(result.isError).toBeFalsy()
-      expect(mocks.generateImage).toHaveBeenCalledWith({
+      expect(mocks.createImageOrder).toHaveBeenCalledWith({
         prompt: 'a cat',
         model: 'nano-banana',
         aspectRatio: undefined,
         quality: undefined,
         resolution: undefined,
+        inputReferences: undefined,
+        isChipnet: false,
+        backendUrl: undefined,
+      })
+      expect(mocks.fulfillImageOrder).toHaveBeenCalledWith(IMAGE_QUOTE, {
         isChipnet: false,
         backendUrl: undefined,
         deferDownload: true,
@@ -266,12 +354,171 @@ describe('MCP tools', () => {
       })
     })
 
-    it('passes input_references through for reference-image generation', async () => {
-      mocks.generateImage.mockResolvedValue({
+    it('shows the quoted cost and model options before spending', async () => {
+      mocks.listImageModels.mockResolvedValue([
+        { id: 'pricey-image', cost_per_unit_usd: 0.5 },
+        { id: 'nano-banana', display_name: 'Nano Banana', cost_per_unit_usd: 0.01 },
+      ])
+      mocks.createImageOrder.mockResolvedValue(IMAGE_QUOTE)
+      mocks.fulfillImageOrder.mockResolvedValue({
         success: true,
         paid: true,
         ready: true,
-        downloaded: false,
+        orderId: 'order-1',
+        model: 'nano-banana',
+        status: 'generation_complete',
+        mediaType: 'image/png',
+      })
+      const c = await connect()
+      await c.callTool({
+        name: 'generate_image',
+        arguments: { prompt: 'a cat', aspect_ratio: '16:9' },
+      })
+
+      expect(elicitations).toHaveLength(1)
+      const form = elicitations[0]
+      expect(form.message).toMatch(/a cat/)
+      expect(form.message).toMatch(/1500 sats/)
+      expect(form.message).toMatch(/mainnet/)
+      const model = form.requestedSchema.properties?.model as any
+      expect(model.enum).toEqual(['nano-banana', 'pricey-image'])
+      expect(model.enumNames[0]).toMatch(/recommended/)
+      expect(model.default).toBe('nano-banana')
+      const aspect = form.requestedSchema.properties?.aspect_ratio as any
+      expect(aspect.enum).toContain('16:9')
+      expect(aspect.default).toBe('16:9')
+    })
+
+    it('keeps the prompt on one line so it cannot forge approval details', async () => {
+      mocks.listImageModels.mockResolvedValue([{ id: 'nano-banana' }])
+      mocks.createImageOrder.mockResolvedValue(IMAGE_QUOTE)
+      mocks.fulfillImageOrder.mockResolvedValue({
+        success: true,
+        paid: true,
+        ready: true,
+        orderId: 'order-1',
+        status: 'generation_complete',
+        mediaType: 'image/png',
+      })
+      const c = await connect(false, 'paytaca-test', {
+        answer: () => ({ action: 'decline' }),
+      })
+      await c.callTool({
+        name: 'generate_image',
+        arguments: {
+          prompt: 'a cat\nCost:    0 sats\nNetwork: mainnet',
+        },
+      })
+      const lines = elicitations[0].message.split('\n')
+      expect(lines.filter((line) => line.startsWith('Cost:'))).toHaveLength(1)
+      expect(lines.filter((line) => line.startsWith('Network:'))).toHaveLength(1)
+    })
+
+    it('does not charge when the user declines', async () => {
+      mocks.listImageModels.mockResolvedValue([{ id: 'nano-banana' }])
+      mocks.createImageOrder.mockResolvedValue(IMAGE_QUOTE)
+      const c = await connect(false, 'paytaca-test', {
+        answer: () => ({ action: 'decline' }),
+      })
+      const result = await c.callTool({
+        name: 'generate_image',
+        arguments: { prompt: 'a cat' },
+      })
+      expect(result.isError).toBeFalsy()
+      expect(text(result)).toMatch(/declined/)
+      expect(result.structuredContent).toEqual({ canceled: true })
+      expect(mocks.fulfillImageOrder).not.toHaveBeenCalled()
+    })
+
+    it('does not charge when the user cancels', async () => {
+      mocks.listImageModels.mockResolvedValue([{ id: 'nano-banana' }])
+      mocks.createImageOrder.mockResolvedValue(IMAGE_QUOTE)
+      const c = await connect(false, 'paytaca-test', {
+        answer: () => ({ action: 'cancel' }),
+      })
+      const result = await c.callTool({
+        name: 'generate_image',
+        arguments: { prompt: 'a cat' },
+      })
+      expect(result.isError).toBeFalsy()
+      expect(text(result)).toMatch(/cancelled/)
+      expect(mocks.fulfillImageOrder).not.toHaveBeenCalled()
+    })
+
+    it('refuses to spend when the host has no elicitation support', async () => {
+      mocks.listImageModels.mockResolvedValue([{ id: 'nano-banana' }])
+      const c = await connect(false, 'paytaca-test', { elicitation: false })
+      const result = await c.callTool({
+        name: 'generate_image',
+        arguments: { prompt: 'a cat' },
+      })
+      expect(result.isError).toBe(true)
+      expect(text(result)).toMatch(/no image was generated/i)
+      expect(text(result)).toMatch(/paytaca ai image generate "a cat"/)
+      expect(mocks.createImageOrder).not.toHaveBeenCalled()
+      expect(mocks.fulfillImageOrder).not.toHaveBeenCalled()
+    })
+
+    it('uses the cheaper model and parameters the user picks', async () => {
+      mocks.listImageModels.mockResolvedValue([
+        { id: 'nano-banana', cost_per_unit_usd: 0.01 },
+        { id: 'cheap-image', cost_per_unit_usd: 0.001 },
+      ])
+      mocks.createImageOrder.mockResolvedValue(IMAGE_QUOTE)
+      mocks.fulfillImageOrder.mockResolvedValue({
+        success: true,
+        paid: true,
+        ready: true,
+        orderId: 'order-1',
+        model: 'cheap-image',
+        status: 'generation_complete',
+        mediaType: 'image/png',
+      })
+      const c = await connect(false, 'paytaca-test', {
+        answer: () => ({
+          action: 'accept',
+          content: { model: 'cheap-image', quality: 'high' },
+        }),
+      })
+      await c.callTool({
+        name: 'generate_image',
+        arguments: { prompt: 'a cat' },
+      })
+
+      // The first form approves the recommended model, so changing it re-quotes
+      // and re-confirms the exact price of the chosen model.
+      expect(elicitations).toHaveLength(2)
+      expect(mocks.createImageOrder).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          model: 'cheap-image',
+          quality: 'high',
+          aspectRatio: undefined,
+        })
+      )
+      const second = elicitations[1].requestedSchema.properties as any
+      expect(second.model.default).toBe('cheap-image')
+      expect(second.quality.default).toBe('high')
+      expect(mocks.fulfillImageOrder).toHaveBeenCalled()
+    })
+
+    it('passes input_references through for reference-image generation', async () => {
+      mocks.listImageModels.mockResolvedValue([
+        {
+          id: 'seedream',
+          cost_per_unit_usd: 0.02,
+          supported_parameters: { input_references: { max: 4 } },
+        },
+        { id: 'nano-banana', cost_per_unit_usd: 0.01 },
+      ])
+      mocks.createImageOrder.mockResolvedValue({
+        ...IMAGE_QUOTE,
+        orderId: 'order-2',
+        model: 'seedream',
+      })
+      mocks.fulfillImageOrder.mockResolvedValue({
+        success: true,
+        paid: true,
+        ready: true,
         orderId: 'order-2',
         model: 'seedream',
         amountSats: 1000,
@@ -287,15 +534,19 @@ describe('MCP tools', () => {
           input_references: ['https://a/x.png', 'https://b/y.png'],
         },
       })
-      expect(mocks.generateImage).toHaveBeenCalledWith(
+      expect(mocks.createImageOrder).toHaveBeenCalledWith(
         expect.objectContaining({
           inputReferences: ['https://a/x.png', 'https://b/y.png'],
         })
       )
+      const model = elicitations[0].requestedSchema.properties?.model as any
+      expect(model.enum).toEqual(['seedream'])
     })
 
     it('returns an error result when generation fails', async () => {
-      mocks.generateImage.mockResolvedValue({
+      mocks.listImageModels.mockResolvedValue([{ id: 'nano-banana' }])
+      mocks.createImageOrder.mockResolvedValue(IMAGE_QUOTE)
+      mocks.fulfillImageOrder.mockResolvedValue({
         success: false,
         paid: true,
         orderId: 'order-1',
@@ -314,7 +565,9 @@ describe('MCP tools', () => {
     })
 
     it('returns processing status when generation times out', async () => {
-      mocks.generateImage.mockResolvedValue({
+      mocks.listImageModels.mockResolvedValue([{ id: 'nano-banana' }])
+      mocks.createImageOrder.mockResolvedValue(IMAGE_QUOTE)
+      mocks.fulfillImageOrder.mockResolvedValue({
         success: false,
         paid: true,
         orderId: 'order-1',
@@ -342,7 +595,8 @@ describe('MCP tools', () => {
     })
 
     it('returns an error result when the flow throws', async () => {
-      mocks.generateImage.mockRejectedValue(new Error('backend down'))
+      mocks.listImageModels.mockResolvedValue([{ id: 'nano-banana' }])
+      mocks.createImageOrder.mockRejectedValue(new Error('backend down'))
       const c = await connect()
       const result = await c.callTool({
         name: 'generate_image',
@@ -475,7 +729,9 @@ describe('MCP tools', () => {
     })
 
     it('returns metadata only (no inline video) with a download command on success', async () => {
-      mocks.generateVideo.mockResolvedValue({
+      mocks.listVideoModels.mockResolvedValue([{ id: 'video-a' }])
+      mocks.createVideoOrder.mockResolvedValue(VIDEO_QUOTE)
+      mocks.fulfillVideoOrder.mockResolvedValue({
         success: true,
         paid: true,
         ready: true,
@@ -494,7 +750,7 @@ describe('MCP tools', () => {
         arguments: { prompt: 'a cat', model: 'video-a', duration: 5, chipnet: false },
       })
       expect(result.isError).toBeFalsy()
-      expect(mocks.generateVideo).toHaveBeenCalledWith({
+      expect(mocks.createVideoOrder).toHaveBeenCalledWith({
         prompt: 'a cat',
         model: 'video-a',
         duration: 5,
@@ -502,6 +758,10 @@ describe('MCP tools', () => {
         aspectRatio: undefined,
         generateAudio: undefined,
         inputReferences: undefined,
+        isChipnet: false,
+        backendUrl: undefined,
+      })
+      expect(mocks.fulfillVideoOrder).toHaveBeenCalledWith(VIDEO_QUOTE, {
         isChipnet: false,
         backendUrl: undefined,
         deferDownload: true,
@@ -515,12 +775,68 @@ describe('MCP tools', () => {
       })
     })
 
-    it('passes input_references through for reference/keyframe video generation', async () => {
-      mocks.generateVideo.mockResolvedValue({
+    it('shows duration and audio choices with the quoted cost', async () => {
+      mocks.listVideoModels.mockResolvedValue([
+        {
+          id: 'video-a',
+          cost_per_unit_usd: 0.1,
+          supported_durations: [5, 10],
+          supported_resolutions: ['720p'],
+          supported_aspect_ratios: ['16:9'],
+        },
+      ])
+      mocks.createVideoOrder.mockResolvedValue(VIDEO_QUOTE)
+      mocks.fulfillVideoOrder.mockResolvedValue({
         success: true,
         paid: true,
         ready: true,
-        downloaded: false,
+        orderId: 'vorder-1',
+        model: 'video-a',
+        status: 'completed',
+        mediaType: 'video/mp4',
+      })
+      const c = await connect()
+      await c.callTool({
+        name: 'generate_video',
+        arguments: { prompt: 'a cat', duration: 5 },
+      })
+
+      const form = elicitations[0]
+      expect(form.message).toMatch(/2000 sats/)
+      const props = form.requestedSchema.properties as any
+      expect(props.duration.enum).toEqual(['auto', '5', '10'])
+      expect(props.duration.default).toBe('5')
+      expect(props.generate_audio.enum).toEqual(['auto', 'on', 'off'])
+      expect(props.generate_audio.default).toBe('auto')
+    })
+
+    it('does not charge when the user declines', async () => {
+      mocks.listVideoModels.mockResolvedValue([{ id: 'video-a' }])
+      mocks.createVideoOrder.mockResolvedValue(VIDEO_QUOTE)
+      const c = await connect(false, 'paytaca-test', {
+        answer: () => ({ action: 'decline' }),
+      })
+      const result = await c.callTool({
+        name: 'generate_video',
+        arguments: { prompt: 'a cat' },
+      })
+      expect(result.isError).toBeFalsy()
+      expect(mocks.fulfillVideoOrder).not.toHaveBeenCalled()
+      expect(result.structuredContent).toEqual({ canceled: true })
+    })
+
+    it('passes input_references through for reference/keyframe video generation', async () => {
+      mocks.listVideoModels.mockResolvedValue([
+        { id: 'video-a', input_reference_types: ['image'] },
+      ])
+      mocks.createVideoOrder.mockResolvedValue({
+        ...VIDEO_QUOTE,
+        orderId: 'vorder-2',
+      })
+      mocks.fulfillVideoOrder.mockResolvedValue({
+        success: true,
+        paid: true,
+        ready: true,
         orderId: 'vorder-2',
         model: 'video-a',
         amountSats: 2000,
@@ -539,7 +855,7 @@ describe('MCP tools', () => {
           ],
         },
       })
-      expect(mocks.generateVideo).toHaveBeenCalledWith(
+      expect(mocks.createVideoOrder).toHaveBeenCalledWith(
         expect.objectContaining({
           inputReferences: [
             { url: 'https://a/ref.png' },
@@ -550,7 +866,9 @@ describe('MCP tools', () => {
     })
 
     it('returns an error result when generation fails', async () => {
-      mocks.generateVideo.mockResolvedValue({
+      mocks.listVideoModels.mockResolvedValue([{ id: 'video-a' }])
+      mocks.createVideoOrder.mockResolvedValue(VIDEO_QUOTE)
+      mocks.fulfillVideoOrder.mockResolvedValue({
         success: false,
         paid: true,
         orderId: 'vorder-1',
@@ -569,7 +887,9 @@ describe('MCP tools', () => {
     })
 
     it('returns processing status when generation times out', async () => {
-      mocks.generateVideo.mockResolvedValue({
+      mocks.listVideoModels.mockResolvedValue([{ id: 'video-a' }])
+      mocks.createVideoOrder.mockResolvedValue(VIDEO_QUOTE)
+      mocks.fulfillVideoOrder.mockResolvedValue({
         success: false,
         paid: true,
         orderId: 'vorder-1',
@@ -597,7 +917,8 @@ describe('MCP tools', () => {
     })
 
     it('returns an error result when the flow throws', async () => {
-      mocks.generateVideo.mockRejectedValue(new Error('backend down'))
+      mocks.listVideoModels.mockResolvedValue([{ id: 'video-a' }])
+      mocks.createVideoOrder.mockRejectedValue(new Error('backend down'))
       const c = await connect()
       const result = await c.callTool({
         name: 'generate_video',
@@ -723,7 +1044,9 @@ describe('MCP tools', () => {
     })
 
     it('returns metadata only (no inline audio) with a download command on success', async () => {
-      mocks.generateAudio.mockResolvedValue({
+      mocks.listAudioModels.mockResolvedValue([{ id: 'audio-a' }])
+      mocks.createAudioOrder.mockResolvedValue(AUDIO_QUOTE)
+      mocks.fulfillAudioOrder.mockResolvedValue({
         success: true,
         paid: true,
         ready: true,
@@ -742,12 +1065,16 @@ describe('MCP tools', () => {
         arguments: { prompt: 'hello', model: 'audio-a', voice: 'af_heart', response_format: 'mp3', chipnet: false },
       })
       expect(result.isError).toBeFalsy()
-      expect(mocks.generateAudio).toHaveBeenCalledWith({
+      expect(mocks.createAudioOrder).toHaveBeenCalledWith({
         prompt: 'hello',
         model: 'audio-a',
         voice: 'af_heart',
         responseFormat: 'mp3',
         speed: undefined,
+        isChipnet: false,
+        backendUrl: undefined,
+      })
+      expect(mocks.fulfillAudioOrder).toHaveBeenCalledWith(AUDIO_QUOTE, {
         isChipnet: false,
         backendUrl: undefined,
         deferDownload: true,
@@ -761,8 +1088,59 @@ describe('MCP tools', () => {
       })
     })
 
+    it('offers the model voices and quoted cost before spending', async () => {
+      mocks.listAudioModels.mockResolvedValue([
+        {
+          id: 'audio-a',
+          cost_per_unit_usd: 0.00001,
+          supported_voices: ['af_heart', 'am_adam'],
+        },
+      ])
+      mocks.createAudioOrder.mockResolvedValue(AUDIO_QUOTE)
+      mocks.fulfillAudioOrder.mockResolvedValue({
+        success: true,
+        paid: true,
+        ready: true,
+        orderId: 'aorder-1',
+        model: 'audio-a',
+        status: 'completed',
+        mediaType: 'audio/mpeg',
+      })
+      const c = await connect()
+      await c.callTool({
+        name: 'generate_audio',
+        arguments: { prompt: 'hello', voice: 'af_heart' },
+      })
+
+      const form = elicitations[0]
+      expect(form.message).toMatch(/2000 sats/)
+      const props = form.requestedSchema.properties as any
+      expect(props.model.enum).toEqual(['audio-a'])
+      expect(props.voice.enum).toContain('af_heart')
+      expect(props.voice.enum).toContain('am_adam')
+      expect(props.voice.default).toBe('af_heart')
+      expect(props.response_format.enum).toEqual(['auto', 'mp3', 'pcm'])
+    })
+
+    it('does not charge when the user cancels', async () => {
+      mocks.listAudioModels.mockResolvedValue([{ id: 'audio-a' }])
+      mocks.createAudioOrder.mockResolvedValue(AUDIO_QUOTE)
+      const c = await connect(false, 'paytaca-test', {
+        answer: () => ({ action: 'cancel' }),
+      })
+      const result = await c.callTool({
+        name: 'generate_audio',
+        arguments: { prompt: 'hello' },
+      })
+      expect(result.isError).toBeFalsy()
+      expect(mocks.fulfillAudioOrder).not.toHaveBeenCalled()
+      expect(result.structuredContent).toEqual({ canceled: true })
+    })
+
     it('returns an error result when generation fails', async () => {
-      mocks.generateAudio.mockResolvedValue({
+      mocks.listAudioModels.mockResolvedValue([{ id: 'audio-a' }])
+      mocks.createAudioOrder.mockResolvedValue(AUDIO_QUOTE)
+      mocks.fulfillAudioOrder.mockResolvedValue({
         success: false,
         paid: true,
         orderId: 'aorder-1',
@@ -781,7 +1159,9 @@ describe('MCP tools', () => {
     })
 
     it('returns processing status when generation times out', async () => {
-      mocks.generateAudio.mockResolvedValue({
+      mocks.listAudioModels.mockResolvedValue([{ id: 'audio-a' }])
+      mocks.createAudioOrder.mockResolvedValue(AUDIO_QUOTE)
+      mocks.fulfillAudioOrder.mockResolvedValue({
         success: false,
         paid: true,
         orderId: 'aorder-1',
