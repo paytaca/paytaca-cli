@@ -73,6 +73,18 @@ function paramOrUndefined(value: string | undefined): string | undefined {
   return value
 }
 
+/**
+ * Coerce a numeric form value, dropping anything non-finite. The host echoes
+ * form values back, so a hostile or buggy client can send "abc" for a numeric
+ * field; that must not reach the backend as NaN.
+ */
+function numberParam(value: string | undefined): number | undefined {
+  const raw = paramOrUndefined(value)
+  if (raw === undefined) return undefined
+  const num = Number(raw)
+  return Number.isFinite(num) ? num : undefined
+}
+
 /** Keep the caller's value selectable even when the model list omits it. */
 function withValue(options: string[], value: string | undefined): string[] {
   if (!value || value === AUTO || options.includes(value)) return options
@@ -352,11 +364,10 @@ export async function approveVideoGeneration(
       paramFields: (selection) =>
         videoParamFields(args, selection, modelById.get(selection.modelId)),
       createQuote: async (selection) => {
-        const duration = paramOrUndefined(selection.params.duration)
         const quote = await createVideoOrder({
           prompt: args.prompt,
           model: quoteModelId(selection),
-          duration: duration === undefined ? undefined : Number(duration),
+          duration: numberParam(selection.params.duration),
           resolution: paramOrUndefined(selection.params.resolution),
           aspectRatio: paramOrUndefined(selection.params.aspect_ratio),
           generateAudio: booleanParam(selection.params.generate_audio),
@@ -518,13 +529,12 @@ export async function approveAudioGeneration(
       paramFields: (selection) =>
         audioParamFields(args, selection, modelById.get(selection.modelId)),
       createQuote: async (selection) => {
-        const speed = paramOrUndefined(selection.params.speed)
         const quote = await createAudioOrder({
           prompt: args.prompt,
           model: quoteModelId(selection),
           voice: paramOrUndefined(selection.params.voice),
           responseFormat: paramOrUndefined(selection.params.response_format),
-          speed: speed === undefined ? undefined : Number(speed),
+          speed: numberParam(selection.params.speed),
           isChipnet: args.isChipnet,
           backendUrl: args.backendUrl,
         })

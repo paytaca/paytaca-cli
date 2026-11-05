@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { ElicitRequestFormParams } from '@modelcontextprotocol/sdk/types.js'
-import { formatSpendCost, resolveSpendCost } from '../utils/prices.js'
+import { formatSpendCost, createSpendCostResolver } from '../utils/prices.js'
 
 /** One selectable model, with the price hint shown next to it. */
 export interface MediaModelOption {
@@ -159,13 +159,15 @@ export async function confirmMediaSpend<Q>(
   let quoted: { quote: Q; summary: MediaQuoteSummary } | null = null
   let cost = ''
   let fields: MediaParamField[] = []
+  const resolveCost = createSpendCostResolver(request.isChipnet)
 
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
+    // Safe on the first round: `selection` was seeded with the recommended
+    // model's defaults above, so this quotes a fully initialized selection.
     quoted = await request.createQuote(selection)
-    const spend = await resolveSpendCost(
+    const spend = await resolveCost(
       quoted.summary.amountSats,
-      quoted.summary.amountUsd,
-      request.isChipnet
+      quoted.summary.amountUsd
     )
     cost = `${formatSpendCost(spend)} (${quoted.summary.amountSats} sats)`
 
@@ -258,7 +260,7 @@ export async function confirmMediaSpend<Q>(
 
   return {
     status: 'declined',
-    reason: `the request changed more than ${MAX_ROUNDS} times without approval; nothing was charged.`,
+    reason: `the selection was changed on all ${MAX_ROUNDS} approval prompts without an approval; nothing was charged.`,
   }
 }
 

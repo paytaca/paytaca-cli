@@ -825,6 +825,85 @@ describe('MCP tools', () => {
       expect(result.structuredContent).toEqual({ canceled: true })
     })
 
+    it('does not charge when the user cancels', async () => {
+      mocks.listVideoModels.mockResolvedValue([{ id: 'video-a' }])
+      mocks.createVideoOrder.mockResolvedValue(VIDEO_QUOTE)
+      const c = await connect(false, 'paytaca-test', {
+        answer: () => ({ action: 'cancel' }),
+      })
+      const result = await c.callTool({
+        name: 'generate_video',
+        arguments: { prompt: 'a cat' },
+      })
+      expect(result.isError).toBeFalsy()
+      expect(text(result)).toMatch(/cancelled/)
+      expect(mocks.fulfillVideoOrder).not.toHaveBeenCalled()
+    })
+
+    it('re-quotes when the user changes a parameter and accepts', async () => {
+      mocks.listVideoModels.mockResolvedValue([
+        {
+          id: 'video-a',
+          supported_durations: [5, 10],
+          supported_resolutions: ['720p'],
+          supported_aspect_ratios: ['16:9'],
+        },
+      ])
+      mocks.createVideoOrder.mockResolvedValue(VIDEO_QUOTE)
+      mocks.fulfillVideoOrder.mockResolvedValue({
+        success: true,
+        paid: true,
+        ready: true,
+        orderId: 'vorder-1',
+        model: 'video-a',
+        status: 'completed',
+        mediaType: 'video/mp4',
+      })
+      let call = 0
+      const c = await connect(false, 'paytaca-test', {
+        answer: (): ElicitResult => {
+          call += 1
+          if (call === 1) return { action: 'accept', content: { generate_audio: 'on' } }
+          return { action: 'accept', content: {} }
+        },
+      })
+      await c.callTool({
+        name: 'generate_video',
+        arguments: { prompt: 'a cat', duration: 5 },
+      })
+
+      expect(elicitations).toHaveLength(2)
+      expect(mocks.createVideoOrder).toHaveBeenLastCalledWith(
+        expect.objectContaining({ duration: 5, generateAudio: true })
+      )
+      expect(mocks.fulfillVideoOrder).toHaveBeenCalled()
+    })
+
+    it('drops a non-numeric duration before quoting', async () => {
+      mocks.listVideoModels.mockResolvedValue([{ id: 'video-a' }])
+      mocks.createVideoOrder.mockResolvedValue(VIDEO_QUOTE)
+      mocks.fulfillVideoOrder.mockResolvedValue({
+        success: true,
+        paid: true,
+        ready: true,
+        orderId: 'vorder-1',
+        model: 'video-a',
+        status: 'completed',
+        mediaType: 'video/mp4',
+      })
+      const c = await connect(false, 'paytaca-test', {
+        answer: () => ({ action: 'accept', content: { duration: 'not-a-number' } }),
+      })
+      await c.callTool({
+        name: 'generate_video',
+        arguments: { prompt: 'a cat' },
+      })
+
+      expect(mocks.createVideoOrder).toHaveBeenLastCalledWith(
+        expect.objectContaining({ duration: undefined })
+      )
+    })
+
     it('passes input_references through for reference/keyframe video generation', async () => {
       mocks.listVideoModels.mockResolvedValue([
         { id: 'video-a', input_reference_types: ['image'] },
@@ -1122,6 +1201,22 @@ describe('MCP tools', () => {
       expect(props.response_format.enum).toEqual(['auto', 'mp3', 'pcm'])
     })
 
+    it('does not charge when the user declines', async () => {
+      mocks.listAudioModels.mockResolvedValue([{ id: 'audio-a' }])
+      mocks.createAudioOrder.mockResolvedValue(AUDIO_QUOTE)
+      const c = await connect(false, 'paytaca-test', {
+        answer: () => ({ action: 'decline' }),
+      })
+      const result = await c.callTool({
+        name: 'generate_audio',
+        arguments: { prompt: 'hello' },
+      })
+      expect(result.isError).toBeFalsy()
+      expect(text(result)).toMatch(/declined/)
+      expect(mocks.fulfillAudioOrder).not.toHaveBeenCalled()
+      expect(result.structuredContent).toEqual({ canceled: true })
+    })
+
     it('does not charge when the user cancels', async () => {
       mocks.listAudioModels.mockResolvedValue([{ id: 'audio-a' }])
       mocks.createAudioOrder.mockResolvedValue(AUDIO_QUOTE)
@@ -1135,6 +1230,74 @@ describe('MCP tools', () => {
       expect(result.isError).toBeFalsy()
       expect(mocks.fulfillAudioOrder).not.toHaveBeenCalled()
       expect(result.structuredContent).toEqual({ canceled: true })
+    })
+
+    it('re-quotes when the user changes a parameter and accepts', async () => {
+      mocks.listAudioModels.mockResolvedValue([
+        {
+          id: 'audio-a',
+          cost_per_unit_usd: 0.00001,
+          supported_voices: ['af_heart', 'am_adam'],
+        },
+      ])
+      mocks.createAudioOrder.mockResolvedValue(AUDIO_QUOTE)
+      mocks.fulfillAudioOrder.mockResolvedValue({
+        success: true,
+        paid: true,
+        ready: true,
+        orderId: 'aorder-1',
+        model: 'audio-a',
+        status: 'completed',
+        mediaType: 'audio/mpeg',
+      })
+      let call = 0
+      const c = await connect(false, 'paytaca-test', {
+        answer: (): ElicitResult => {
+          call += 1
+          if (call === 1) {
+            return { action: 'accept', content: { voice: 'am_adam', speed: '1.25' } }
+          }
+          return { action: 'accept', content: {} }
+        },
+      })
+      await c.callTool({
+        name: 'generate_audio',
+        arguments: { prompt: 'hello', voice: 'af_heart' },
+      })
+
+      expect(elicitations).toHaveLength(2)
+      expect(mocks.createAudioOrder).toHaveBeenLastCalledWith(
+        expect.objectContaining({ voice: 'am_adam', speed: 1.25 })
+      )
+      const second = elicitations[1].requestedSchema.properties as any
+      expect(second.voice.default).toBe('am_adam')
+      expect(second.speed.default).toBe('1.25')
+      expect(mocks.fulfillAudioOrder).toHaveBeenCalled()
+    })
+
+    it('drops a non-numeric speed before quoting', async () => {
+      mocks.listAudioModels.mockResolvedValue([{ id: 'audio-a' }])
+      mocks.createAudioOrder.mockResolvedValue(AUDIO_QUOTE)
+      mocks.fulfillAudioOrder.mockResolvedValue({
+        success: true,
+        paid: true,
+        ready: true,
+        orderId: 'aorder-1',
+        model: 'audio-a',
+        status: 'completed',
+        mediaType: 'audio/mpeg',
+      })
+      const c = await connect(false, 'paytaca-test', {
+        answer: () => ({ action: 'accept', content: { speed: 'fast' } }),
+      })
+      await c.callTool({
+        name: 'generate_audio',
+        arguments: { prompt: 'hello' },
+      })
+
+      expect(mocks.createAudioOrder).toHaveBeenLastCalledWith(
+        expect.objectContaining({ speed: undefined })
+      )
     })
 
     it('returns an error result when generation fails', async () => {
