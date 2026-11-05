@@ -20,6 +20,12 @@ import {
   loadMnemonic,
 } from '../wallet/index.js'
 import { getBchUsdPrice, formatUsd } from '../utils/prices.js'
+import {
+  NonInteractiveTerminalError,
+  assertInteractiveTerminal,
+} from '../utils/approval.js'
+
+export { NonInteractiveTerminalError, assertInteractiveTerminal }
 
 export function registerWalletCommands(program: Command): void {
   const wallet = program
@@ -225,26 +231,6 @@ export function registerWalletCommands(program: Command): void {
 
       console.log()
     })
-}
-
-export class NonInteractiveTerminalError extends Error {}
-
-/**
- * Refuse to reveal the seed phrase unless the command is attached to a real
- * interactive terminal. This blocks piping, redirection, `echo ... | paytaca`,
- * command substitution, and non-interactive agent execution. Throws (rather
- * than exiting) so callers and tests can handle the refusal.
- */
-export function assertInteractiveTerminal(
-  stdinIsTTY: boolean | undefined,
-  stdoutIsTTY: boolean | undefined
-): void {
-  if (!stdinIsTTY || !stdoutIsTTY) {
-    throw new NonInteractiveTerminalError(
-      'Refusing to export seed phrase: this command must be run directly in an interactive terminal.\n' +
-        'It cannot be piped, redirected, or executed by a non-interactive process.'
-    )
-  }
 }
 
 /**

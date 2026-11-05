@@ -2,6 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 
 const mocks = vi.hoisted(() => ({
   getBalanceView: vi.fn(),
@@ -149,6 +152,7 @@ vi.mock('../ai/autoRefill.js', async (importOriginal) => {
 
 import { createServer } from './server.js'
 import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import { listPendingApprovals, savePendingApproval } from '../ai/pending.js'
 
 type ElicitParams = {
   message: string
@@ -240,10 +244,17 @@ function goodAddress(address: string): boolean {
   return address.startsWith('bitcoincash:') || address.startsWith('bchtest:')
 }
 
-beforeEach(() => {
+let pendingDir: string
+let gateDir: string
+
+beforeEach(async () => {
   vi.clearAllMocks()
   mocks.hasUsableCredits.mockReset()
   mocks.isValidBchAddress.mockImplementation(goodAddress)
+  pendingDir = await mkdtemp(path.join(os.tmpdir(), 'paytaca-pending-'))
+  process.env.PAYTACA_PENDING_DIR = pendingDir
+  gateDir = await mkdtemp(path.join(os.tmpdir(), 'paytaca-omp-'))
+  process.env.OMP_AGENT_DIR = gateDir
 })
 
 afterEach(async () => {
@@ -251,6 +262,10 @@ afterEach(async () => {
   await server?.close()
   client = undefined
   server = undefined
+  delete process.env.PAYTACA_PENDING_DIR
+  delete process.env.OMP_AGENT_DIR
+  await rm(pendingDir, { recursive: true, force: true })
+  await rm(gateDir, { recursive: true, force: true })
 })
 
 describe('MCP tools', () => {
@@ -270,7 +285,8 @@ describe('MCP tools', () => {
       expect(text(result)).toMatch(/paytaca ai image status/)
       expect(text(result)).toMatch(/SPENDS REAL FUNDS|spend real funds/i)
       expect(text(result)).toMatch(/Approval for media generation:/)
-      expect(text(result)).toMatch(/Nothing is charged unless the user accepts/)
+      expect(text(result)).toMatch(/pay_media/)
+      expect(text(result)).toMatch(/nothing is charged unless the user accepts/i)
     })
   })
 
@@ -445,17 +461,60 @@ describe('MCP tools', () => {
       expect(mocks.fulfillImageOrder).not.toHaveBeenCalled()
     })
 
-    it('refuses to spend when the host has no elicitation support', async () => {
+    it('creates a pending approval when the host has no elicitation support', async () => {
       mocks.listImageModels.mockResolvedValue([{ id: 'nano-banana' }])
+      mocks.createImageOrder.mockResolvedValue(IMAGE_QUOTE)
       const c = await connect(false, 'paytaca-test', { elicitation: false })
       const result = await c.callTool({
         name: 'generate_image',
         arguments: { prompt: 'a cat' },
       })
       expect(result.isError).toBe(true)
-      expect(text(result)).toMatch(/no image was generated/i)
-      expect(text(result)).toMatch(/paytaca ai image generate "a cat"/)
-      expect(mocks.createImageOrder).not.toHaveBeenCalled()
+      expect(text(result)).toMatch(/needs the user's own approval/i)
+      expect(text(result)).toMatch(/paytaca approve order-1/)
+      expect(text(result)).toMatch(/nothing was charged/i)
+      expect(mocks.createImageOrder).toHaveBeenCalledTimes(1)
+      expect(mocks.fulfillImageOrder).not.toHaveBeenCalled()
+      expect(result.structuredContent).toMatchObject({
+        pendingApproval: true,
+        approvalRequired: true,
+        humanOnly: true,
+        pendingId: 'order-1',
+      })
+    })
+
+    it('tells the agent it must not run the CLI itself', async () => {
+      mocks.listImageModels.mockResolvedValue([{ id: 'nano-banana' }])
+      mocks.createImageOrder.mockResolvedValue(IMAGE_QUOTE)
+      const c = await connect(false, 'paytaca-test', { elicitation: false })
+      const result = await c.callTool({
+        name: 'generate_image',
+        arguments: { prompt: 'a cat' },
+      })
+      const body = text(result)
+      expect(body).toMatch(/do not run it yourself/i)
+      expect(body).toMatch(/policy violation/i)
+      expect(body).toMatch(/paytaca approve order-1/)
+    })
+
+    it('falls back to a pending approval when elicitation fails anyway', async () => {
+      mocks.listImageModels.mockResolvedValue([{ id: 'nano-banana' }])
+      mocks.createImageOrder.mockResolvedValue(IMAGE_QUOTE)
+      const c = await connect(false, 'paytaca-test', {
+        elicitation: true,
+        answer: () => {
+          throw new Error('MethodNotFound')
+        },
+      })
+      const result = await c.callTool({
+        name: 'generate_image',
+        arguments: { prompt: 'a cat' },
+      })
+      expect(result.structuredContent).toMatchObject({
+        pendingApproval: true,
+        pendingId: 'order-1',
+      })
+      expect(text(result)).toMatch(/paytaca approve order-1/)
       expect(mocks.fulfillImageOrder).not.toHaveBeenCalled()
     })
 
@@ -2172,6 +2231,162 @@ describe('MCP tools', () => {
       const body = JSON.parse(text(result))
       expect(body.resumed).toBe(false)
       expect(body.reason).toMatch(/cannot sign/i)
+    })
+  })
+
+  describe('pay_media (omp in-UI gate)', () => {
+    async function installGate(policy = 'prompt'): Promise<void> {
+      await writeFile(
+        path.join(gateDir, 'config.yml'),
+        `tools:\n  approval:\n    mcp__paytaca_pay_media: ${policy}\n`,
+        'utf8'
+      )
+    }
+
+    async function seedPending() {
+      return savePendingApproval({
+        kind: 'image',
+        args: { prompt: 'a cat', isChipnet: false },
+        selection: { modelId: 'nano-banana', params: {} },
+        quote: { ...IMAGE_QUOTE },
+      })
+    }
+
+    it('tells the agent to call pay_media on a gated omp host', async () => {
+      await installGate()
+      mocks.listImageModels.mockResolvedValue([{ id: 'nano-banana' }])
+      mocks.createImageOrder.mockResolvedValue(IMAGE_QUOTE)
+      const c = await connect(false, 'omp-coding-agent', { elicitation: false })
+      const result = await c.callTool({
+        name: 'generate_image',
+        arguments: { prompt: 'a cat' },
+      })
+      expect(result.isError).toBe(true)
+      expect(text(result)).toMatch(/pay_media/)
+      expect(text(result)).toMatch(/pending_id/)
+      expect(result.structuredContent).toMatchObject({
+        nextTool: 'pay_media',
+        pendingId: 'order-1',
+        humanOnly: false,
+      })
+      expect(mocks.fulfillImageOrder).not.toHaveBeenCalled()
+    })
+
+    const payArgs = {
+      pending_id: 'order-1',
+      model: 'nano-banana',
+      details: 'model defaults',
+      cost: '0.01 USD (1500 sats)',
+      prompt: 'a cat',
+    }
+
+    it('pays the stored quote and removes the pending approval', async () => {
+      await installGate()
+      await seedPending()
+      mocks.fulfillImageOrder.mockResolvedValue({
+        success: true,
+        ready: true,
+        paid: true,
+        orderId: 'order-1',
+        model: 'nano-banana',
+        amountSats: 1500,
+        amountUsd: 0.01,
+        txid: 'tx1',
+        status: 'completed',
+        mediaType: 'image/png',
+      })
+      const c = await connect(false, 'omp-coding-agent', { elicitation: false })
+      const result = await c.callTool({
+        name: 'pay_media',
+        arguments: payArgs,
+      })
+
+      expect(mocks.fulfillImageOrder).toHaveBeenCalledTimes(1)
+      const [quote, options] = mocks.fulfillImageOrder.mock.calls[0]
+      expect(quote).toMatchObject({ orderId: 'order-1', amountSats: 1500, amountUsd: 0.01 })
+      expect(options).toMatchObject({ deferDownload: true, isChipnet: false })
+      expect(text(result)).toMatch(/generated/i)
+      expect(result.structuredContent).toMatchObject({ paid: true, orderId: 'order-1' })
+      expect(await listPendingApprovals()).toHaveLength(0)
+    })
+
+    it('refuses misleading display arguments without charging', async () => {
+      await installGate()
+      await seedPending()
+      const c = await connect(false, 'omp-coding-agent', { elicitation: false })
+      const result = await c.callTool({
+        name: 'pay_media',
+        arguments: { ...payArgs, model: 'cheaper', cost: '$0.00' },
+      })
+      expect(result.isError).toBe(true)
+      expect(text(result)).toMatch(/do not match the stored quote/i)
+      expect(mocks.fulfillImageOrder).not.toHaveBeenCalled()
+      expect(await listPendingApprovals()).toHaveLength(1)
+    })
+
+    it('refuses when the omp policy is not prompt', async () => {
+      await installGate('allow')
+      await seedPending()
+      const c = await connect(false, 'omp-coding-agent', { elicitation: false })
+      const result = await c.callTool({
+        name: 'pay_media',
+        arguments: payArgs,
+      })
+      expect(result.isError).toBe(true)
+      expect(text(result)).toMatch(/paytaca approve order-1/)
+      expect(mocks.fulfillImageOrder).not.toHaveBeenCalled()
+      expect(await listPendingApprovals()).toHaveLength(1)
+    })
+
+    it('refuses for a non-omp host', async () => {
+      await installGate()
+      await seedPending()
+      const c = await connect(false, 'paytaca-test', { elicitation: false })
+      const result = await c.callTool({
+        name: 'pay_media',
+        arguments: payArgs,
+      })
+      expect(result.isError).toBe(true)
+      expect(mocks.fulfillImageOrder).not.toHaveBeenCalled()
+      expect(await listPendingApprovals()).toHaveLength(1)
+    })
+
+    it('keeps the pending approval when nothing was paid', async () => {
+      await installGate()
+      await seedPending()
+      mocks.fulfillImageOrder.mockResolvedValue({
+        success: false,
+        paid: false,
+        orderId: 'order-1',
+        error: 'Insufficient balance',
+      })
+      const c = await connect(false, 'omp-coding-agent', { elicitation: false })
+      const result = await c.callTool({
+        name: 'pay_media',
+        arguments: payArgs,
+      })
+      expect(result.isError).toBe(true)
+      expect(text(result)).toMatch(/Nothing was charged/i)
+      expect(await listPendingApprovals()).toHaveLength(1)
+    })
+
+    it('removes the pending approval when payment moved funds but generation failed', async () => {
+      await installGate()
+      await seedPending()
+      mocks.fulfillImageOrder.mockResolvedValue({
+        success: false,
+        paid: true,
+        orderId: 'order-1',
+        txid: 'tx1',
+        error: 'timed out',
+      })
+      const c = await connect(false, 'omp-coding-agent', { elicitation: false })
+      const result = await c.callTool({
+        name: 'pay_media',
+        arguments: payArgs,
+      })
+      expect(text(result)).toMatch(/Do not call pay_media again/i)
+      expect(await listPendingApprovals()).toHaveLength(0)
     })
   })
 })

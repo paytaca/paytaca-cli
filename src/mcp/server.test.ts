@@ -53,6 +53,7 @@ describe('paytaca MCP server', () => {
         'get_audio_history',
         'get_audio_models',
         'get_audio_status',
+        'pay_media',
         'send',
         'topup',
       ].sort()

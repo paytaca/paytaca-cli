@@ -19,49 +19,30 @@ import {
 } from '../ai/videos.js'
 import { formatCostUsd } from '../utils/prices.js'
 import {
+  savePendingApproval,
+  type AudioGenerationArgs,
+  type ImageGenerationArgs,
+  type PendingKind,
+  type VideoGenerationArgs,
+} from '../ai/pending.js'
+import {
   confirmMediaSpend,
   shellQuote,
   type MediaModelOption,
   type MediaParamField,
   type MediaSelection,
   type MediaSpendOutcome,
+  type MediaSpendRequest,
 } from './approval.js'
+
+export type {
+  AudioGenerationArgs,
+  ImageGenerationArgs,
+  VideoGenerationArgs,
+} from '../ai/pending.js'
 
 /** Sentinel form value meaning "leave this to the model/backend default". */
 const AUTO = 'auto'
-
-export interface ImageGenerationArgs {
-  prompt: string
-  model?: string
-  aspect_ratio?: string
-  quality?: string
-  resolution?: string
-  input_references?: string[]
-  isChipnet: boolean
-  backendUrl?: string
-}
-
-export interface VideoGenerationArgs {
-  prompt: string
-  model?: string
-  duration?: number
-  resolution?: string
-  aspect_ratio?: string
-  generate_audio?: boolean
-  input_references?: { url: string; frame_type?: 'first_frame' | 'last_frame' }[]
-  isChipnet: boolean
-  backendUrl?: string
-}
-
-export interface AudioGenerationArgs {
-  prompt: string
-  model?: string
-  voice?: string
-  response_format?: string
-  speed?: number
-  isChipnet: boolean
-  backendUrl?: string
-}
 
 function option(value: string | undefined | null, fallback: string): string {
   if (value === undefined || value === null) return fallback
@@ -151,10 +132,13 @@ function paramLines(selection: MediaSelection): string[] {
   return shown.length > 0 ? [`Params:  ${shown.join(' · ')}`] : []
 }
 
-export async function approveImageGeneration(
-  server: McpServer,
+/**
+ * Build the spend request for an image. Shared by the MCP approval path and
+ * the terminal `paytaca approve` path so both show identical quotes.
+ */
+export async function buildImageSpendRequest(
   args: ImageGenerationArgs
-): Promise<MediaSpendOutcome<ImageOrderQuote>> {
+): Promise<MediaSpendRequest<ImageOrderQuote>> {
   let models: ImageModel[] = []
   try {
     models = await listImageModels({ backendUrl: args.backendUrl })
@@ -188,6 +172,42 @@ export async function approveImageGeneration(
       : fallbackOptions(args.model, 'price quoted on approval')
   const recommendedModelId = options[0]?.id ?? 'default'
 
+  return {
+    kind: 'image',
+    prompt: args.prompt,
+    isChipnet: args.isChipnet,
+    recommendedModelId,
+    models: options,
+    paramFields: (selection) => imageParamFields(args, selection),
+    createQuote: async (selection) => {
+      const quote = await createImageOrder({
+        prompt: args.prompt,
+        model: quoteModelId(selection),
+        aspectRatio: paramOrUndefined(selection.params.aspect_ratio),
+        quality: paramOrUndefined(selection.params.quality),
+        resolution: paramOrUndefined(selection.params.resolution),
+        inputReferences: args.input_references,
+        isChipnet: args.isChipnet,
+        backendUrl: args.backendUrl,
+      })
+      return {
+        quote,
+        summary: {
+          amountSats: quote.amountSats,
+          amountUsd: quote.amountUsd,
+          lines: [`Order:   ${quote.orderId}`, ...paramLines(selection)],
+        },
+      }
+    },
+    persistPending: (selection, quoted) =>
+      persist('image', args, selection, quoted.quote, quoted.summary),
+  }
+}
+
+export async function approveImageGeneration(
+  server: McpServer,
+  args: ImageGenerationArgs
+): Promise<MediaSpendOutcome<ImageOrderQuote>> {
   const cliCommand = [
     'paytaca ai image generate',
     shellQuote(args.prompt),
@@ -203,41 +223,8 @@ export async function approveImageGeneration(
     .filter(Boolean)
     .join(' ')
 
-  return confirmMediaSpend(
-    server,
-    {
-      kind: 'image',
-      prompt: args.prompt,
-      isChipnet: args.isChipnet,
-      recommendedModelId,
-      models: options,
-      paramFields: (selection) => imageParamFields(args, selection),
-      createQuote: async (selection) => {
-        const quote = await createImageOrder({
-          prompt: args.prompt,
-          model: quoteModelId(selection),
-          aspectRatio: paramOrUndefined(selection.params.aspect_ratio),
-          quality: paramOrUndefined(selection.params.quality),
-          resolution: paramOrUndefined(selection.params.resolution),
-          inputReferences: args.input_references,
-          isChipnet: args.isChipnet,
-          backendUrl: args.backendUrl,
-        })
-        return {
-          quote,
-          summary: {
-            amountSats: quote.amountSats,
-            amountUsd: quote.amountUsd,
-            lines: [
-              `Order:   ${quote.orderId}`,
-              ...paramLines(selection),
-            ],
-          },
-        }
-      },
-    },
-    cliCommand
-  )
+  const request = await buildImageSpendRequest(args)
+  return confirmMediaSpend(server, request, cliCommand)
 }
 
 function imageParamFields(
@@ -285,10 +272,13 @@ function imageParamFields(
   ]
 }
 
-export async function approveVideoGeneration(
-  server: McpServer,
+/**
+ * Build the spend request for a video. Shared by the MCP approval path and the
+ * terminal `paytaca approve` path.
+ */
+export async function buildVideoSpendRequest(
   args: VideoGenerationArgs
-): Promise<MediaSpendOutcome<VideoOrderQuote>> {
+): Promise<MediaSpendRequest<VideoOrderQuote>> {
   let models: VideoModel[] = []
   try {
     models = await listVideoModels({ backendUrl: args.backendUrl })
@@ -331,6 +321,51 @@ export async function approveVideoGeneration(
       : fallbackOptions(args.model, 'price quoted on approval')
   const recommendedModelId = options[0]?.id ?? 'default'
 
+  return {
+    kind: 'video',
+    prompt: args.prompt,
+    isChipnet: args.isChipnet,
+    recommendedModelId,
+    models: options,
+    paramFields: (selection) =>
+      videoParamFields(args, selection, modelById.get(selection.modelId)),
+    createQuote: async (selection) => {
+      const quote = await createVideoOrder({
+        prompt: args.prompt,
+        model: quoteModelId(selection),
+        duration: numberParam(selection.params.duration),
+        resolution: paramOrUndefined(selection.params.resolution),
+        aspectRatio: paramOrUndefined(selection.params.aspect_ratio),
+        generateAudio: booleanParam(selection.params.generate_audio),
+        inputReferences: args.input_references,
+        isChipnet: args.isChipnet,
+        backendUrl: args.backendUrl,
+      })
+      return {
+        quote,
+        summary: {
+          amountSats: quote.amountSats,
+          amountUsd: quote.amountUsd,
+          lines: [
+            `Order:   ${quote.orderId}`,
+            ...(quote.duration !== undefined
+              ? [`Length:  ${quote.duration}s`]
+              : []),
+            ...(quote.resolution ? [`Size:    ${quote.resolution}`] : []),
+            ...paramLines(selection),
+          ],
+        },
+      }
+    },
+    persistPending: (selection, quoted) =>
+      persist('video', args, selection, quoted.quote, quoted.summary),
+  }
+}
+
+export async function approveVideoGeneration(
+  server: McpServer,
+  args: VideoGenerationArgs
+): Promise<MediaSpendOutcome<VideoOrderQuote>> {
   const cliCommand = [
     'paytaca ai video generate',
     shellQuote(args.prompt),
@@ -353,47 +388,8 @@ export async function approveVideoGeneration(
     .filter(Boolean)
     .join(' ')
 
-  return confirmMediaSpend(
-    server,
-    {
-      kind: 'video',
-      prompt: args.prompt,
-      isChipnet: args.isChipnet,
-      recommendedModelId,
-      models: options,
-      paramFields: (selection) =>
-        videoParamFields(args, selection, modelById.get(selection.modelId)),
-      createQuote: async (selection) => {
-        const quote = await createVideoOrder({
-          prompt: args.prompt,
-          model: quoteModelId(selection),
-          duration: numberParam(selection.params.duration),
-          resolution: paramOrUndefined(selection.params.resolution),
-          aspectRatio: paramOrUndefined(selection.params.aspect_ratio),
-          generateAudio: booleanParam(selection.params.generate_audio),
-          inputReferences: args.input_references,
-          isChipnet: args.isChipnet,
-          backendUrl: args.backendUrl,
-        })
-        return {
-          quote,
-          summary: {
-            amountSats: quote.amountSats,
-            amountUsd: quote.amountUsd,
-            lines: [
-              `Order:   ${quote.orderId}`,
-              ...(quote.duration !== undefined
-                ? [`Length:  ${quote.duration}s`]
-                : []),
-              ...(quote.resolution ? [`Size:    ${quote.resolution}`] : []),
-              ...paramLines(selection),
-            ],
-          },
-        }
-      },
-    },
-    cliCommand
-  )
+  const request = await buildVideoSpendRequest(args)
+  return confirmMediaSpend(server, request, cliCommand)
 }
 
 function videoParamFields(
@@ -478,10 +474,13 @@ function booleanParam(value: string | undefined): boolean | undefined {
   return undefined
 }
 
-export async function approveAudioGeneration(
-  server: McpServer,
+/**
+ * Build the spend request for audio. Shared by the MCP approval path and the
+ * terminal `paytaca approve` path.
+ */
+export async function buildAudioSpendRequest(
   args: AudioGenerationArgs
-): Promise<MediaSpendOutcome<AudioOrderQuote>> {
+): Promise<MediaSpendRequest<AudioOrderQuote>> {
   let models: AudioModel[] = []
   try {
     models = await listAudioModels({ backendUrl: args.backendUrl })
@@ -506,6 +505,49 @@ export async function approveAudioGeneration(
       : fallbackOptions(args.model, 'price quoted on approval')
   const recommendedModelId = options[0]?.id ?? 'default'
 
+  return {
+    kind: 'audio',
+    prompt: args.prompt,
+    isChipnet: args.isChipnet,
+    recommendedModelId,
+    models: options,
+    paramFields: (selection) =>
+      audioParamFields(args, selection, modelById.get(selection.modelId)),
+    createQuote: async (selection) => {
+      const quote = await createAudioOrder({
+        prompt: args.prompt,
+        model: quoteModelId(selection),
+        voice: paramOrUndefined(selection.params.voice),
+        responseFormat: paramOrUndefined(selection.params.response_format),
+        speed: numberParam(selection.params.speed),
+        isChipnet: args.isChipnet,
+        backendUrl: args.backendUrl,
+      })
+      return {
+        quote,
+        summary: {
+          amountSats: quote.amountSats,
+          amountUsd: quote.amountUsd,
+          lines: [
+            `Order:   ${quote.orderId}`,
+            ...(quote.voice ? [`Voice:   ${quote.voice}`] : []),
+            ...(quote.responseFormat
+              ? [`Format:  ${quote.responseFormat}`]
+              : []),
+            ...paramLines(selection),
+          ],
+        },
+      }
+    },
+    persistPending: (selection, quoted) =>
+      persist('audio', args, selection, quoted.quote, quoted.summary),
+  }
+}
+
+export async function approveAudioGeneration(
+  server: McpServer,
+  args: AudioGenerationArgs
+): Promise<MediaSpendOutcome<AudioOrderQuote>> {
   const cliCommand = [
     'paytaca ai audio generate',
     shellQuote(args.prompt),
@@ -518,45 +560,8 @@ export async function approveAudioGeneration(
     .filter(Boolean)
     .join(' ')
 
-  return confirmMediaSpend(
-    server,
-    {
-      kind: 'audio',
-      prompt: args.prompt,
-      isChipnet: args.isChipnet,
-      recommendedModelId,
-      models: options,
-      paramFields: (selection) =>
-        audioParamFields(args, selection, modelById.get(selection.modelId)),
-      createQuote: async (selection) => {
-        const quote = await createAudioOrder({
-          prompt: args.prompt,
-          model: quoteModelId(selection),
-          voice: paramOrUndefined(selection.params.voice),
-          responseFormat: paramOrUndefined(selection.params.response_format),
-          speed: numberParam(selection.params.speed),
-          isChipnet: args.isChipnet,
-          backendUrl: args.backendUrl,
-        })
-        return {
-          quote,
-          summary: {
-            amountSats: quote.amountSats,
-            amountUsd: quote.amountUsd,
-            lines: [
-              `Order:   ${quote.orderId}`,
-              ...(quote.voice ? [`Voice:   ${quote.voice}`] : []),
-              ...(quote.responseFormat
-                ? [`Format:  ${quote.responseFormat}`]
-                : []),
-              ...paramLines(selection),
-            ],
-          },
-        }
-      },
-    },
-    cliCommand
-  )
+  const request = await buildAudioSpendRequest(args)
+  return confirmMediaSpend(server, request, cliCommand)
 }
 
 function audioParamFields(
@@ -596,4 +601,49 @@ function audioParamFields(
       value: current('speed', requestedSpeed),
     },
   ]
+}
+
+/** Persist the quote as a pending approval and return its handle. */
+async function persist(
+  kind: PendingKind,
+  args: ImageGenerationArgs | VideoGenerationArgs | AudioGenerationArgs,
+  selection: MediaSelection,
+  quote: {
+    orderId: string
+    model?: string
+    amountSats: number
+    amountUsd?: number
+  },
+  summary: { amountSats: number; amountUsd?: number }
+): Promise<{ id: string }> {
+  const saved = await savePendingApproval({
+    kind,
+    args,
+    selection,
+    quote: {
+      ...quote,
+      amountSats: summary.amountSats || quote.amountSats,
+      amountUsd: summary.amountUsd ?? quote.amountUsd,
+      prompt: args.prompt,
+    },
+  })
+  return { id: saved.id }
+}
+
+/**
+ * Rebuild the spend request for a stored pending approval. Used by the
+ * `paytaca approve` terminal command.
+ */
+export function buildPendingSpendRequest(record: {
+  kind: PendingKind
+  args: ImageGenerationArgs | VideoGenerationArgs | AudioGenerationArgs
+}): Promise<MediaSpendRequest<any>> {
+  switch (record.kind) {
+    case 'image':
+      return buildImageSpendRequest(record.args as ImageGenerationArgs)
+    case 'video':
+      return buildVideoSpendRequest(record.args as VideoGenerationArgs)
+    case 'audio':
+      return buildAudioSpendRequest(record.args as AudioGenerationArgs)
+  }
 }

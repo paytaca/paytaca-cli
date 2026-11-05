@@ -72,6 +72,12 @@ import {
   type RefillTickDeps,
   type RefillTickResult,
 } from '../ai/autoRefill.js'
+import {
+  lockPendingApproval,
+  removePendingApproval,
+  resolvePendingApproval,
+} from '../ai/pending.js'
+import { PAY_MEDIA_TOOL, verifyOmpPayMediaGate } from '../ai/ompGuard.js'
 
 type ToolResultContent =
   | { type: 'text'; text: string }
@@ -437,9 +443,38 @@ function fail(err: unknown): ToolResult {
  * Turn a blocked media spend into a tool result. A user declining is not a
  * failure; a host without elicitation is (no spend can be approved there).
  */
+/** Canonical model label shown in the omp approval box and the agent result. */
+function pendingModelLabel(modelId: string | undefined): string {
+  return modelId && modelId !== 'default' ? modelId : 'backend default'
+}
+
+/** Canonical cost label shown in the omp approval box and the agent result. */
+function pendingCostLabel(amountSats: number, amountUsd?: number): string {
+  return amountUsd !== undefined
+    ? `${amountUsd} USD (${amountSats} sats)`
+    : `${amountSats} sats`
+}
+
+/** Canonical parameter summary shown in the omp approval box. */
+function pendingParamsLabel(params: Record<string, string> | undefined): string {
+  const shown = Object.entries(params ?? {})
+    .filter(([, value]) => value && value !== 'auto')
+    .map(([key, value]) => `${key}: ${value}`)
+  return shown.length > 0 ? shown.join(' · ') : 'model defaults'
+}
+
 function spendNotApproved(
   outcome:
     | { status: 'declined'; reason: string }
+    | {
+        status: 'pending'
+        id: string
+        approvalMode: 'pay_media' | 'terminal'
+        prompt: string
+        model?: string
+        params: Record<string, string>
+        summary: { amountSats: number; amountUsd?: number; lines: string[] }
+      }
     | { status: 'unavailable'; reason: string; cliCommand: string },
   kind: string
 ): ToolResult {
@@ -454,6 +489,88 @@ function spendNotApproved(
       structuredContent: { canceled: true },
     }
   }
+  if (outcome.status === 'pending') {
+    const amount = pendingCostLabel(
+      outcome.summary.amountSats,
+      outcome.summary.amountUsd
+    )
+
+    if (outcome.approvalMode === 'pay_media') {
+      const modelLabel = pendingModelLabel(outcome.model)
+      const details = pendingParamsLabel(outcome.params)
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: [
+              `Nothing was generated and nothing was charged yet: the ${kind} quote is waiting for the user's approval.`,
+              `Pending id: ${outcome.id}`,
+              `Model: ${modelLabel}`,
+              `Details: ${details}`,
+              `Cost: ${amount}`,
+              '',
+              `This host shows an in-UI Allow/Deny prompt for the ${PAY_MEDIA_TOOL} tool.`,
+              `Call ${PAY_MEDIA_TOOL} now with these exact arguments (copy them unchanged):`,
+              JSON.stringify(
+                {
+                  pending_id: outcome.id,
+                  model: modelLabel,
+                  details,
+                  cost: amount,
+                  prompt: outcome.prompt,
+                },
+                null,
+                2
+              ),
+              '',
+              `The prompt shows the model and cost above and moves no funds unless the user`,
+              `clicks Allow. Do not ask for a separate confirmation and do not change the`,
+              `quote. If the user denies, nothing is charged; do not retry unless asked.`,
+            ].join('\n'),
+          },
+        ],
+        isError: true,
+        structuredContent: {
+          pendingApproval: true,
+          approvalRequired: true,
+          humanOnly: false,
+          nextTool: PAY_MEDIA_TOOL,
+          pendingId: outcome.id,
+          amountSats: outcome.summary.amountSats,
+          amountUsd: outcome.summary.amountUsd,
+        },
+      }
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: [
+            `Nothing was generated and nothing was charged: the ${kind} needs the user's own approval.`,
+            `A quote is pending (${amount}) and waiting for the user to approve it in their terminal.`,
+            '',
+            'Show the user this command to run themselves:',
+            `  paytaca approve ${outcome.id}`,
+            '',
+            'Do not run it yourself, do not add flags to skip its prompt, and do not',
+            'shell it through a pty. It requires an interactive terminal and refusing',
+            'that requirement is a policy violation.',
+            `After they approve, the command prints the final order id; use get_${kind}_status with that id if asked.`,
+          ].join('\n'),
+        },
+      ],
+      isError: true,
+      structuredContent: {
+        pendingApproval: true,
+        approvalRequired: true,
+        humanOnly: true,
+        pendingId: outcome.id,
+        amountSats: outcome.summary.amountSats,
+        amountUsd: outcome.summary.amountUsd,
+      },
+    }
+  }
   return {
     content: [
       {
@@ -461,12 +578,127 @@ function spendNotApproved(
         text: [
           `No ${kind} was generated: ${outcome.reason}`,
           'Nothing was charged.',
-          `To approve and pay from a terminal instead, run: ${outcome.cliCommand}`,
+          '',
+          'This must be approved by the user themselves. Do not run the Paytaca CLI',
+          'yourself and do not add a --yes/-y style flag, shell it through a pty, or',
+          'answer its prompt: those paths refuse to spend without a real terminal,',
+          'and attempting them is a policy violation.',
+          'Show the user this command to run in their own terminal, then stop:',
+          `  ${outcome.cliCommand}`,
         ].join('\n'),
       },
     ],
     isError: true,
-    structuredContent: { canceled: true, approvalRequired: true },
+    structuredContent: { canceled: true, approvalRequired: true, humanOnly: true },
+  }
+}
+
+/**
+ * Render the outcome of a `pay_media` fulfillment. The pending record has
+ * already been removed when funds moved, so a retry can never double-pay.
+ */
+function paidMediaResult(
+  kind: 'image' | 'video' | 'audio',
+  result: any,
+  pendingId: string
+): ToolResult {
+  const stillProcessing =
+    kind === 'image'
+      ? isStillProcessing(result)
+      : kind === 'video'
+        ? isVideoStillProcessing(result)
+        : isAudioStillProcessing(result)
+
+  if (stillProcessing) {
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: [
+            `${kind} generation is still processing (order ${result.orderId}).`,
+            `Payment was sent (txid: ${result.txid}). Do not call pay_media again for this quote.`,
+            `Call get_${kind}_status with order_id "${result.orderId}", then run \`paytaca ai ${kind} status ${result.orderId}\` to download it.`,
+          ].join('\n'),
+        },
+      ],
+      structuredContent: {
+        orderId: result.orderId,
+        model: result.model,
+        status: 'processing',
+        paid: true,
+        amountSats: result.amountSats,
+        amountUsd: result.amountUsd,
+        txid: result.txid,
+      },
+    }
+  }
+
+  if (!result.success || !result.ready) {
+    if (result.paid) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: [
+              `Payment was sent (txid: ${result.txid}) but the ${kind} is not ready yet: ${result.error || 'unknown error'}.`,
+              `Order: ${result.orderId}`,
+              'Do not call pay_media again for this quote.',
+              `Check with get_${kind}_status and download later with \`paytaca ai ${kind} status ${result.orderId}\`.`,
+            ].join('\n'),
+          },
+        ],
+        isError: true,
+        structuredContent: {
+          orderId: result.orderId,
+          status: result.status,
+          paid: true,
+          amountSats: result.amountSats,
+          amountUsd: result.amountUsd,
+          txid: result.txid,
+        },
+      }
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: [
+            `Nothing was charged: ${result.error || `${kind} payment failed.`}`,
+            `The quote is still pending (${pendingId}). The user can retry the in-UI approval, or run \`paytaca approve ${pendingId}\` in their own terminal.`,
+          ].join('\n'),
+        },
+      ],
+      isError: true,
+      structuredContent: {
+        pendingApproval: true,
+        pendingId,
+        paid: false,
+      },
+    }
+  }
+
+  const lines = [
+    `${kind} generated (order ${result.orderId}).`,
+    `Download it from the command line: paytaca ai ${kind} status ${result.orderId}`,
+    'Run the download promptly — the generated media is cached server-side for only a limited time.',
+  ]
+  if (result.model) lines.push(`Model: ${result.model}`)
+  if (result.amountSats !== undefined) lines.push(`Cost: ${result.amountSats} sats`)
+  if (result.txid) lines.push(`txid: ${result.txid}`)
+  return {
+    content: [{ type: 'text' as const, text: lines.join('\n') }],
+    structuredContent: {
+      orderId: result.orderId,
+      model: result.model,
+      status: result.status,
+      mediaType: result.mediaType,
+      ready: true,
+      paid: true,
+      amountSats: result.amountSats,
+      amountUsd: result.amountUsd,
+      txid: result.txid,
+    },
   }
 }
 
@@ -509,14 +741,21 @@ Image generation:
   get_image_models       List image generation models
   get_image_history      Image generation order history
 
+Media generation:
+  generate_image         Quote an image generation (spends only via pay_media)
+  pay_media              Pay a quoted media generation (SPENDS FUNDS; host-approved)
+  get_image_status       Poll/resume a pending image generation order
+  get_image_models       List image generation models
+  get_image_history      Image generation order history
+
 Video generation:
-  generate_video         Generate a video from a prompt (spends funds)
+  generate_video         Quote a video generation (spends only via pay_media)
   get_video_status       Poll/resume a pending video generation order
   get_video_models       List video generation models
   get_video_history      Video generation order history
 
 Audio generation:
-  generate_audio         Generate speech from text (spends funds)
+  generate_audio         Quote a speech generation (spends only via pay_media)
   get_audio_status       Poll/resume a pending audio generation order
   get_audio_models       List audio (text-to-speech) models
   get_audio_history      Audio generation order history
@@ -530,16 +769,24 @@ Media downloads:
   call get_*_status again if it was already delivered or expired.
 
 Approval for media generation:
-  generate_image, generate_video, and generate_audio spend real funds. The
-  server quotes the order first (no funds move) and then asks the user, through
-  MCP elicitation, to approve that exact cost. The form shows the prompt, model,
-  quoted price, and network, and lets the user pick the recommended model or a
-  cheaper alternative plus optional parameters (aspect ratio, resolution,
-  duration, voice, speed, ...). Nothing is charged unless the user accepts;
-  declining or cancelling returns canceled=true and spends nothing. A host
-  without elicitation support is refused with the equivalent CLI command to run
-  in a terminal instead. Do not ask the user for a separate confirmation before
-  calling these tools — the approval prompt is the confirmation.
+  generate_image, generate_video, and generate_audio never pay when the host
+  cannot show an approval form. They quote the order (no funds move), store it
+  as a pending approval, and return a pendingId. On omp the result points at the
+  pay_media tool: call it with that pendingId, and omp shows the user an
+  Allow/Deny prompt in the agent UI with the model and quoted cost. pay_media is
+  the only tool that pays, it pays the stored quote, and its model/details/cost/prompt
+  arguments must match that quote exactly (the server refuses otherwise, so a
+  mismatched approval can never pay a different price), and the server verifies the omp approval
+  policy before spending. If that gate cannot be verified nothing is charged:
+  show the user "paytaca approve <pending_id>" to run in their own terminal.
+  Hosts that support MCP elicitation instead get a rich approval form inside
+  generate_* itself, with the prompt, models, quoted price, and optional
+  parameters; nothing is charged unless the user accepts. Never run
+  "paytaca approve" yourself, never add a --yes/-y flag, and never answer its
+  prompt on the user's behalf: it requires a real interactive terminal, and
+  working around that is a policy violation. Do not ask the user for a separate
+  confirmation before pay_media — the host prompt is the confirmation. If the
+  user denies, nothing is charged; do not retry unless they ask.
 
 Notes:
   - All tools accept an optional "chipnet" flag (default mainnet).
@@ -1396,7 +1643,7 @@ export function registerTools(
     {
       title: 'Generate an image',
       description:
-        'Generate an image from a text prompt with a Paytaca AI image model. Optionally pass input_references (image URLs) to edit, remix, or compose from existing images. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). The server enforces approval: it quotes the order, then asks the user to approve the exact cost and pick the model (recommended or cheaper) and optional parameters. Nothing is charged unless the user accepts; declining returns canceled=true. Hosts without elicitation support are refused. Returns metadata only (no image bytes); download the image from the command line with `paytaca ai image status <order_id>`.',
+        'Generate an image from a text prompt with a Paytaca AI image model. Optionally pass input_references (image URLs) to edit, remix, or compose from existing images. This call never spends on a host without MCP elicitation: it creates an unpaid quote and returns a pendingId plus nextTool="pay_media". Call pay_media with that id; the host then shows the user an in-UI Allow/Deny prompt with the model and exact cost, and only pay_media can move funds. Hosts that support elicitation get the rich approval form here, including the quoted cost and model/parameter choices; nothing is charged unless the user accepts (declining returns canceled=true). If no in-UI gate is available, the result tells the user to run `paytaca approve <pending_id>` in their terminal. Returns metadata only (no image bytes); download the image from the command line with `paytaca ai image status <order_id>`.',
       inputSchema: {
         prompt: z.string().min(1),
         model: z.string().optional(),
@@ -1625,7 +1872,7 @@ export function registerTools(
     {
       title: 'Generate a video',
       description:
-        'Generate a video from a text prompt with a Paytaca AI video model. Optionally pass input_references (reference/keyframe images) to guide the result. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). The server enforces approval: it quotes the order, then asks the user to approve the exact cost and pick the model (recommended or cheaper) and optional parameters. Nothing is charged unless the user accepts; declining returns canceled=true. Hosts without elicitation support are refused. Returns metadata only (no video bytes); download the video from the command line with `paytaca ai video status <order_id>`.',
+        'Generate a video from a text prompt with a Paytaca AI video model. Optionally pass input_references (reference/keyframe images) to guide the result. This call never spends on a host without MCP elicitation: it creates an unpaid quote and returns a pendingId plus nextTool="pay_media". Call pay_media with that id; the host then shows the user an in-UI Allow/Deny prompt with the model and exact cost, and only pay_media can move funds. Hosts that support elicitation get the rich approval form here, including the quoted cost and model/parameter choices; nothing is charged unless the user accepts (declining returns canceled=true). If no in-UI gate is available, the result tells the user to run `paytaca approve <pending_id>` in their terminal. Returns metadata only (no video bytes); download the video from the command line with `paytaca ai video status <order_id>`.',
       inputSchema: {
         prompt: z.string().min(1),
         model: z.string().optional(),
@@ -1876,7 +2123,7 @@ export function registerTools(
     {
       title: 'Generate speech from text',
       description:
-        'Generate speech from a text prompt with a Paytaca AI audio (text-to-speech) model. Pays BCH on-chain from the active wallet (SPENDS REAL FUNDS). The server enforces approval: it quotes the order, then asks the user to approve the exact cost and pick the model (recommended or cheaper) and optional parameters. Nothing is charged unless the user accepts; declining returns canceled=true. Hosts without elicitation support are refused. Returns metadata only (no audio bytes); download the audio from the command line with `paytaca ai audio status <order_id>`.',
+        'Generate speech from a text prompt with a Paytaca AI audio (text-to-speech) model. This call never spends on a host without MCP elicitation: it creates an unpaid quote and returns a pendingId plus nextTool="pay_media". Call pay_media with that id; the host then shows the user an in-UI Allow/Deny prompt with the model and exact cost, and only pay_media can move funds. Hosts that support elicitation get the rich approval form here, including the quoted cost and model/parameter choices; nothing is charged unless the user accepts (declining returns canceled=true). If no in-UI gate is available, the result tells the user to run `paytaca approve <pending_id>` in their terminal. Returns metadata only (no audio bytes); download the audio from the command line with `paytaca ai audio status <order_id>`.',
       inputSchema: {
         prompt: z.string().min(1),
         model: z.string().optional(),
@@ -1962,6 +2209,164 @@ export function registerTools(
             amountUsd: result.amountUsd,
             txid: result.txid,
           },
+        }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    PAY_MEDIA_TOOL,
+    {
+      title: 'Pay for a quoted media generation',
+      description:
+        'Pay for and start a media generation that generate_image, generate_video, or generate_audio already quoted. THIS SPENDS REAL BCH FROM THE ACTIVE WALLET. The quote is stored server-side and this call pays that exact stored quote; the model, details, cost, and prompt arguments must match the stored quote exactly and cannot change the price. Call it only when a generate_* result returns nextTool="pay_media" and a pendingId. The host must show the user an in-UI Allow/Deny prompt for this tool (omp does when tools.approval.mcp__paytaca_pay_media is "prompt"); the server verifies that policy before paying. If the gate cannot be verified, nothing is charged and the result tells the user to run `paytaca approve <pending_id>` in their terminal. Returns metadata only (no media bytes); download with `paytaca ai <kind> status <order_id>`.',
+      inputSchema: {
+        pending_id: z
+          .string()
+          .min(1)
+          .describe(
+            'The pendingId returned by generate_image, generate_video, or generate_audio.'
+          ),
+        model: z
+          .string()
+          .min(1)
+          .describe(
+            'The quoted model, copied exactly from the generate_* result. Shown in the approval prompt and verified against the stored quote.'
+          ),
+        details: z
+          .string()
+          .min(1)
+          .describe(
+            'The quoted parameters, copied exactly from the generate_* result. Shown in the approval prompt and verified against the stored quote.'
+          ),
+        cost: z
+          .string()
+          .min(1)
+          .describe(
+            'The quoted cost, copied exactly from the generate_* result. Shown in the approval prompt and verified against the stored quote.'
+          ),
+        prompt: z
+          .string()
+          .min(1)
+          .describe(
+            'The generation prompt, copied exactly from the generate_* result. Shown in the approval prompt and verified against the stored quote.'
+          ),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({ pending_id, model, details, cost, prompt }) => {
+      try {
+        let clientName: string | undefined
+        try {
+          clientName = server.server.getClientVersion()?.name
+        } catch {
+          clientName = undefined
+        }
+
+        const gate = verifyOmpPayMediaGate(clientName)
+        if (!gate.verified) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: [
+                  `Nothing was charged: ${gate.reason || 'this host has no verified in-UI approval gate'}.`,
+                  `The quote is still pending (${pending_id}). Show the user this command to run in their own terminal:`,
+                  `  paytaca approve ${pending_id}`,
+                  '',
+                  'Do not run it yourself and do not try to work around its interactive',
+                  'terminal requirement.',
+                ].join('\n'),
+              },
+            ],
+            isError: true,
+            structuredContent: {
+              pendingApproval: true,
+              approvalRequired: true,
+              humanOnly: true,
+              pendingId: pending_id,
+            },
+          }
+        }
+
+        const initial = await resolvePendingApproval(pending_id)
+        const release = await lockPendingApproval(initial.id)
+        try {
+          // Re-read under the lock: a concurrent `paytaca approve` may have
+          // paid and removed this quote between resolve and lock.
+          const record = await resolvePendingApproval(initial.id)
+
+          // The approval UI shows the arguments the model sent, so they must
+          // match the stored quote exactly. Otherwise an agent could show the
+          // user a cheap-looking cost while paying an expensive stored quote.
+          const expectedModel = pendingModelLabel(record.selection.modelId)
+          const expectedDetails = pendingParamsLabel(record.selection.params)
+          const expectedCost = pendingCostLabel(
+            record.quote.amountSats,
+            record.quote.amountUsd
+          )
+          if (
+            model !== expectedModel ||
+            details !== expectedDetails ||
+            cost !== expectedCost ||
+            prompt !== record.args.prompt
+          ) {
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: [
+                    'Nothing was charged: the arguments do not match the stored quote.',
+                    `Expected model:   ${expectedModel}`,
+                    `Expected details: ${expectedDetails}`,
+                    `Expected cost:    ${expectedCost}`,
+                    'Call pay_media again with the exact values from the generate_* result.',
+                  ].join('\n'),
+                },
+              ],
+              isError: true,
+              structuredContent: {
+                pendingApproval: true,
+                pendingId: record.id,
+                quotedModel: expectedModel,
+                quotedDetails: expectedDetails,
+                quotedCost: expectedCost,
+              },
+            }
+          }
+
+          const options = {
+            isChipnet: record.args.isChipnet,
+            backendUrl: record.args.backendUrl,
+            deferDownload: true,
+          }
+
+          let result: any
+          switch (record.kind) {
+            case 'image':
+              result = await fulfillImageOrder(record.quote as any, options)
+              break
+            case 'video':
+              result = await fulfillVideoOrder(record.quote as any, options)
+              break
+            case 'audio':
+              result = await fulfillAudioOrder(record.quote as any, options)
+              break
+          }
+
+          if (result?.paid || result?.success) {
+            await removePendingApproval(record.id)
+          }
+          return paidMediaResult(record.kind, result, record.id)
+        } finally {
+          await release()
         }
       } catch (err) {
         return fail(err)

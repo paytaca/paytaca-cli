@@ -216,13 +216,14 @@ paytaca ai image generate "prompt" --model <id>     # Specify model (defaults to
 paytaca ai image generate "prompt" --aspect-ratio 16:9  # Aspect ratio (default: 1:1)
 paytaca ai image generate "prompt" --quality high   # Quality: low, medium, high, auto
 paytaca ai image generate "prompt" --resolution 2K  # Resolution: 512, 1K, 2K, 4K
-paytaca ai image generate "prompt" --yes            # Skip confirmation prompt
 paytaca ai image history                            # Show order history
 paytaca ai image history --page 2                   # Paginate history
 paytaca ai image status <order-id>                  # Poll a pending generation order
 ```
 
 Image generation uses a two-phase flow: an order is created (returning a CashScript contract address and sats price), BCH is paid on-chain, the backend confirms payment via Watchtower, generation runs server-side, and the finished image is saved under `~/.paytaca/images/`. Use `image status` to resume if a generation is still processing when the initial request returns.
+
+`image generate`, `video generate` and `audio generate` must be approved by a person: each prints the prompt, model, every parameter, the quoted sats/USD price and the network, then asks for a `y/N` confirmation. There is no `--yes` flag to skip this, and the confirmation only works on a real terminal — a piped, redirected or agent-driven stdin is refused before anything is charged.
 
 ### Video Generation
 
@@ -236,7 +237,6 @@ paytaca ai video generate "prompt" --duration 5     # Duration in seconds
 paytaca ai video generate "prompt" --resolution 720p # Resolution: 480p, 720p, 1080p
 paytaca ai video generate "prompt" --aspect-ratio 16:9 # Aspect ratio, e.g. 16:9, 9:16
 paytaca ai video generate "prompt" --audio on       # Audio generation: on or off
-paytaca ai video generate "prompt" --yes            # Skip confirmation prompt
 paytaca ai video history                            # Show order history
 paytaca ai video history --page 2                   # Paginate history
 paytaca ai video status <order-id>                  # Poll a pending generation order
@@ -325,11 +325,30 @@ The create output also prints the OpenAI-compatible provider URL (`https://api.p
 
 Read-only wallets report credits from the shared wallet hash but can't buy plans — fund credits from the full wallet.
 
-**MCP tools:** wallet (`get_balance`, `get_transactions`, `get_receiving_address`, `get_tokens`, `send`) plus Paytaca AI (`get_models`, `get_plans`, `get_credits`, `buy_plan`, `auto_refill`, `await_refill`, `get_help`, `generate_image`, `get_image_status`, `get_image_models`, `get_image_history`).
+**MCP tools:** wallet (`get_balance`, `get_transactions`, `get_receiving_address`, `get_tokens`, `send`) plus Paytaca AI (`get_models`, `get_plans`, `get_credits`, `buy_plan`, `auto_refill`, `await_refill`, `get_help`, `generate_image`, `pay_media`, `get_image_status`, `get_image_models`, `get_image_history`, and the matching `video`/`audio` tools).
 
 Spending tools (`send`, `buy_plan`, `auto_refill`, `await_refill`) require host-level approval. By default MCP operates on your **main wallet** and can spend real funds. `await_refill` never buys outside an already-armed auto-refill configuration.
 
-Media generation (`generate_image`, `generate_video`, `generate_audio`) enforces approval in the server itself: it quotes the order first (no funds move), then asks you through MCP elicitation to approve that exact cost, showing the prompt, model, quoted sats/USD price, and network. The same form lets you pick the recommended model or a cheaper alternative and adjust optional parameters (aspect ratio, resolution, duration, voice, speed). Nothing is charged unless you accept, and a host without elicitation support is refused with the equivalent CLI command to run in a terminal.
+Media generation (`generate_image`, `generate_video`, `generate_audio`) never spends silently. Each call first creates an unpaid order, then:
+
+- **omp:** the server stores the quote under `~/.paytaca/pending/` and returns a `pendingId` with `nextTool: "pay_media"`. The agent calls `pay_media(pending_id, model, details, cost, prompt)`; omp shows an **in-UI Allow/Deny prompt** with those values, and only that call moves funds. `pay_media` pays the stored quote, and its `model`/`details`/`cost`/`prompt` arguments must match that quote exactly (the server refuses a mismatch, so a misleading approval can never pay a different price). Before paying, the server verifies that omp's `tools.approval.mcp__paytaca_pay_media` policy is `prompt`; if it cannot verify that, nothing is charged and the terminal fallback below applies.
+- **Hosts with MCP elicitation:** the server shows a rich approval form inside `generate_*` with the prompt, model choices, quoted sats/USD price, and optional parameters. Nothing is charged unless you accept.
+- **Any other host:** the quote is stored and the result tells you to run the terminal approval below. Nothing is charged until you do.
+
+`paytaca ai configure omp` installs the in-UI policy, or you can add it to `~/.omp/agent/config.yml` yourself:
+
+```yaml
+tools:
+  approval:
+    mcp__paytaca_pay_media: prompt
+```
+
+`paytaca approve` remains the fallback when no in-UI gate is available. It is a terminal UI, not a web page: it shows the prompt, model, every parameter, the fresh quoted cost and the network, lets you switch model or edit options (re-quoting as needed), and only then pays. It requires a real interactive terminal and cannot be driven by an agent. After approval the generation runs as usual; `paytaca ai <kind> status <order_id>` downloads the result.
+
+```bash
+paytaca approve            # list pending approvals
+paytaca approve <id>       # review the quote, change model/options, then pay
+```
 
 When `get_credits` finds a model with no active session (e.g. after a `402` from the Paytaca AI provider), the result includes a `purchaseHint`. Relay `purchaseHint.message` as-is — it carries the exact copy-paste top-up command (no upsell or follow-up questions needed):
 
@@ -457,6 +476,7 @@ src/
     chat.ts          Nostr chat (contacts, DMs, MLS groups, invitations, listen)
     web.ts           `paytaca web` — local browser UI launcher
     mcp.ts           `paytaca mcp` stdio entry + per-harness config templates
+    approve.ts       `paytaca approve` — terminal approval for pending MCP media spends
     update.ts        Self-update from npm registry
   core/
     context.ts       Wallet context resolution (keychain + network), embed-safe

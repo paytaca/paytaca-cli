@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { ElicitRequestFormParams } from '@modelcontextprotocol/sdk/types.js'
 import { formatSpendCost, createSpendCostResolver } from '../utils/prices.js'
+import { PAY_MEDIA_TOOL, verifyOmpPayMediaGate } from '../ai/ompGuard.js'
 
 /** One selectable model, with the price hint shown next to it. */
 export interface MediaModelOption {
@@ -44,6 +45,14 @@ export interface MediaSpendRequest<Q> {
   createQuote: (
     selection: MediaSelection
   ) => Promise<{ quote: Q; summary: MediaQuoteSummary }>
+  /**
+   * Record the approval for a host that cannot elicit one. Returns a short
+   * handle the user feeds to `paytaca approve` in their own terminal.
+   */
+  persistPending?: (
+    selection: MediaSelection,
+    quoted: { quote: Q; summary: MediaQuoteSummary }
+  ) => Promise<{ id: string }>
 }
 
 export type MediaSpendOutcome<Q> =
@@ -52,6 +61,22 @@ export type MediaSpendOutcome<Q> =
       quote: Q
       summary: MediaQuoteSummary
       selection: MediaSelection
+    }
+  | {
+      status: 'pending'
+      id: string
+      quote: Q
+      summary: MediaQuoteSummary
+      selection: MediaSelection
+      /**
+       * Where the user should complete the approval. `pay_media` means the host
+       * enforces an in-UI prompt for that tool, so the agent may call it;
+       * `terminal` means the user must run `paytaca approve`.
+       */
+      approvalMode: 'pay_media' | 'terminal'
+      prompt: string
+      model?: string
+      params: Record<string, string>
     }
   | { status: 'declined'; reason: string }
   | { status: 'unavailable'; reason: string; cliCommand: string }
@@ -69,6 +94,21 @@ function hasElicitation(server: McpServer): boolean {
   } catch {
     return false
   }
+}
+
+function clientName(server: McpServer): string | undefined {
+  try {
+    return server.server.getClientVersion()?.name
+  } catch {
+    return undefined
+  }
+}
+
+/** Where a pending approval should be completed for this host. */
+function pendingApprovalMode(server: McpServer): 'pay_media' | 'terminal' {
+  return verifyOmpPayMediaGate(clientName(server)).verified
+    ? 'pay_media'
+    : 'terminal'
 }
 
 function modelLabel(option: MediaModelOption, recommended: boolean): string {
@@ -101,8 +141,8 @@ function quotePrompt(prompt: string): string {
   return `"${clipped.replace(/"/g, "'")}"`
 }
 
-function describe(
-  request: MediaSpendRequest<unknown>,
+function describe<Q>(
+  request: MediaSpendRequest<Q>,
   summary: MediaQuoteSummary,
   selection: MediaSelection,
   cost: string
@@ -125,12 +165,24 @@ function describe(
   return lines.join('\n')
 }
 
+/** The starting selection: the recommended model with its default parameters. */
+export function seedSelection<Q>(request: MediaSpendRequest<Q>): MediaSelection {
+  const seed: MediaSelection = { modelId: request.recommendedModelId, params: {} }
+  return {
+    modelId: seed.modelId,
+    params: Object.fromEntries(
+      request.paramFields(seed).map((field) => [field.name, field.value])
+    ),
+  }
+}
+
 /**
  * Ask the user to approve a media generation spend.
  *
  * Creates an unpaid order (no funds move), shows the exact quoted cost, and
  * pays nothing unless the host returns an explicit `accept` for that quote.
- * Hosts without elicitation support get `unavailable` — never a silent spend.
+ * Hosts without elicitation support get a pending approval the user completes
+ * with `paytaca approve` in their own terminal — never a silent spend.
  */
 export async function confirmMediaSpend<Q>(
   server: McpServer,
@@ -138,24 +190,40 @@ export async function confirmMediaSpend<Q>(
   cliCommand: string
 ): Promise<MediaSpendOutcome<Q>> {
   if (!hasElicitation(server)) {
-    return {
-      status: 'unavailable',
-      reason:
-        'this MCP host does not support elicitation, so Paytaca cannot show the request and get your explicit approval.',
-      cliCommand,
+    if (!request.persistPending) {
+      return {
+        status: 'unavailable',
+        reason:
+          'this MCP host does not support elicitation, so Paytaca cannot show the request and get your explicit approval.',
+        cliCommand,
+      }
+    }
+    const selection = seedSelection(request)
+    try {
+      const quoted = await request.createQuote(selection)
+      const pending = await request.persistPending(selection, quoted)
+      return {
+        status: 'pending',
+        id: pending.id,
+        quote: quoted.quote,
+        summary: quoted.summary,
+        selection,
+        approvalMode: pendingApprovalMode(server),
+        prompt: request.prompt,
+        model: selection.modelId === 'default' ? undefined : selection.modelId,
+        params: selection.params,
+      }
+    } catch (err: any) {
+      return {
+        status: 'unavailable',
+        reason: `Paytaca could not prepare the approval request (${err?.message || err}).`,
+        cliCommand,
+      }
     }
   }
 
-  let selection: MediaSelection = {
-    modelId: request.recommendedModelId,
-    params: {},
-  }
-  selection = {
-    modelId: selection.modelId,
-    params: Object.fromEntries(
-      request.paramFields(selection).map((field) => [field.name, field.value])
-    ),
-  }
+  let selection = seedSelection(request)
+
   let quoted: { quote: Q; summary: MediaQuoteSummary } | null = null
   let cost = ''
   let fields: MediaParamField[] = []
@@ -201,6 +269,27 @@ export async function confirmMediaSpend<Q>(
       action = result.action
       content = (result.content ?? {}) as Record<string, unknown>
     } catch (err: any) {
+      // A host can advertise elicitation and still fail to answer (for example
+      // an older client that throws MethodNotFound). Fall back to a pending
+      // approval rather than forcing the user to reconstruct the command.
+      if (request.persistPending && quoted) {
+        try {
+          const pending = await request.persistPending(selection, quoted)
+          return {
+            status: 'pending',
+            id: pending.id,
+            quote: quoted.quote,
+            summary: quoted.summary,
+            selection,
+            approvalMode: pendingApprovalMode(server),
+            prompt: request.prompt,
+            model: selection.modelId === 'default' ? undefined : selection.modelId,
+            params: selection.params,
+          }
+        } catch {
+          // Fall through to the unavailable outcome below.
+        }
+      }
       return {
         status: 'unavailable',
         reason: `the approval prompt failed (${err?.message || err}).`,

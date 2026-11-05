@@ -23,6 +23,7 @@ import { registerAiCommands } from './commands/ai.js'
 import { registerMcpCommand } from './commands/mcp.js'
 import { registerUpdateCommand } from './commands/update.js'
 import { registerWebCommand } from './commands/web.js'
+import { registerApproveCommand } from './commands/approve.js'
 
 const packageJson = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf-8')
@@ -47,6 +48,7 @@ registerCheckCommand(program)
 registerChatCommands(program)
 registerSwapCommand(program)
 registerAiCommands(program)
+registerApproveCommand(program)
 registerMcpCommand(program)
 registerUpdateCommand(program)
 registerWebCommand(program)

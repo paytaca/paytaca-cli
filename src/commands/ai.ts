@@ -12,6 +12,7 @@ import { WalletNotConfiguredError } from '../core/context.js'
 import { loadWalletRef } from '../wallet/index.js'
 import { formatSats, bchToSats } from '../utils/format.js'
 import { formatUsd, resolveSpendCost, formatSpendCost } from '../utils/prices.js'
+import { confirmSpend } from '../utils/approval.js'
 import {
   AiApiError,
   getApiKeyWalletStatus,
@@ -1416,8 +1417,7 @@ export function registerAiCommands(program: Command): void {
     )
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .option('--backend <url>', 'Override backend URL')
-    .option('-y, --yes', 'Skip confirmation prompt')
-    .option('--json', 'Output as JSON')
+    .option('--json', 'Quote as JSON (always requires terminal approval to pay)')
     .action(async (prompt: string, opts) => {
       const json = Boolean(opts.json)
       const orderOpts = {
@@ -1441,33 +1441,54 @@ export function registerAiCommands(program: Command): void {
         return
       }
 
-      const cost = json
-        ? null
-        : await resolveSpendCost(quote.amountSats, quote.amountUsd, Boolean(opts.chipnet))
+      const cost = await resolveSpendCost(
+        quote.amountSats,
+        quote.amountUsd,
+        Boolean(opts.chipnet)
+      )
 
-      if (!opts.yes) {
+      try {
+        const proceed = await confirmSpend(
+          [
+            chalk.bold('   Generate this image?'),
+            '',
+            `   Prompt:     ${quote.prompt || prompt}`,
+            `   Model:      ${quote.model || 'backend default'}`,
+            `   Aspect:     ${opts.aspectRatio}`,
+            `   Quality:    ${opts.quality}`,
+            `   Resolution: ${opts.resolution}`,
+            `   Cost:       ${formatSpendCost(cost)} (${quote.amountSats} sats)`,
+            `   Network:    ${opts.chipnet ? 'chipnet (testnet)' : 'mainnet'}`,
+            `   Order:      ${quote.orderId}`,
+          ],
+          'Pay and generate',
+          { asJson: json }
+        )
+        if (!proceed) {
+          if (json) outputJson({ canceled: true, orderId: quote.orderId })
+          else console.log(chalk.dim('\n   Cancelled — nothing was charged.\n'))
+          process.exitCode = 1
+          return
+        }
+      } catch (err) {
         if (json) {
           outputJson({
-            error: 'Payment not confirmed. Re-run with --yes to execute.',
+            canceled: true,
+            error: (err as Error).message,
             orderId: quote.orderId,
             model: quote.model,
             amountSats: quote.amountSats,
-            amountBch: quote.amountSats / 1e8,
             amountUsd: quote.amountUsd,
           })
-          process.exitCode = 1
-          return
+        } else {
+          console.log(chalk.red(`\n${(err as Error).message}\n`))
+          console.log(chalk.dim('   Quoted, not paid:'))
+          console.log(`   Model: ${quote.model || 'backend default'}`)
+          console.log(`   Cost:  ${formatSpendCost(cost)} (${quote.amountSats} sats)`)
+          console.log()
         }
-        const proceed = await promptConfirmation(
-          `Generate an image with ${quote.model || 'the default model'} for ${formatSpendCost(
-            cost!
-          )}?`
-        )
-        if (!proceed) {
-          console.log(chalk.dim('\n   Cancelled.\n'))
-          process.exitCode = 1
-          return
-        }
+        process.exitCode = 1
+        return
       }
 
       const result = await fulfillImageOrder(quote, orderOpts)
@@ -1486,7 +1507,7 @@ export function registerAiCommands(program: Command): void {
       console.log(chalk.green(`\n   Image generated — ${result.path}`))
       console.log(`   Order:  ${result.orderId}`)
       console.log(`   Model:  ${result.model}`)
-      console.log(`   Cost:   ${formatSpendCost(cost!)}`)
+      console.log(`   Cost:   ${formatSpendCost(cost)}`)
       if (result.txid) console.log(chalk.dim(`   txid:   ${result.txid}`))
       console.log()
     })
@@ -1652,8 +1673,7 @@ export function registerAiCommands(program: Command): void {
     .option('--last-frame <ref>', 'Image to use as the last frame')
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .option('--backend <url>', 'Override backend URL')
-    .option('-y, --yes', 'Skip confirmation prompt')
-    .option('--json', 'Output as JSON')
+    .option('--json', 'Quote as JSON (always requires terminal approval to pay)')
     .action(async (prompt: string, opts) => {
       const json = Boolean(opts.json)
       let duration: number | undefined
@@ -1712,40 +1732,61 @@ export function registerAiCommands(program: Command): void {
         return
       }
 
-      const cost = json
-        ? null
-        : await resolveSpendCost(quote.amountSats, quote.amountUsd, Boolean(opts.chipnet))
+      const cost = await resolveSpendCost(
+        quote.amountSats,
+        quote.amountUsd,
+        Boolean(opts.chipnet)
+      )
 
-      if (!opts.yes) {
-        const spec = [
-          quote.duration ? `${quote.duration}s` : null,
-          quote.resolution,
-          quote.aspectRatio,
-        ]
-          .filter(Boolean)
-          .join(' ')
+      try {
+        const proceed = await confirmSpend(
+          [
+            chalk.bold('   Generate this video?'),
+            '',
+            `   Prompt:     ${quote.prompt || prompt}`,
+            `   Model:      ${quote.model || 'backend default'}`,
+            `   Duration:   ${quote.duration ? `${quote.duration}s` : 'model default'}`,
+            `   Resolution: ${quote.resolution || 'model default'}`,
+            `   Aspect:     ${quote.aspectRatio || 'model default'}`,
+            `   Audio:      ${
+              quote.generateAudio === undefined
+                ? 'model default'
+                : quote.generateAudio
+                  ? 'on'
+                  : 'off'
+            }`,
+            `   Cost:       ${formatSpendCost(cost)} (${quote.amountSats} sats)`,
+            `   Network:    ${opts.chipnet ? 'chipnet (testnet)' : 'mainnet'}`,
+            `   Order:      ${quote.orderId}`,
+          ],
+          'Pay and generate',
+          { asJson: json }
+        )
+        if (!proceed) {
+          if (json) outputJson({ canceled: true, orderId: quote.orderId })
+          else console.log(chalk.dim('\n   Cancelled — nothing was charged.\n'))
+          process.exitCode = 1
+          return
+        }
+      } catch (err) {
         if (json) {
           outputJson({
-            error: 'Payment not confirmed. Re-run with --yes to execute.',
+            canceled: true,
+            error: (err as Error).message,
             orderId: quote.orderId,
             model: quote.model,
             amountSats: quote.amountSats,
-            amountBch: quote.amountSats / 1e8,
             amountUsd: quote.amountUsd,
           })
-          process.exitCode = 1
-          return
+        } else {
+          console.log(chalk.red(`\n${(err as Error).message}\n`))
+          console.log(chalk.dim('   Quoted, not paid:'))
+          console.log(`   Model: ${quote.model || 'backend default'}`)
+          console.log(`   Cost:  ${formatSpendCost(cost)} (${quote.amountSats} sats)`)
+          console.log()
         }
-        const proceed = await promptConfirmation(
-          `Generate a${spec ? ` ${spec}` : ''} video with ${
-            quote.model || 'the default model'
-          } for ${formatSpendCost(cost!)}?`
-        )
-        if (!proceed) {
-          console.log(chalk.dim('\n   Cancelled.\n'))
-          process.exitCode = 1
-          return
-        }
+        process.exitCode = 1
+        return
       }
 
       const result = await fulfillVideoOrder(quote, orderOpts)
@@ -1764,7 +1805,7 @@ export function registerAiCommands(program: Command): void {
       console.log(chalk.green(`\n   Video generated — ${result.path}`))
       console.log(`   Order:  ${result.orderId}`)
       console.log(`   Model:  ${result.model}`)
-      console.log(`   Cost:   ${formatSpendCost(cost!)}`)
+      console.log(`   Cost:   ${formatSpendCost(cost)}`)
       if (result.txid) console.log(chalk.dim(`   txid:   ${result.txid}`))
       console.log()
     })
@@ -1919,8 +1960,7 @@ export function registerAiCommands(program: Command): void {
     .option('--speed <speed>', 'Playback speed, e.g. 1.0')
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .option('--backend <url>', 'Override backend URL')
-    .option('-y, --yes', 'Skip confirmation prompt')
-    .option('--json', 'Output as JSON')
+    .option('--json', 'Quote as JSON (always requires terminal approval to pay)')
     .action(async (prompt: string, opts) => {
       const json = Boolean(opts.json)
       let speed: number | undefined
@@ -1963,33 +2003,54 @@ export function registerAiCommands(program: Command): void {
         return
       }
 
-      const cost = json
-        ? null
-        : await resolveSpendCost(quote.amountSats, quote.amountUsd, Boolean(opts.chipnet))
+      const cost = await resolveSpendCost(
+        quote.amountSats,
+        quote.amountUsd,
+        Boolean(opts.chipnet)
+      )
 
-      if (!opts.yes) {
+      try {
+        const proceed = await confirmSpend(
+          [
+            chalk.bold('   Generate this audio?'),
+            '',
+            `   Text:     ${quote.prompt || prompt}`,
+            `   Model:    ${quote.model || 'backend default'}`,
+            `   Voice:    ${quote.voice || 'model default'}`,
+            `   Format:   ${quote.responseFormat || format}`,
+            `   Speed:    ${quote.speed !== undefined ? quote.speed : 'model default'}`,
+            `   Cost:     ${formatSpendCost(cost)} (${quote.amountSats} sats)`,
+            `   Network:  ${opts.chipnet ? 'chipnet (testnet)' : 'mainnet'}`,
+            `   Order:    ${quote.orderId}`,
+          ],
+          'Pay and generate',
+          { asJson: json }
+        )
+        if (!proceed) {
+          if (json) outputJson({ canceled: true, orderId: quote.orderId })
+          else console.log(chalk.dim('\n   Cancelled — nothing was charged.\n'))
+          process.exitCode = 1
+          return
+        }
+      } catch (err) {
         if (json) {
           outputJson({
-            error: 'Payment not confirmed. Re-run with --yes to execute.',
+            canceled: true,
+            error: (err as Error).message,
             orderId: quote.orderId,
             model: quote.model,
             amountSats: quote.amountSats,
-            amountBch: quote.amountSats / 1e8,
             amountUsd: quote.amountUsd,
           })
-          process.exitCode = 1
-          return
+        } else {
+          console.log(chalk.red(`\n${(err as Error).message}\n`))
+          console.log(chalk.dim('   Quoted, not paid:'))
+          console.log(`   Model: ${quote.model || 'backend default'}`)
+          console.log(`   Cost:  ${formatSpendCost(cost)} (${quote.amountSats} sats)`)
+          console.log()
         }
-        const proceed = await promptConfirmation(
-          `Generate ${quote.voice ? `"${quote.voice} "` : ''}speech with ${
-            quote.model || 'the default model'
-          } for ${formatSpendCost(cost!)}?`
-        )
-        if (!proceed) {
-          console.log(chalk.dim('\n   Cancelled.\n'))
-          process.exitCode = 1
-          return
-        }
+        process.exitCode = 1
+        return
       }
 
       const result = await fulfillAudioOrder(quote, orderOpts)
@@ -2008,7 +2069,7 @@ export function registerAiCommands(program: Command): void {
       console.log(chalk.green(`\n   Audio generated — ${result.path}`))
       console.log(`   Order:  ${result.orderId}`)
       console.log(`   Model:  ${result.model}`)
-      console.log(`   Cost:   ${formatSpendCost(cost!)}`)
+      console.log(`   Cost:   ${formatSpendCost(cost)}`)
       if (result.txid) console.log(chalk.dim(`   txid:   ${result.txid}`))
       console.log()
     })

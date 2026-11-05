@@ -30,6 +30,11 @@ import {
 import { checkApiKeyWalletIdentity, type KeyIdentity } from './identity.js'
 import { selectModel, selectTier } from './models.js'
 import { provisionApiKey } from './oauth.js'
+import {
+  PAY_MEDIA_POLICY_KEY,
+  REQUIRED_POLICY,
+  upsertOmpApprovalPolicyYaml,
+} from './ompGuard.js'
 
 export const OPENCODE_PROVIDER_ID = 'paytaca-ai'
 export const PI_PROVIDER_ID = 'paytaca-ai'
@@ -1904,6 +1909,29 @@ export async function configureHarness(options: ConfigureOptions): Promise<Confi
     result.mcpInstalled = true
 
     ompAgentDir = dirname(target)
+    if (harness === 'omp') {
+      const ompConfigFile = join(ompAgentDir, 'config.yml')
+      const existingConfig = existsSync(ompConfigFile)
+        ? readFileSync(ompConfigFile, 'utf-8')
+        : ''
+      try {
+        writeFileSync(
+          ompConfigFile,
+          upsertOmpApprovalPolicyYaml(existingConfig, {
+            [PAY_MEDIA_POLICY_KEY]: REQUIRED_POLICY,
+          }),
+          { encoding: 'utf-8', mode: 0o600 }
+        )
+      } catch (err: any) {
+        result.warnings = [
+          ...(result.warnings ?? []),
+          `Could not install omp's in-UI approval policy at ${ompConfigFile}: ${
+            err?.message || err
+          }. Media payments will fall back to \`paytaca approve\`.`,
+        ]
+      }
+    }
+
     const modelsPath = join(ompAgentDir, 'models.json')
     const existingModels = readJson(modelsPath)
 
