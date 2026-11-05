@@ -13,6 +13,7 @@ import {
   formatCostUsd,
   resolveSpendCost,
   formatSpendCost,
+  createSpendCostResolver,
 } from './prices.js'
 
 afterEach(() => {
@@ -92,6 +93,40 @@ describe('resolveSpendCost', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500 }))
     const cost = await resolveSpendCost(100000, undefined, false)
     expect(cost.usd).toBeNull()
+  })
+})
+
+describe('createSpendCostResolver', () => {
+  it('fetches the live rate only once across repeated quotes', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ prices: [{ asset: 'BCH', currency: 'USD', price_value: '50000' }] }),
+    })
+    vi.stubGlobal('fetch', fetchSpy)
+    const resolve = createSpendCostResolver(false)
+    const first = await resolve(100000, undefined)
+    const second = await resolve(200000, undefined)
+    expect(first.usd).toBeCloseTo(50, 10)
+    expect(second.usd).toBeCloseTo(100, 10)
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('never fetches when the backend already quoted USD', async () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const resolve = createSpendCostResolver(false)
+    const cost = await resolve(12345, 0.25)
+    expect(cost.usd).toBe(0.25)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('memoizes a failed lookup instead of retrying', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: false, status: 500 })
+    vi.stubGlobal('fetch', fetchSpy)
+    const resolve = createSpendCostResolver(false)
+    expect((await resolve(100000, undefined)).usd).toBeNull()
+    expect((await resolve(100000, undefined)).usd).toBeNull()
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -327,7 +327,9 @@ Read-only wallets report credits from the shared wallet hash but can't buy plans
 
 **MCP tools:** wallet (`get_balance`, `get_transactions`, `get_receiving_address`, `get_tokens`, `send`) plus Paytaca AI (`get_models`, `get_plans`, `get_credits`, `buy_plan`, `auto_refill`, `await_refill`, `get_help`, `generate_image`, `get_image_status`, `get_image_models`, `get_image_history`).
 
-Spending tools (`send`, `buy_plan`, `auto_refill`, `await_refill`, `generate_image`) require host-level approval. By default MCP operates on your **main wallet** and can spend real funds. `await_refill` never buys outside an already-armed auto-refill configuration.
+Spending tools (`send`, `buy_plan`, `auto_refill`, `await_refill`) require host-level approval. By default MCP operates on your **main wallet** and can spend real funds. `await_refill` never buys outside an already-armed auto-refill configuration.
+
+Media generation (`generate_image`, `generate_video`, `generate_audio`) enforces approval in the server itself: it quotes the order first (no funds move), then asks you through MCP elicitation to approve that exact cost, showing the prompt, model, quoted sats/USD price, and network. The same form lets you pick the recommended model or a cheaper alternative and adjust optional parameters (aspect ratio, resolution, duration, voice, speed). Nothing is charged unless you accept, and a host without elicitation support is refused with the equivalent CLI command to run in a terminal.
 
 When `get_credits` finds a model with no active session (e.g. after a `402` from the Paytaca AI provider), the result includes a `purchaseHint`. Relay `purchaseHint.message` as-is — it carries the exact copy-paste top-up command (no upsell or follow-up questions needed):
 

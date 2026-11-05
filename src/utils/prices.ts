@@ -143,6 +143,36 @@ export interface SpendCost {
   bch: string
 }
 
+export type SpendCostResolver = (
+  amountSats: number,
+  amountUsd?: number
+) => Promise<SpendCost>
+
+/**
+ * Build a spend-cost resolver that looks up the live BCH/USD rate at most once,
+ * so multiple quotes in one approval flow (user changes the form) do not each
+ * pay for a network request.
+ */
+export function createSpendCostResolver(
+  isChipnet: boolean = false
+): SpendCostResolver {
+  let price: Promise<number | null> | undefined
+  const livePrice = () => {
+    if (!price) price = getBchUsdPrice(isChipnet).catch(() => null)
+    return price
+  }
+
+  return async (amountSats, amountUsd) => {
+    let usd: number | null =
+      typeof amountUsd === 'number' && isFinite(amountUsd) ? amountUsd : null
+    if (usd === null) {
+      const bchUsd = await livePrice()
+      if (bchUsd !== null) usd = (amountSats / 1e8) * bchUsd
+    }
+    return { amountSats, usd, bch: formatBch(amountSats) }
+  }
+}
+
 /**
  * Resolve the cost of a sat-priced spend, preferring the backend's USD quote
  * and falling back to the live BCH/USD rate so both USD and BCH are available
@@ -153,17 +183,7 @@ export async function resolveSpendCost(
   amountUsd: number | undefined,
   isChipnet: boolean = false
 ): Promise<SpendCost> {
-  let usd: number | null =
-    typeof amountUsd === 'number' && isFinite(amountUsd) ? amountUsd : null
-  if (usd === null) {
-    try {
-      const price = await getBchUsdPrice(isChipnet)
-      if (price !== null) usd = (amountSats / 1e8) * price
-    } catch {
-      usd = null
-    }
-  }
-  return { amountSats, usd, bch: formatBch(amountSats) }
+  return createSpendCostResolver(isChipnet)(amountSats, amountUsd)
 }
 
 /** Format a resolved spend as "$0.50 (0.00012345 BCH)". */
