@@ -2264,11 +2264,19 @@ describe('MCP tools', () => {
       expect(result.isError).toBe(true)
       expect(text(result)).toMatch(/pay_media/)
       expect(text(result)).toMatch(/pending_id/)
+      expect(text(result)).toMatch(/guided question/i)
+      expect(text(result)).toMatch(/Model options:/)
       expect(result.structuredContent).toMatchObject({
         nextTool: 'pay_media',
         pendingId: 'order-1',
         humanOnly: false,
+        guidedChoice: {
+          pendingId: 'order-1',
+          quote: { model: 'nano-banana' },
+        },
       })
+      const guided = (result.structuredContent as any).guidedChoice
+      expect(guided.parameters.map((p: any) => p.name)).toContain('aspect_ratio')
       expect(mocks.fulfillImageOrder).not.toHaveBeenCalled()
     })
 

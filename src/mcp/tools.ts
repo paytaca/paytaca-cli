@@ -56,6 +56,7 @@ import {
   approveImageGeneration,
   approveVideoGeneration,
 } from './media.js'
+import type { MediaModelOption, MediaParamField } from './approval.js'
 import {
   armAutoRefill,
   autoRefillTickOne,
@@ -463,6 +464,43 @@ function pendingParamsLabel(params: Record<string, string> | undefined): string 
   return shown.length > 0 ? shown.join(' · ') : 'model defaults'
 }
 
+function paramOptionLabel(field: MediaParamField, value: string): string {
+  if (value === 'auto') return 'model default'
+  const index = field.options.indexOf(value)
+  return field.optionLabels?.[index] ?? value
+}
+
+/**
+ * Render the same choices the elicitation form would show, so an agent on a
+ * host without elicitation can ask a short guided question before paying.
+ */
+function guidedChoiceLines(outcome: {
+  models: MediaModelOption[]
+  fields: MediaParamField[]
+  params: Record<string, string>
+}): string[] {
+  const lines: string[] = []
+  if (outcome.models.length > 0) {
+    lines.push('Model options:')
+    outcome.models.forEach((model, index) => {
+      lines.push(
+        `  - ${model.id} — ${model.priceHint}${index === 0 ? ' (recommended)' : ''}`
+      )
+    })
+  }
+  for (const field of outcome.fields) {
+    const current = outcome.params[field.name] ?? field.value
+    const options = field.options.map(
+      (value) =>
+        `${paramOptionLabel(field, value)}${value === current ? ' (current)' : ''}`
+    )
+    lines.push(
+      `${field.label} [current: ${paramOptionLabel(field, current)}]: ${options.join(' | ')}`
+    )
+  }
+  return lines
+}
+
 function spendNotApproved(
   outcome:
     | { status: 'declined'; reason: string }
@@ -473,6 +511,8 @@ function spendNotApproved(
         prompt: string
         model?: string
         params: Record<string, string>
+        models: MediaModelOption[]
+        fields: MediaParamField[]
         summary: { amountSats: number; amountUsd?: number; lines: string[] }
       }
     | { status: 'unavailable'; reason: string; cliCommand: string },
@@ -509,8 +549,11 @@ function spendNotApproved(
               `Details: ${details}`,
               `Cost: ${amount}`,
               '',
-              `This host shows an in-UI Allow/Deny prompt for the ${PAY_MEDIA_TOOL} tool.`,
-              `Call ${PAY_MEDIA_TOOL} now with these exact arguments (copy them unchanged):`,
+              'Before paying, ask the user a short guided question (use the host question/ask UI if it has one). Offer these choices:',
+              ...guidedChoiceLines(outcome),
+              '',
+              `If the user changes the model or any parameter, call generate_${kind} again with those values (still unpaid) and repeat this step.`,
+              `If they keep the current quote, call ${PAY_MEDIA_TOOL} with these exact arguments (copy them unchanged):`,
               JSON.stringify(
                 {
                   pending_id: outcome.id,
@@ -523,9 +566,9 @@ function spendNotApproved(
                 2
               ),
               '',
-              `The prompt shows the model and cost above and moves no funds unless the user`,
-              `clicks Allow. Do not ask for a separate confirmation and do not change the`,
-              `quote. If the user denies, nothing is charged; do not retry unless asked.`,
+              `The host then shows an Allow/Deny prompt with the quoted model, details, and cost.`,
+              `Do not change the quote, and do not call ${PAY_MEDIA_TOOL} if the user changes anything — re-quote first.`,
+              `If the user denies, nothing is charged; do not retry unless asked.`,
             ].join('\n'),
           },
         ],
@@ -538,6 +581,25 @@ function spendNotApproved(
           pendingId: outcome.id,
           amountSats: outcome.summary.amountSats,
           amountUsd: outcome.summary.amountUsd,
+          guidedChoice: {
+            pendingId: outcome.id,
+            quote: {
+              model: modelLabel,
+              details,
+              cost: amount,
+              prompt: outcome.prompt,
+            },
+            models: outcome.models,
+            parameters: outcome.fields.map((field) => ({
+              name: field.name,
+              label: field.label,
+              current: outcome.params[field.name] ?? field.value,
+              options: field.options,
+              ...(field.optionLabels
+                ? { optionLabels: field.optionLabels }
+                : {}),
+            })),
+          },
         },
       }
     }
@@ -772,8 +834,12 @@ Approval for media generation:
   generate_image, generate_video, and generate_audio never pay when the host
   cannot show an approval form. They quote the order (no funds move), store it
   as a pending approval, and return a pendingId. On omp the result points at the
-  pay_media tool: call it with that pendingId, and omp shows the user an
-  Allow/Deny prompt in the agent UI with the model and quoted cost. pay_media is
+  pay_media tool and includes guidedChoice (model alternatives, parameter
+  options, and the exact quoted cost). Present that as a short guided question
+  before paying; if the user changes anything, call generate_* again with the
+  new values (still unpaid) and repeat. When they keep the quote, call
+  pay_media with the exact pendingId/model/details/cost/prompt, and omp shows
+  the user an Allow/Deny prompt in the agent UI. pay_media is
   the only tool that pays, it pays the stored quote, and its model/details/cost/prompt
   arguments must match that quote exactly (the server refuses otherwise, so a
   mismatched approval can never pay a different price), and the server verifies the omp approval
@@ -1643,7 +1709,7 @@ export function registerTools(
     {
       title: 'Generate an image',
       description:
-        'Generate an image from a text prompt with a Paytaca AI image model. Optionally pass input_references (image URLs) to edit, remix, or compose from existing images. This call never spends on a host without MCP elicitation: it creates an unpaid quote and returns a pendingId plus nextTool="pay_media". Call pay_media with that id; the host then shows the user an in-UI Allow/Deny prompt with the model and exact cost, and only pay_media can move funds. Hosts that support elicitation get the rich approval form here, including the quoted cost and model/parameter choices; nothing is charged unless the user accepts (declining returns canceled=true). If no in-UI gate is available, the result tells the user to run `paytaca approve <pending_id>` in their terminal. Returns metadata only (no image bytes); download the image from the command line with `paytaca ai image status <order_id>`.',
+        'Generate an image from a text prompt with a Paytaca AI image model. Optionally pass input_references (image URLs) to edit, remix, or compose from existing images. This call never spends on a host without MCP elicitation: it creates an unpaid quote and returns a pendingId, nextTool="pay_media", and a guidedChoice (model alternatives, parameter options, and exact cost). Present that as a short guided question first; if the user changes anything, call this tool again with the new model/parameters (still unpaid) and repeat. When they keep the quote, call pay_media with the exact arguments; the host then shows the user an in-UI Allow/Deny prompt with the model, details, and cost, and only pay_media can move funds. Hosts that support elicitation get the rich approval form here, including the quoted cost and model/parameter choices; nothing is charged unless the user accepts (declining returns canceled=true). If no in-UI gate is available, the result tells the user to run `paytaca approve <pending_id>` in their terminal. Returns metadata only (no image bytes); download the image from the command line with `paytaca ai image status <order_id>`.',
       inputSchema: {
         prompt: z.string().min(1),
         model: z.string().optional(),
@@ -1872,7 +1938,7 @@ export function registerTools(
     {
       title: 'Generate a video',
       description:
-        'Generate a video from a text prompt with a Paytaca AI video model. Optionally pass input_references (reference/keyframe images) to guide the result. This call never spends on a host without MCP elicitation: it creates an unpaid quote and returns a pendingId plus nextTool="pay_media". Call pay_media with that id; the host then shows the user an in-UI Allow/Deny prompt with the model and exact cost, and only pay_media can move funds. Hosts that support elicitation get the rich approval form here, including the quoted cost and model/parameter choices; nothing is charged unless the user accepts (declining returns canceled=true). If no in-UI gate is available, the result tells the user to run `paytaca approve <pending_id>` in their terminal. Returns metadata only (no video bytes); download the video from the command line with `paytaca ai video status <order_id>`.',
+        'Generate a video from a text prompt with a Paytaca AI video model. Optionally pass input_references (reference/keyframe images) to guide the result. This call never spends on a host without MCP elicitation: it creates an unpaid quote and returns a pendingId, nextTool="pay_media", and a guidedChoice (model alternatives, parameter options, and exact cost). Present that as a short guided question first; if the user changes anything, call this tool again with the new model/parameters (still unpaid) and repeat. When they keep the quote, call pay_media with the exact arguments; the host then shows the user an in-UI Allow/Deny prompt with the model, details, and cost, and only pay_media can move funds. Hosts that support elicitation get the rich approval form here, including the quoted cost and model/parameter choices; nothing is charged unless the user accepts (declining returns canceled=true). If no in-UI gate is available, the result tells the user to run `paytaca approve <pending_id>` in their terminal. Returns metadata only (no video bytes); download the video from the command line with `paytaca ai video status <order_id>`.',
       inputSchema: {
         prompt: z.string().min(1),
         model: z.string().optional(),
@@ -2123,7 +2189,7 @@ export function registerTools(
     {
       title: 'Generate speech from text',
       description:
-        'Generate speech from a text prompt with a Paytaca AI audio (text-to-speech) model. This call never spends on a host without MCP elicitation: it creates an unpaid quote and returns a pendingId plus nextTool="pay_media". Call pay_media with that id; the host then shows the user an in-UI Allow/Deny prompt with the model and exact cost, and only pay_media can move funds. Hosts that support elicitation get the rich approval form here, including the quoted cost and model/parameter choices; nothing is charged unless the user accepts (declining returns canceled=true). If no in-UI gate is available, the result tells the user to run `paytaca approve <pending_id>` in their terminal. Returns metadata only (no audio bytes); download the audio from the command line with `paytaca ai audio status <order_id>`.',
+        'Generate speech from a text prompt with a Paytaca AI audio (text-to-speech) model. This call never spends on a host without MCP elicitation: it creates an unpaid quote and returns a pendingId, nextTool="pay_media", and a guidedChoice (model alternatives, parameter options, and exact cost). Present that as a short guided question first; if the user changes anything, call this tool again with the new model/parameters (still unpaid) and repeat. When they keep the quote, call pay_media with the exact arguments; the host then shows the user an in-UI Allow/Deny prompt with the model, details, and cost, and only pay_media can move funds. Hosts that support elicitation get the rich approval form here, including the quoted cost and model/parameter choices; nothing is charged unless the user accepts (declining returns canceled=true). If no in-UI gate is available, the result tells the user to run `paytaca approve <pending_id>` in their terminal. Returns metadata only (no audio bytes); download the audio from the command line with `paytaca ai audio status <order_id>`.',
       inputSchema: {
         prompt: z.string().min(1),
         model: z.string().optional(),
@@ -2221,7 +2287,7 @@ export function registerTools(
     {
       title: 'Pay for a quoted media generation',
       description:
-        'Pay for and start a media generation that generate_image, generate_video, or generate_audio already quoted. THIS SPENDS REAL BCH FROM THE ACTIVE WALLET. The quote is stored server-side and this call pays that exact stored quote; the model, details, cost, and prompt arguments must match the stored quote exactly and cannot change the price. Call it only when a generate_* result returns nextTool="pay_media" and a pendingId. The host must show the user an in-UI Allow/Deny prompt for this tool (omp does when tools.approval.mcp__paytaca_pay_media is "prompt"); the server verifies that policy before paying. If the gate cannot be verified, nothing is charged and the result tells the user to run `paytaca approve <pending_id>` in their terminal. Returns metadata only (no media bytes); download with `paytaca ai <kind> status <order_id>`.',
+        'Pay for and start a media generation that generate_image, generate_video, or generate_audio already quoted. THIS SPENDS REAL BCH FROM THE ACTIVE WALLET. The quote is stored server-side and this call pays that exact stored quote; the model, details, cost, and prompt arguments must match the stored quote exactly and cannot change the price. Call it only after presenting the generate_* guidedChoice (or the host elicitation form) and the user keeps that quote. The host must show the user an in-UI Allow/Deny prompt for this tool (omp does when tools.approval.mcp__paytaca_pay_media is "prompt"); the server verifies that policy before paying. If the gate cannot be verified, nothing is charged and the result tells the user to run `paytaca approve <pending_id>` in their terminal. Returns metadata only (no media bytes); download with `paytaca ai <kind> status <order_id>`.',
       inputSchema: {
         pending_id: z
           .string()

@@ -77,6 +77,9 @@ export type MediaSpendOutcome<Q> =
       prompt: string
       model?: string
       params: Record<string, string>
+      /** Model alternatives and parameter options for a guided pre-payment Q&A. */
+      models: MediaModelOption[]
+      fields: MediaParamField[]
     }
   | { status: 'declined'; reason: string }
   | { status: 'unavailable'; reason: string; cliCommand: string }
@@ -212,6 +215,8 @@ export async function confirmMediaSpend<Q>(
         prompt: request.prompt,
         model: selection.modelId === 'default' ? undefined : selection.modelId,
         params: selection.params,
+        models: request.models,
+        fields: request.paramFields(selection),
       }
     } catch (err: any) {
       return {
@@ -285,6 +290,8 @@ export async function confirmMediaSpend<Q>(
             prompt: request.prompt,
             model: selection.modelId === 'default' ? undefined : selection.modelId,
             params: selection.params,
+            models: request.models,
+            fields: request.paramFields(selection),
           }
         } catch {
           // Fall through to the unavailable outcome below.
