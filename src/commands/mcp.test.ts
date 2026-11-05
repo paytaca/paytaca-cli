@@ -5,7 +5,17 @@ import { CLIENTS, buildTemplate } from './mcp.js'
 
 describe('mcp config templates', () => {
   it('exposes every supported client', () => {
-    expect(CLIENTS).toEqual(['opencode', 'pi', 'omp'])
+    expect(CLIENTS).toEqual(['opencode', 'pi', 'omp', 'claude', 'codex'])
+  })
+
+  it('claude writes mcpServers to ~/.claude.json', () => {
+    const template = buildTemplate('claude', false)
+    expect(template.format).toBe('json')
+    expect(template.path).toBe(join(homedir(), '.claude.json'))
+    expect(template.json).toEqual({
+      mcpServers: { paytaca: { command: 'paytaca', args: ['mcp'] } },
+    })
+    expect(template.instructions).toMatch(/mcp add/)
   })
 
   it('opencode uses the local mcp block with an array command', () => {
@@ -46,6 +56,16 @@ describe('mcp config templates', () => {
     expect(template.json).toMatchObject({
       mcp: { paytaca: { command: ['paytaca', 'mcp', '--chipnet'] } },
     })
+  })
+
+  it('codex writes a TOML mcp_servers block to ~/.codex/config.toml', () => {
+    const template = buildTemplate('codex', false)
+    expect(template.format).toBe('toml')
+    expect(template.path).toBe(join(homedir(), '.codex', 'config.toml'))
+    expect(template.snippet).toBe(
+      ['[mcp_servers.paytaca]', 'command = "paytaca"', 'args = ["mcp"]'].join('\n')
+    )
+    expect(template.instructions).toMatch(/config\.toml/)
   })
 
   it('opencode v2 nests the server under mcp.servers without enabled', () => {

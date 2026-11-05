@@ -13,11 +13,14 @@ import { loadWalletRef } from '../wallet/index.js'
 import { formatSats, bchToSats } from '../utils/format.js'
 import { formatUsd, resolveSpendCost, formatSpendCost } from '../utils/prices.js'
 import {
+  AiApiError,
+  getApiKeyWalletStatus,
   getConfig,
   getWalletStatus,
   type AiConfig,
   type AiModelConfig,
   type PriceTier,
+  type WalletStatus,
 } from '../ai/client.js'
 import { resolveBackendUrl } from '../ai/config.js'
 import {
@@ -65,7 +68,31 @@ import {
   type AudioOrderQuote,
 } from '../ai/audio.js'
 import { provisionApiKey } from '../ai/oauth.js'
-import { configureHarness, type ConfigureResult } from '../ai/configure.js'
+import {
+  OPENCODE_PROVIDER_ID,
+  buildCreditStatusLines,
+  configureHarness,
+  extractClaudeBaseUrl,
+  harnessConfigParseError,
+  readCodexBaseUrl,
+  readClaudeSettings,
+  readHarnessApiKey,
+  readHarnessReasoningConfig,
+  readOpencodeMajor,
+  shouldClearOpencodeCredentials,
+  staleOpencodeCredentialIdsFromCli,
+  type ConfigureResult,
+} from '../ai/configure.js'
+import { isProxyRunning, proxyBaseUrl, resolveProxyPort } from '../ai/anthropicProxy.js'
+import {
+  buildDoctorChecks,
+  fixableChecks,
+  summarizeDoctor,
+  type DoctorCheck,
+  type DoctorContext,
+  type DoctorStatus,
+} from '../ai/doctor.js'
+import { compareKeyWalletIdentity, type KeyIdentity } from '../ai/identity.js'
 import { CLIENTS, type McpClient } from './mcp.js'
 import {
   armAutoRefill,
@@ -85,6 +112,28 @@ import { createRefillTickDeps } from '../mcp/tools.js'
 
 function collectRepeatable(value: string, previous: string[] = []): string[] {
   return previous.concat(value)
+}
+
+function doctorIcon(status: DoctorStatus): string {
+  switch (status) {
+    case 'ok':
+      return chalk.green('✓')
+    case 'warn':
+      return chalk.yellow('!')
+    case 'fail':
+      return chalk.red('✗')
+    default:
+      return chalk.dim('•')
+  }
+}
+
+function printDoctorChecks(checks: DoctorCheck[]): void {
+  for (const check of checks) {
+    console.log(
+      `   ${doctorIcon(check.status)} ${chalk.bold(check.label)} — ${check.detail}`
+    )
+    if (check.fix) console.log(chalk.dim(`       → ${check.fix}`))
+  }
 }
 
 function formatTickResult(tick: RefillTickResult): string {
@@ -247,13 +296,15 @@ export function registerAiCommands(program: Command): void {
       console.log(
         `   MCP:      ${result.mcpInstalled ? chalk.green('configured') : chalk.red('failed')}`
       )
-      if (result.harness === 'opencode' || result.harness === 'pi' || result.harness === 'omp') {
+      if (CLIENTS.includes(result.harness)) {
         if (result.providerInstalled) {
-          const how = result.apiKeyReused
-            ? 'existing API key'
-            : result.apiKeyProvided
-              ? 'provided API key'
-              : 'new API key'
+          const how = result.apiKeyReplaced
+            ? 'replaced API key'
+            : result.apiKeyReused
+              ? 'existing API key'
+              : result.apiKeyProvided
+                ? 'provided API key'
+                : 'new API key'
           const suffix = result.apiKeyPrefix ? `, ${result.apiKeyPrefix}…` : ''
           console.log(
             `   Provider: ${chalk.green('configured')} ${chalk.dim(`(${how}${suffix})`)}`
@@ -271,24 +322,24 @@ export function registerAiCommands(program: Command): void {
         console.log(chalk.yellow(`   Warning: ${warning}`))
       }
 
-      if (result.creditsActive) {
-        console.log(chalk.green('\n   AI credits active — ready to use.'))
-      } else if (!result.canSign) {
-        console.log(chalk.yellow('\n   No active AI credits.'))
-        if (result.planSuggestion) {
-          console.log(
-            chalk.dim(
-              `   Fund from your full wallet: paytaca ai purchase --model ${result.planSuggestion.modelId} --minutes ${result.planSuggestion.minutes}`
-            )
-          )
-        }
-      } else if (result.planSuggestion) {
-        console.log(chalk.yellow('\n   No active AI credits.'))
+      console.log('')
+      for (const line of buildCreditStatusLines(result)) {
+        const paint =
+          line.tone === 'success' ? chalk.green : line.tone === 'warning' ? chalk.yellow : chalk.dim
+        console.log(paint(`   ${line.text}`))
+      }
+
+      if (
+        (result.harness === 'claude' || result.harness === 'codex') &&
+        result.providerInstalled
+      ) {
         console.log(
           chalk.dim(
-            `   Buy a plan: paytaca ai purchase --model ${result.planSuggestion.modelId} --minutes ${result.planSuggestion.minutes}`
+            `\n   ${result.harness === 'codex' ? 'Codex' : 'Claude Code'} reaches Paytaca models through a local gateway:`
           )
         )
+        console.log(chalk.dim('      paytaca mcp --proxy     # start the gateway'))
+        console.log(chalk.dim('      paytaca mcp --stop      # stop it'))
       }
 
       if (result.harness === 'pi') {
@@ -303,6 +354,263 @@ export function registerAiCommands(program: Command): void {
         console.log(chalk.dim('\n   Restart your AI harness to load the new configuration.\n'))
       }
       if (!result.mcpInstalled) process.exitCode = 1
+    })
+
+  // ── ai doctor ───────────────────────────────────────────────────────
+  ai.command('doctor')
+    .description('Diagnose why a Paytaca AI model fails in a harness (e.g. 402 errors)')
+    .argument('[harness]', `Target harness: ${CLIENTS.join(', ')}`, 'opencode')
+    .option('--model <id>', 'Check a specific model id')
+    .option('--path <path>', 'Override the harness config file path')
+    .option('--backend <url>', 'Override backend URL')
+    .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
+    .option('--api-key <key>', 'API key to install when fixing (for read-only wallets)')
+    .option('--fix', 'Apply fixes for the config/credential issues found')
+    .option('--json', 'Output as JSON')
+    .action(async (harnessArg: string | undefined, opts) => {
+      const harness = String(harnessArg || 'opencode').toLowerCase() as McpClient
+      const json = Boolean(opts.json)
+
+      if (!CLIENTS.includes(harness)) {
+        const message = `Unknown harness "${harness}". Use one of: ${CLIENTS.join(', ')}.`
+        if (json) outputJson({ error: message })
+        else console.log(chalk.red(`\nError: ${message}\n`))
+        process.exitCode = 1
+        return
+      }
+
+      const backendUrl = resolveBackendUrl(opts.backend)
+      const wallet = loadWalletRef()
+
+      const gather = async () => {
+        const { path: configPath, apiKey } = readHarnessApiKey(harness, { path: opts.path })
+        const apiKeyPrefix = apiKey ? apiKey.slice(0, 12) : null
+
+        let catalogue: AiConfig | null = null
+        let catalogueError: string | undefined
+        try {
+          catalogue = await getConfig({ backendUrl })
+        } catch (err: any) {
+          catalogueError = err?.message || String(err)
+        }
+
+        let harnessReasoning: ReturnType<typeof readHarnessReasoningConfig> = null
+        if (harness !== 'claude') {
+          try {
+            harnessReasoning = readHarnessReasoningConfig(harness, { path: opts.path })
+          } catch {
+            harnessReasoning = null
+          }
+        }
+
+        let configError: string | undefined
+        try {
+          configError = harnessConfigParseError(harness, { path: opts.path }) ?? undefined
+        } catch {
+          configError = undefined
+        }
+
+        let walletStatus: WalletStatus | null = null
+        let walletStatusError: string | undefined
+        if (wallet) {
+          try {
+            walletStatus = await getWalletStatus(wallet.walletHash, { backendUrl })
+          } catch (err: any) {
+            walletStatusError = err?.message || String(err)
+          }
+        }
+
+        let keyIdentity: KeyIdentity = 'unknown'
+        if (apiKey) {
+          try {
+            const keyStatus = await getApiKeyWalletStatus(apiKey, { backendUrl })
+            if (walletStatus) keyIdentity = compareKeyWalletIdentity(walletStatus, keyStatus)
+          } catch (err: any) {
+            if (err instanceof AiApiError && err.status === 401) keyIdentity = 'invalid'
+          }
+        }
+
+        let staleCredentials = 0
+        if (harness === 'opencode' && apiKey) {
+          if (shouldClearOpencodeCredentials(readOpencodeMajor({ path: opts.path }))) {
+            try {
+              staleCredentials = staleOpencodeCredentialIdsFromCli(
+                OPENCODE_PROVIDER_ID,
+                apiKey
+              ).length
+            } catch {
+              staleCredentials = 0
+            }
+          }
+        }
+
+        let gatewayRunning: boolean | undefined
+        let gatewayUrl: string | undefined
+        if (harness === 'claude') {
+          const settings = readClaudeSettings(configPath)
+          const port = resolveProxyPort()
+          gatewayUrl = extractClaudeBaseUrl(settings) ?? proxyBaseUrl(port)
+          // Probe the port the harness actually points at, not just the
+          // default: a stale settings URL is a common "gateway is running but
+          // Claude Code still fails" cause.
+          let probePort = port
+          try {
+            const parsed = gatewayUrl ? new URL(gatewayUrl) : null
+            if (parsed?.port) probePort = Number(parsed.port)
+          } catch {
+            probePort = port
+          }
+          gatewayRunning = await isProxyRunning(probePort)
+        } else if (harness === 'codex') {
+          const port = resolveProxyPort()
+          gatewayUrl = (configPath ? readCodexBaseUrl(configPath) : null) ?? proxyBaseUrl(port)
+          let probePort = port
+          try {
+            const parsed = gatewayUrl ? new URL(gatewayUrl) : null
+            if (parsed?.port) probePort = Number(parsed.port)
+          } catch {
+            probePort = port
+          }
+          gatewayRunning = await isProxyRunning(probePort)
+        }
+
+        const ctx: DoctorContext = {
+          walletConfigured: Boolean(wallet),
+          walletCanSign: Boolean(wallet?.canSign),
+          harness,
+          modelId: opts.model,
+          walletStatus,
+          walletStatusError,
+          apiKey,
+          apiKeyPrefix,
+          keyIdentity,
+          staleCredentials,
+          gatewayRunning,
+          gatewayUrl,
+          backendUrl,
+          catalogue,
+          catalogueError,
+          configError,
+          harnessReasoning,
+        }
+        return { ctx, configPath }
+      }
+
+      const before = await gather()
+      const beforeChecks = buildDoctorChecks(before.ctx)
+
+      let ctx = before.ctx
+      let configPath = before.configPath
+      let checks = beforeChecks
+      let status = summarizeDoctor(beforeChecks)
+
+      let fixApplied = false
+      let fixSummary = ''
+      let fixError: string | undefined
+      let configure: ConfigureResult | undefined
+
+      if (opts.fix) {
+        const fixable = fixableChecks(beforeChecks)
+        if (!wallet) {
+          fixSummary = 'No wallet configured — run `paytaca wallet create` (or import) first.'
+        } else if (fixable.length === 0) {
+          fixSummary = 'No auto-fixable issues found.'
+        } else {
+          const interactive =
+            !json && Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY)
+          const requestApiKey = async (): Promise<string | null> => {
+            console.log(chalk.yellow('\n   This wallet is read-only; an API key is required.'))
+            console.log(
+              chalk.dim('   Create one from your full wallet: paytaca ai api-key create')
+            )
+            const entered = await promptSecret('Paste your Paytaca API key')
+            return entered.trim() || null
+          }
+          try {
+            configure = await configureHarness({
+              harness,
+              chipnet: Boolean(opts.chipnet),
+              backendUrl: opts.backend,
+              path: opts.path,
+              apiKey: opts.apiKey,
+              requestApiKey: interactive ? requestApiKey : undefined,
+            })
+            fixApplied = true
+            fixSummary = `Applied: ${fixable.map((c) => c.label).join(', ')}`
+            const after = await gather()
+            ctx = after.ctx
+            configPath = after.configPath
+            checks = buildDoctorChecks(after.ctx)
+            status = summarizeDoctor(checks)
+          } catch (err: any) {
+            fixError = err?.message || String(err)
+            fixSummary = 'Fix failed.'
+          }
+        }
+      }
+
+      if (json) {
+        outputJson({
+          harness,
+          configPath,
+          walletHash: wallet?.walletHash,
+          apiKeyPrefix: ctx.apiKeyPrefix,
+          status,
+          checks,
+          ...(opts.fix
+            ? {
+                fix: {
+                  applied: fixApplied,
+                  summary: fixSummary,
+                  ...(fixError ? { error: fixError } : {}),
+                  ...(configure?.apiKeyReplaced ? { apiKeyReplaced: true } : {}),
+                  ...(configure?.apiKeyPrefix ? { apiKeyPrefix: configure.apiKeyPrefix } : {}),
+                  warnings: configure?.warnings ?? [],
+                },
+              }
+            : {}),
+        })
+        if (status === 'fail') process.exitCode = 1
+        return
+      }
+
+      console.log(chalk.bold(`\n   Paytaca AI doctor — ${harness}\n`))
+      if (configPath) console.log(chalk.dim(`   Config: ${configPath}`))
+      console.log('')
+      if (opts.fix) console.log(chalk.bold('   Before'))
+      printDoctorChecks(beforeChecks)
+
+      if (opts.fix) {
+        console.log('')
+        console.log(chalk.bold('   Fixing'))
+        if (fixApplied) {
+          console.log(`   ${chalk.green('✓')} ${fixSummary}`)
+          if (configure?.apiKeyPrefix) {
+            console.log(chalk.dim(`       API key: ${configure.apiKeyPrefix}…`))
+          }
+          for (const warning of configure?.warnings || []) {
+            console.log(chalk.yellow(`   Warning: ${warning}`))
+          }
+          console.log('')
+          console.log(chalk.bold('   After'))
+          printDoctorChecks(checks)
+        } else {
+          console.log(`   ${chalk.yellow('!')} ${fixSummary}`)
+          if (fixError) console.log(chalk.red(`   Error: ${fixError}`))
+        }
+      }
+
+      console.log('')
+      if (status === 'ok') {
+        console.log(chalk.green('   All checks passed.\n'))
+      } else if (status === 'warn') {
+        console.log(chalk.yellow('   Warnings found — see the fixes above.\n'))
+      } else {
+        console.log(
+          chalk.red('   Problems found — apply the fixes above, then restart your harness.\n')
+        )
+        process.exitCode = 1
+      }
     })
 
   // ── ai api-key ──────────────────────────────────────────────────────
@@ -339,14 +647,21 @@ export function registerAiCommands(program: Command): void {
           backendUrl: opts.backend,
           name: opts.name,
         })
+        const providerUrl = `${resolveBackendUrl(opts.backend)}/v1`
         if (opts.json) {
-          outputJson(created)
+          outputJson({ ...created, providerUrl })
           return
         }
         console.log(chalk.bold('\n   Paytaca AI API key created\n'))
-        console.log(`   Name:    ${created.name}`)
-        console.log(`   Prefix:  ${created.keyPrefix}`)
-        console.log(`   API key: ${chalk.bold(created.key)}`)
+        console.log(`   Name:     ${created.name}`)
+        console.log(`   Prefix:   ${created.keyPrefix}`)
+        console.log(`   API key:  ${chalk.bold(created.key)}`)
+        console.log(`   Provider: ${chalk.bold(providerUrl)}`)
+        console.log(
+          chalk.dim(
+            '             OpenAI-compatible base URL for other agents (Cursor, Cline, scripts).'
+          )
+        )
         console.log(chalk.yellow('\n   Copy this key now — it will not be shown again.'))
         console.log(
           chalk.dim(

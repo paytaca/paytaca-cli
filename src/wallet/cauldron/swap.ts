@@ -159,7 +159,7 @@ export async function estimateSwap(
   const bchAmount = isBuyingToken
     ? tradeResult.summary.supply
     : tradeResult.summary.demand
-  const decimals = tokenData.bcmr.token.decimals
+  const decimals = tokenData.bcmr?.token?.decimals ?? 0
 
   // Platform fee: only when enabled + live price available (no fee otherwise)
   let platformFee: PlatformFee | null = null
@@ -223,8 +223,8 @@ export async function estimateTokenNeededForBch(opts: {
 
   return {
     tokenAmount: tradeResult.summary.supply,
-    decimals: tokenData.bcmr.token.decimals,
-    symbol: tokenData.bcmr.token.symbol || tokenData.display_symbol,
+    decimals: tokenData.bcmr?.token?.decimals ?? 0,
+    symbol: tokenData.bcmr?.token?.symbol || tokenData.display_symbol,
   }
 }
 
@@ -233,8 +233,8 @@ export async function estimateTokenNeededForBch(opts: {
  */
 export function formatQuote(quote: SwapQuote): string {
   const { tokenData, direction, rate, tokenAmount, bchAmount, tradeFee } = quote
-  const decimals = tokenData.bcmr.token.decimals
-  const tokenSymbol = tokenData.bcmr.token.symbol || tokenData.display_symbol
+  const decimals = tokenData.bcmr?.token?.decimals ?? 0
+  const tokenSymbol = tokenData.bcmr?.token?.symbol || tokenData.display_symbol
 
   const tokenFormatted = (Number(tokenAmount) / 10 ** decimals).toFixed(decimals)
   const bchFormatted = (Number(bchAmount) / 10 ** 8).toFixed(8)

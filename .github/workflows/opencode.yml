@@ -47,5 +47,5 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          model: opencode/kimi-k2.6
+          model: opencode/minimax-m3
           use_github_token: true

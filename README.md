@@ -175,6 +175,7 @@ Paytaca AI is a pay-as-you-go model gateway paid with BCH or LIFT via x402. Mana
 
 ```bash
 paytaca ai configure [harness]      # Install MCP + AI provider (opencode is the default)
+paytaca ai doctor [harness]        # Diagnose why a model fails in a harness (402 / Invalid API key)
 paytaca ai api-key create           # Create a wallet-bound API key (shown once)
 paytaca ai models                   # List available models
 paytaca ai plans [model]            # Plan pricing, optionally for a single model
@@ -187,7 +188,20 @@ paytaca ai auto-refill --enable --model <id> --minutes <n> --max-minutes <n>
 paytaca ai auto-refill --status     # Inspect; also --disable, --delete
 ```
 
-`ai configure` only writes configuration; buy credits separately with `paytaca ai purchase`. It accepts `--backend`, `--path`, `--api-key`, and `--chipnet`. `ai purchase` and `ai auto-refill` accept `--lift` to pay with LIFT tokens at a discount. Add `--json` to any `ai` subcommand for machine-readable output.
+`ai configure` only writes configuration; fund usage separately with either a time plan (`paytaca ai purchase`) or a prepaid pay-as-you-go balance (`paytaca ai topup`) — the two are independent, and either one alone is enough to use a model. It accepts `--backend`, `--path`, `--api-key`, and `--chipnet`. `ai purchase` and `ai auto-refill` accept `--lift` to pay with LIFT tokens at a discount. Add `--json` to any `ai` subcommand for machine-readable output.
+
+If a model fails inside a harness — most commonly a `402` (`PAYMENT-SIGNATURE header is required`) or `Invalid API key` — run the doctor:
+
+```bash
+paytaca ai doctor opencode                    # Harness defaults to opencode
+paytaca ai doctor opencode --model <id>       # Also check a specific model
+paytaca ai doctor opencode --fix              # Diagnose, then repair credential issues
+paytaca ai doctor opencode --json             # Machine-readable report
+```
+
+`ai doctor` compares the credits the *active wallet* holds (`paytaca ai credits`) with the wallet the *configured API key* resolves to, and flags the common causes: an unreachable backend, no wallet, no API key, an invalid key, a key left over from a different wallet, a harness config that cannot be parsed, stale OpenCode stored credentials, a stopped local gateway (Claude Code or Codex), a model that is not in the catalogue, an effort menu that predates reasoning support, and a model with no plan or pay-as-you-go balance. An API key resolves to the wallet that minted it, so a `402` while `ai credits` shows a plan almost always means the harness is using a key for a different wallet — `ai configure` now detects this and mints a fresh wallet-bound key automatically.
+
+Add `--fix` to repair the config/credential problems it finds: it re-runs `ai configure` (installing a missing key, replacing an invalid or wallet-mismatched key, clearing stale OpenCode credentials, and refreshing an out-of-date reasoning menu), then re-checks and prints a before/after report. It only ever fixes credential/config state — anything that spends money (buying a plan or topping up) or needs a human (creating or importing a wallet) is still only suggested. For a read-only wallet, pass `--api-key <key>` so the fix has a key to install; otherwise it prompts (interactive) or leaves the issue in place. `--fix` also accepts `--backend`, `--path`, and `--chipnet`.
 
 Armed auto-refill state lives at `~/.paytaca/auto-refill.json`. Arming performs one immediate check (buying right away if the armed model has no credits), and the `paytaca mcp` server keeps a background backstop (every 60s) while a session is running. The backstop refills **proactively** — once the armed model's remaining time drops to ~2 minutes it buys the next plan, so a session isn't interrupted by a mid-turn `402`. The `get_credits` MCP tool is read-only and never triggers a purchase; when auto-refill is armed it adds a `resumeHint` pointing at the `await_refill` tool, which waits for the refill to land and then lets the task continue automatically (it only ever buys through the already-armed configuration). Each execution is appended to `~/.paytaca/auto-refill-events.jsonl` and the latest is reported as `lastEvent`. It disarms when the budget is spent, funds are short, or the plan is no longer offered. Use `--disable` to pause and `--delete` to remove the configuration (history is kept).
 
@@ -235,17 +249,70 @@ Video generation follows the same two-phase flow as images: an order is created 
 Configure an AI harness in one step. This installs the Paytaca MCP server and the Paytaca AI provider (model catalogue + API key) so the Paytaca AI models are usable immediately:
 
 ```bash
-paytaca ai configure opencode   # opencode | pi | omp
+paytaca ai configure opencode   # opencode | pi | omp | claude | codex
 ```
 
 The command creates a wallet-bound API key against the Paytaca AI backend and writes the provider (base URL, models, key) and MCP server into the harness config. For omp it updates `models.yml` when that file exists (omp prefers it over `models.json`). It does not buy credits; use `paytaca ai purchase` for that.
 
-Re-running is idempotent: an existing provider API key is reused. Then run the server over stdio:
+Re-running is idempotent: an existing provider API key is reused. Before reusing it, `ai configure` checks that the key still resolves to the active wallet; if it is invalid or belongs to a different wallet (the usual cause of a harness `402` even though `ai credits` shows a plan), a fresh wallet-bound key is minted and written in its place. An explicit `--api-key` always wins over the stored key. Then run the server over stdio:
 
 ```bash
 paytaca mcp              # mainnet
 paytaca mcp --chipnet    # default MCP tools to chipnet (testnet)
 ```
+
+#### Claude Code
+
+Claude Code speaks Anthropic's `/v1/messages` API, which the Paytaca AI backend does not serve. `ai configure claude` therefore also installs a small local gateway that translates Anthropic requests into the backend's OpenAI-style `/v1/chat/completions`, streaming the reply back as Anthropic SSE events. Tool use is translated in both directions, so Claude Code's own tools work normally.
+
+```bash
+paytaca ai configure claude      # ~/.claude.json (MCP) + ~/.claude/settings.json (model, env)
+paytaca mcp --proxy              # run the gateway in the foreground
+paytaca mcp --proxy --port 7475  # pick a port (default 7475)
+paytaca mcp --stop               # stop the background gateway
+```
+
+`ai configure claude` starts the gateway in the background and records its pidfile at `~/.paytaca/anthropic-proxy.json`. The gateway must be running for Claude Code to reach Paytaca models — restart it with `paytaca mcp --proxy` after a reboot, or re-run `ai configure claude`, which reuses an already-listening gateway. `paytaca ai doctor claude` reports whether it is up.
+
+The gateway holds no secrets of its own: it forwards the `ANTHROPIC_AUTH_TOKEN` that Claude Code sends on each request, so the only copy of your key lives in `~/.claude/settings.json`.
+
+#### Codex
+
+Codex speaks the OpenAI Responses API (`/v1/responses`), which the backend does not serve. The same local gateway handles it: `ai configure codex` writes a Responses→chat translation route and points Codex at it, so both Claude Code and Codex can share one gateway process on port 7475.
+
+```bash
+paytaca ai configure codex       # ~/.codex/config.toml (provider, model, MCP)
+paytaca mcp --proxy              # run the gateway in the foreground
+```
+
+Because Codex removed `wire_api = "chat"`, the provider is written with `wire_api = "responses"` and a literal bearer header. Paytaca models are not in Codex's bundled catalogue, so configure also clones its bundled entry into `~/.codex/paytaca-models.json` with the Paytaca model ids, effort levels, and the cost-safe context window. Codex reads that file through `model_catalog_json`, which is what makes the models appear in its picker with a working effort menu. If the bundled catalogue cannot be read, the provider still works but Codex will not list the models until Codex is updated and configure is re-run. `paytaca ai doctor codex` reports whether the gateway and catalogue are in place.
+
+**Switching models.** All Paytaca models are selectable from the `/model` picker, listed under their display names (MiMo V2.6 Flash, DeepSeek V4 Pro, GLM 5.3, Kimi K3, …) with their id and `- via Paytaca AI` as the description, e.g. `xiaomi/mimo-v2.6-flash - via Paytaca AI`. The gateway serves them under `paytaca-claude-…` aliases because Claude Code's gateway discovery silently discards any model id that doesn't contain `claude` or `anthropic`. `claude` sits mid-string on purpose: Claude Code ignores `CLAUDE_CODE_MAX_CONTEXT_TOKENS` for ids that start with `claude-`, so a `claude-…` prefix would make it assume a 200k window. You can also pass an alias directly:
+
+```bash
+claude --model paytaca-claude-deepseek-deepseek-v4-pro
+```
+
+The aliases are derived from the model ids, so `z-ai/glm-5.3` becomes `paytaca-claude-z-ai-glm-5-3`. The alias list is cached by Claude Code in `~/.claude/cache/gateway-models.json` and refreshed on each start.
+
+**Reasoning effort.** The thinking/effort setting works in every supported harness, not just Claude Code. Each one expresses it differently, and `ai configure` writes the capability its own format expects:
+
+| Harness | How effort is declared | How it is sent |
+| --- | --- | --- |
+| Claude Code | gateway picks it up automatically | `thinking` + `output_config.effort` translated to `reasoning.effort` |
+| Codex | `supported_reasoning_levels` in the generated model catalogue | `reasoning.effort` in the Responses request |
+| opencode | `capabilities.reasoning` with `effort` + `toggle` (v2) or `reasoning: true` (v1) | `reasoning_effort` |
+| pi / omp | `thinking: { mode: 'effort', efforts: [...] }` | `reasoning_effort` |
+
+Which levels you can pick depends on the model, so the menus come from the backend catalogue rather than a fixed list: GLM 5.3 accepts `max, high, low` and always reasons, DeepSeek V4 Pro accepts `xhigh, high, none`, and MiMo V2.6 Flash exposes no effort control at all (the setting is hidden rather than shown and ignored).
+
+`ai configure` only advertises levels a model actually accepts. Requests are normalised server-side as a safety net — an unsupported level is mapped to the nearest one the model does take, and `none` is dropped for models that cannot switch reasoning off, rather than being silently turned into a low level.
+
+Two billing notes. Reasoning tokens are billed as output tokens, and on most providers they count against `max_tokens`, so a small `max_tokens` with high effort can return an empty reply that still costs money; the backend raises the limit when it would starve the visible answer. Claude Code also asks for thinking to be hidden by default, so a high effort setting costs more without visibly looking different.
+
+**Effort and plans.** A plan is a fixed number of minutes, not a fixed amount of thinking, so you can switch effort at any time without buying another plan. To keep a single price for every effort level, a plan meters thinking rather than the clock: while the session is inside its cost budget, whatever effort you ask for is honoured. Once roughly 90% of that budget is spent, the session continues at the model's cheapest supported effort for the rest of the purchased minutes — the plan still runs for its full duration. The clamp is per session and resets when you start a new plan; pay-as-you-go is unaffected because it is already priced per token.
+
+**Upgrading from 0.9.x.** Reasoning controls are written into the harness config, so a config created by an older CLI keeps hiding the effort menu until you re-run `paytaca ai configure <harness>`. `paytaca ai doctor <harness>` now detects an out-of-date config and `--fix` refreshes it. New installs default to a model with an effort menu (DeepSeek V4.1 Flash); MiMo V2.6 Flash still has no effort control and hides the setting.
 
 **Read-only wallets:** if the active wallet cannot sign (no seed phrase in the keychain), `ai configure` asks for an API key instead of creating one. Generate it from your full wallet and hand it over:
 
@@ -254,11 +321,15 @@ paytaca ai api-key create                          # full wallet: prints sk-pytc
 paytaca ai configure opencode --api-key sk-pytc-…  # read-only wallet
 ```
 
+The create output also prints the OpenAI-compatible provider URL (`https://api.paytaca.ai/v1`) so the same key can be used with any other agent or script that accepts a custom OpenAI base URL.
+
 Read-only wallets report credits from the shared wallet hash but can't buy plans — fund credits from the full wallet.
 
 **MCP tools:** wallet (`get_balance`, `get_transactions`, `get_receiving_address`, `get_tokens`, `send`) plus Paytaca AI (`get_models`, `get_plans`, `get_credits`, `buy_plan`, `auto_refill`, `await_refill`, `get_help`, `generate_image`, `get_image_status`, `get_image_models`, `get_image_history`).
 
-Spending tools (`send`, `buy_plan`, `auto_refill`, `await_refill`, `generate_image`) require host-level approval. By default MCP operates on your **main wallet** and can spend real funds. `await_refill` never buys outside an already-armed auto-refill configuration.
+Spending tools (`send`, `buy_plan`, `auto_refill`, `await_refill`) require host-level approval. By default MCP operates on your **main wallet** and can spend real funds. `await_refill` never buys outside an already-armed auto-refill configuration.
+
+Media generation (`generate_image`, `generate_video`, `generate_audio`) enforces approval in the server itself: it quotes the order first (no funds move), then asks you through MCP elicitation to approve that exact cost, showing the prompt, model, quoted sats/USD price, and network. The same form lets you pick the recommended model or a cheaper alternative and adjust optional parameters (aspect ratio, resolution, duration, voice, speed). Nothing is charged unless you accept, and a host without elicitation support is refused with the equivalent CLI command to run in a terminal.
 
 When `get_credits` finds a model with no active session (e.g. after a `402` from the Paytaca AI provider), the result includes a `purchaseHint`. Relay `purchaseHint.message` as-is — it carries the exact copy-paste top-up command (no upsell or follow-up questions needed):
 
@@ -291,7 +362,7 @@ If auto-refill is armed for the model, `get_credits` also returns a `resumeHint`
 
 ### Nostr Chat
 
-End-to-end encrypted Nostr chat keyed from the wallet mnemonic (HD path `m/44'/1237'/0'/0/0`; keys are derived in memory and never stored). Conversation metadata (contacts, rooms, messages) is persisted at `~/.paytaca/chat-state.json`.
+End-to-end encrypted Nostr chat keyed from the wallet mnemonic (HD path `m/44'/1237'/0'/0/0` for Nostr identity and `m/44'/1237'/0'/0/1` for MLS signing; keys are derived in memory and never stored). One-to-one conversations use NIP-17 gift-wrapped DMs. Group chats use MLS (NIP-EE, kinds 443/444/445/10051) and interoperate with the Paytaca app. Conversation metadata (contacts, rooms, messages) is persisted at `~/.paytaca/chat-state.json`. MLS group state — which contains epoch secrets and the leaf signing key — is encrypted at rest (AES-256-GCM) with a key derived from the wallet mnemonic via HKDF (`paytaca-mls-state-key`).
 
 ```bash
 paytaca chat identity                     # Show your npub and pubkey
@@ -301,12 +372,24 @@ paytaca chat add-contact <npub> [name]    # Add a contact
 paytaca chat start <npub>                 # Start a 1:1 conversation
 paytaca chat list                         # List conversations
 paytaca chat open <room-id> --tail 20     # Show recent messages (--tail, --json)
-paytaca chat send <room-id> <text>        # Send a message
+paytaca chat send <room-id> <text>        # Send a message (DM or group)
 paytaca chat listen [--contact <npub|name>]  # Subscribe to new messages (long-running)
 paytaca chat set-display-name <name>      # Publish profile name to relays (NIP-78)
 paytaca chat set-bch-address <address>    # Publish a BCH address to relays (NIP-78)
 paytaca chat remove-display-name          # Remove published name
 paytaca chat remove-bch-address           # Remove published address
+
+paytaca chat group create <name> [--member <npub>]...  # Create an MLS group
+paytaca chat group add-member <room-id> <npub>         # Add a group member
+paytaca chat group remove-member <room-id> <npub>      # Remove a group member
+paytaca chat group leave <room-id> [--successor <npub>]  # Leave a group
+paytaca chat group info <room-id> [--json]             # Show members and roles
+paytaca chat group rename <room-id> <name>             # Rename a group
+paytaca chat group set-admin <room-id> <npub> [--remove]  # Grant/revoke admin
+paytaca chat group transfer-owner <room-id> <npub>     # Transfer ownership
+paytaca chat invites list [--json]        # List pending group invitations
+paytaca chat invites accept <room-id>     # Accept a group invitation
+paytaca chat invites decline <room-id>    # Decline a group invitation
 ```
 
 ### Web UI
@@ -350,7 +433,7 @@ Seed phrases are stored in the OS native keychain:
 
 Powered by [@napi-rs/keyring](https://github.com/Brooooooklyn/keyring-node) (prebuilt Rust binaries, no node-gyp required).
 
-Nostr chat keys are **not** persisted — they are re-derived from the wallet mnemonic at runtime via HD path `m/44'/1237'/0'/0/0` and held only in memory for the duration of a session. Non-secret chat metadata (contacts, rooms, messages) is written to `~/.paytaca/chat-state.json` with mode `0600`; no key material is ever written there.
+Nostr chat keys are **not** persisted — they are re-derived from the wallet mnemonic at runtime via HD path `m/44'/1237'/0'/0/0` and held only in memory for the duration of a session. Non-secret chat metadata (contacts, rooms, messages) is written to `~/.paytaca/chat-state.json` with mode `0600`. MLS group state does hold key material (epoch secrets, leaf signing key), so it is never written in the clear: each group's serialized state is encrypted with AES-256-GCM under a wallet-derived key (HKDF label `paytaca-mls-state-key`, AAD = MLS group id).
 
 The `paytaca web` server listens on `127.0.0.1` only and requires a random per-session token in the `X-Paytaca-Token` header; requests whose `Host` header is not `127.0.0.1`/`localhost` are rejected, request bodies are capped at 1 MB, and internal error details are logged to stderr rather than returned to the client.
 
@@ -370,7 +453,8 @@ src/
     pay.ts           x402 BCH payment handler for HTTP requests
     check.ts         Check if URL requires x402 payment
     ai.ts            Paytaca AI (configure, api-key, models, plans, credits, purchase, auto-refill, image)
-    chat.ts          Nostr chat (contacts, conversations, identity, listen)
+    anthropicProxy.ts  Anthropic/Responses↔OpenAI gateway for Claude Code and Codex (`paytaca mcp --proxy`)
+    chat.ts          Nostr chat (contacts, DMs, MLS groups, invitations, listen)
     web.ts           `paytaca web` — local browser UI launcher
     mcp.ts           `paytaca mcp` stdio entry + per-harness config templates
     update.ts        Self-update from npm registry
@@ -418,7 +502,14 @@ src/
     keys.ts          Nostr key derivation from wallet mnemonic (in memory)
     chat.ts          DM event building/signing (NIP-17 style)
     relay.ts         Relay connection/subscription service
-    store.ts         Contact/room/message JSON store (~/.paytaca)
+    store.ts         Contact/room/message/MLS JSON store (~/.paytaca)
+    mls/
+      context.ts       Ciphersuite, capabilities, and MLS client config
+      keys.ts          Deterministic Ed25519 and HPKE key derivation
+      key-package.ts   KeyPackage generation and encoding
+      transport.ts     NIP-EE wire format (kinds 443/444/445/10051)
+      group.ts         Group create/join/add/remove/export
+      message.ts       Application message encrypt/decrypt
 ```
 
 ## Key Dependencies
@@ -433,6 +524,8 @@ src/
 | `alpinejs` | Reactive web UI (`paytaca web`), vendored inline |
 | `bip39` | Mnemonic generation and validation |
 | `nostr-tools` | Nostr chat events, keys, and relay transport |
+| `ts-mls` | MLS protocol implementation for group chat (NIP-EE) |
+| `@noble/curves` / `@noble/hashes` | MLS Ed25519 signing and HKDF key derivation |
 | `js-sha256` | Hashing for key derivation and payment headers |
 | `commander` | CLI framework |
 | `chalk` | Terminal colors |

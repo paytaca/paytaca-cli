@@ -44,7 +44,7 @@ export interface CauldronTokenData {
       symbol: string
     }
     uris?: { icon?: string; web?: string }
-  }
+  } | null
 }
 
 export class CauldronApiError extends Error {

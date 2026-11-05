@@ -11,6 +11,15 @@ export interface AiModelConfig {
   id: string
   display_name: string
   price_tiers: PriceTier[]
+  context_input_limit?: number
+  max_output_tokens?: number
+  supports_tools?: boolean
+  supports_vision?: boolean
+  /** Effort levels this model accepts, highest first. Empty/absent = no control. */
+  reasoning_efforts?: string[]
+  reasoning_default_effort?: string | null
+  /** True when the model always reasons and cannot be switched off. */
+  reasoning_mandatory?: boolean
 }
 
 export interface AiConfig {
@@ -134,8 +143,8 @@ export async function getConfig(opts: RequestOptions = {}): Promise<AiConfig> {
   return body as AiConfig
 }
 
-export async function getWalletStatus(
-  walletHash: string,
+async function fetchWalletStatus(
+  authHeaders: Record<string, string>,
   opts: RequestOptions & { modelId?: string } = {}
 ): Promise<WalletStatus> {
   const base = resolveBackendUrl(opts.backendUrl)
@@ -148,7 +157,7 @@ export async function getWalletStatus(
       url.toString(),
       {
         method: 'GET',
-        headers: { 'X-Wallet-Hash': walletHash, ...(opts.headers || {}) },
+        headers: { ...authHeaders, ...(opts.headers || {}) },
       },
       opts.timeoutMs ?? 15000
     )
@@ -165,6 +174,24 @@ export async function getWalletStatus(
     )
   }
   return body as WalletStatus
+}
+
+export async function getWalletStatus(
+  walletHash: string,
+  opts: RequestOptions & { modelId?: string } = {}
+): Promise<WalletStatus> {
+  return fetchWalletStatus({ 'X-Wallet-Hash': walletHash }, opts)
+}
+
+/**
+ * Wallet status as seen through an API key. The backend resolves the key to
+ * its own wallet, so this is how the harness (OpenCode, Pi, omp) sees credits.
+ */
+export async function getApiKeyWalletStatus(
+  apiKey: string,
+  opts: RequestOptions & { modelId?: string } = {}
+): Promise<WalletStatus> {
+  return fetchWalletStatus({ Authorization: `Bearer ${apiKey}` }, opts)
 }
 
 export interface ChatRequestOptions extends RequestOptions {

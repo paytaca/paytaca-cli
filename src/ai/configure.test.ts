@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { AiConfig } from './client.js'
 import {
+  buildCodexConfigToml,
+  buildCodexModelCatalog,
+  buildCreditStatusLines,
   buildOpencodeProvider,
   buildPiProvider,
   deepMerge,
@@ -8,16 +14,23 @@ import {
   extractOmpDefaultModel,
   extractOmpProviderApiKey,
   extractPiApiKey,
+  harnessConfigParseError,
   isValidApiKey,
   OPENCODE_PROVIDER_NPM,
   OPENCODE_PROVIDER_PACKAGE,
   parseJsonConfig,
   parseOpencodeAuthExport,
   parseOpencodeMajor,
+  readCodexConfig,
+  readHarnessApiKey,
+  readHarnessReasoningConfig,
+  reasoningEfforts,
+  harnessLimits,
   replaceOmpDefaultModel,
   resolveOpencodeMajor,
   serializeOmpProviderYaml,
   shouldClearOpencodeCredentials,
+  shouldReprovisionApiKey,
   staleOpencodeCredentialIds,
   upsertOmpProviderYaml,
 } from './configure.js'
@@ -140,6 +153,54 @@ describe('configure', () => {
     expect(shouldClearOpencodeCredentials(3)).toBe(true)
   })
 
+  it('replaces a stored key only for a mismatch or an invalid key', () => {
+    expect(shouldReprovisionApiKey('mismatch')).toBe(true)
+    expect(shouldReprovisionApiKey('invalid')).toBe(true)
+    expect(shouldReprovisionApiKey('match')).toBe(false)
+    expect(shouldReprovisionApiKey('unknown')).toBe(false)
+  })
+
+  it('reads the configured opencode api key without writing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'paytaca-doctor-'))
+    try {
+      const configPath = join(dir, 'opencode.json')
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          providers: { 'paytaca-ai': { settings: { apiKey: 'sk-pytc-doctor' } } },
+        })
+      )
+      expect(readHarnessApiKey('opencode', { path: configPath })).toEqual({
+        path: configPath,
+        apiKey: 'sk-pytc-doctor',
+      })
+
+      const missing = join(dir, 'missing.json')
+      expect(readHarnessApiKey('opencode', { path: missing })).toEqual({
+        path: missing,
+        apiKey: null,
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('reads the configured pi api key from models.json', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'paytaca-doctor-'))
+    try {
+      writeFileSync(
+        join(dir, 'models.json'),
+        JSON.stringify({ providers: { 'paytaca-ai': { apiKey: 'sk-pytc-pi' } } })
+      )
+      expect(readHarnessApiKey('pi', { path: join(dir, 'mcp.json') })).toEqual({
+        path: join(dir, 'models.json'),
+        apiKey: 'sk-pytc-pi',
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('builds the pi provider with a model per backend model', () => {
     const provider = buildPiProvider(CONFIG, 'https://api.paytaca.ai', 'sk-pytc-test')
     expect(provider.baseUrl).toBe('https://api.paytaca.ai/v1')
@@ -150,13 +211,13 @@ describe('configure', () => {
         id: 'deepseek/deepseek-v4-flash',
         name: 'DeepSeek V4 Flash',
         contextWindow: 128000,
-        maxTokens: 8192,
+        maxTokens: 16384,
       },
       {
         id: 'z-ai/glm-5.3-flash',
         name: 'GLM 5.3 Flash',
         contextWindow: 128000,
-        maxTokens: 8192,
+        maxTokens: 16384,
       },
     ])
   })
@@ -241,11 +302,11 @@ describe('configure', () => {
         '      - id: deepseek/deepseek-v4-flash',
         '        name: DeepSeek V4 Flash',
         '        contextWindow: 128000',
-        '        maxTokens: 8192',
+        '        maxTokens: 16384',
         '      - id: z-ai/glm-5.3-flash',
         '        name: GLM 5.3 Flash',
         '        contextWindow: 128000',
-        '        maxTokens: 8192',
+        '        maxTokens: 16384',
       ].join('\n')
     )
   })
@@ -266,7 +327,7 @@ describe('configure', () => {
       '    baseUrl: https://other.example/v1',
       '',
     ].join('\n')
-    const provider = { baseUrl: 'https://api.paytaca.ai/v1', apiKey: 'sk-pytc-new', api: 'openai-completions', models: [{ id: 'z-ai/glm-5.3', name: 'GLM 5.3', contextWindow: 128000, maxTokens: 8192 }] }
+    const provider = { baseUrl: 'https://api.paytaca.ai/v1', apiKey: 'sk-pytc-new', api: 'openai-completions', models: [{ id: 'z-ai/glm-5.3', name: 'GLM 5.3', contextWindow: 128000, maxTokens: 16384 }] }
     const updated = upsertOmpProviderYaml(existing, 'paytaca-ai', provider)
     expect(updated).toContain('    apiKey: sk-pytc-new')
     expect(updated).not.toContain('sk-pytc-old')
@@ -358,5 +419,497 @@ describe('configure', () => {
       'cred_other',
     ])
     expect(staleOpencodeCredentialIds([], 'paytaca-ai', 'sk-pytc-current')).toEqual([])
+  })
+})
+
+describe('reasoning capability', () => {
+  const REASONING_CONFIG: AiConfig = {
+    models: [
+      {
+        id: 'z-ai/glm-5.3',
+        display_name: 'GLM 5.3',
+        price_tiers: [],
+        reasoning_efforts: ['max', 'high', 'low'],
+        reasoning_default_effort: 'max',
+        reasoning_mandatory: true,
+      },
+      {
+        id: 'deepseek/deepseek-v4-pro',
+        display_name: 'DeepSeek V4 Pro',
+        price_tiers: [],
+        reasoning_efforts: ['xhigh', 'high', 'none'],
+        reasoning_default_effort: 'high',
+      },
+      {
+        id: 'xiaomi/mimo-v2.6-flash',
+        display_name: 'MiMo V2.6 Flash',
+        price_tiers: [],
+      },
+    ],
+    default_model: 'z-ai/glm-5.3',
+  }
+
+  it('strips "none" from models that cannot disable reasoning', () => {
+    expect(reasoningEfforts(REASONING_CONFIG.models[0])).toEqual(['max', 'high', 'low'])
+    expect(reasoningEfforts(REASONING_CONFIG.models[1])).toEqual(['xhigh', 'high', 'none'])
+  })
+
+  it('treats a model with no efforts as having no control', () => {
+    expect(reasoningEfforts(REASONING_CONFIG.models[2])).toEqual([])
+  })
+
+  it('declares v2 opencode capabilities, leaving unsupported models alone', () => {
+    const models = buildOpencodeProvider(
+      REASONING_CONFIG,
+      'https://api.paytaca.ai',
+      'sk-pytc-test',
+      2
+    ).models as Record<string, any>
+
+    expect(models['z-ai/glm-5.3'].capabilities).toEqual({
+      reasoning: { supported: true, effort: ['max', 'high', 'low'] },
+    })
+    expect(models['deepseek/deepseek-v4-pro'].capabilities).toEqual({
+      reasoning: { supported: true, effort: ['xhigh', 'high'], toggle: true },
+    })
+    expect(models['xiaomi/mimo-v2.6-flash'].capabilities).toBeUndefined()
+  })
+
+  it('uses the v1 boolean form for older opencode', () => {
+    const models = buildOpencodeProvider(
+      REASONING_CONFIG,
+      'https://api.paytaca.ai',
+      'sk-pytc-test',
+      1
+    ).models as Record<string, any>
+
+    expect(models['z-ai/glm-5.3'].reasoning).toBe(true)
+    expect(models['xiaomi/mimo-v2.6-flash'].reasoning).toBeUndefined()
+  })
+
+  it('declares pi/omp thinking effort menus', () => {
+    const models = buildPiProvider(
+      REASONING_CONFIG,
+      'https://api.paytaca.ai',
+      'sk-pytc-test'
+    ).models as Record<string, any>[]
+
+    expect(models[0].reasoning).toBe(true)
+    expect(models[0].thinking).toEqual({
+      mode: 'effort',
+      efforts: ['max', 'high', 'low'],
+      requiresEffort: true,
+      defaultLevel: 'max',
+    })
+    expect(models[1].thinking.requiresEffort).toBe(false)
+    expect(models[1].thinking.efforts).toEqual(['xhigh', 'high'])
+    expect(models[1].thinking.defaultLevel).toBe('high')
+    expect(models[2].reasoning).toBeUndefined()
+    expect(models[2].thinking).toBeUndefined()
+  })
+
+  it('writes pi/omp thinking objects as nested yaml, not stringified', () => {
+    const provider = buildPiProvider(
+      REASONING_CONFIG,
+      'https://api.paytaca.ai',
+      'sk-pytc-test'
+    )
+    const yaml = serializeOmpProviderYaml('paytaca-ai', provider)
+
+    expect(yaml).not.toContain('[object Object]')
+    expect(yaml).toContain(
+      [
+        '      - id: z-ai/glm-5.3',
+        '        name: GLM 5.3',
+        '        contextWindow: 128000',
+        '        maxTokens: 16384',
+        '        reasoning: true',
+        '        thinking:',
+        '          mode: effort',
+        '          efforts: [max, high, low]',
+        '          requiresEffort: true',
+        '          defaultLevel: max',
+      ].join('\n')
+    )
+    expect(yaml).toContain(
+      [
+        '      - id: xiaomi/mimo-v2.6-flash',
+        '        name: MiMo V2.6 Flash',
+        '        contextWindow: 128000',
+        '        maxTokens: 16384',
+      ].join('\n')
+    )
+  })
+})
+
+describe('buildCreditStatusLines', () => {
+  const base = {
+    creditsActive: false,
+    paygEnabled: true,
+    paygBalanceUsd: 0,
+    planSuggestion: {
+      modelId: 'xiaomi/mimo-v2.6-flash',
+      displayName: 'MiMo V2.6 Flash',
+      minutes: 30,
+      priceSats: 1000,
+    },
+    canSign: true,
+  }
+
+  it('reports a funded pay-as-you-go balance as usable', () => {
+    const lines = buildCreditStatusLines({ ...base, paygBalanceUsd: 1.32 })
+    expect(lines[0]).toEqual({
+      tone: 'success',
+      text: 'Pay-as-you-go balance available — ready to use.',
+    })
+    expect(lines[1].text).toContain('$1.32')
+  })
+
+  it('treats time credits and pay-as-you-go as independent ways to pay', () => {
+    const lines = buildCreditStatusLines({
+      ...base,
+      creditsActive: true,
+      paygBalanceUsd: 0.5,
+    })
+    expect(lines[0].text).toBe('AI credits active — ready to use.')
+    expect(lines[1].text).toContain('$0.50')
+  })
+
+  it('offers both a time plan and pay-as-you-go when nothing is funded', () => {
+    const lines = buildCreditStatusLines(base)
+    expect(lines[0]).toEqual({
+      tone: 'warning',
+      text: 'No active AI credits or pay-as-you-go balance.',
+    })
+    const text = lines.map((line) => line.text).join('\n')
+    expect(text).toContain('paytaca ai purchase --model xiaomi/mimo-v2.6-flash --minutes 30')
+    expect(text).toContain('paytaca ai topup')
+  })
+
+  it('ignores a disabled or dust pay-as-you-go balance', () => {
+    const disabled = buildCreditStatusLines({ ...base, paygEnabled: false, paygBalanceUsd: 5 })
+    expect(disabled[0].tone).toBe('warning')
+
+    const dust = buildCreditStatusLines({ ...base, paygBalanceUsd: 0.0001 })
+    expect(dust[0].tone).toBe('warning')
+  })
+
+  it('points a read-only wallet at the full wallet for funding', () => {
+    const lines = buildCreditStatusLines({ ...base, canSign: false })
+    expect(lines.map((l) => l.text).join('\n')).toContain('Fund from your full wallet:')
+  })
+})
+
+describe('harness limits', () => {
+  it('caps context and output at cost-safe values', () => {
+    expect(
+      harnessLimits({
+        id: 'm',
+        display_name: 'M',
+        price_tiers: [],
+        context_input_limit: 1_050_000,
+        max_output_tokens: 943_718,
+      })
+    ).toEqual({ context: 128_000, output: 16_384 })
+  })
+
+  it('keeps a smaller real model window', () => {
+    expect(
+      harnessLimits({
+        id: 'm',
+        display_name: 'M',
+        price_tiers: [],
+        context_input_limit: 32_000,
+        max_output_tokens: 4_096,
+      })
+    ).toEqual({ context: 32_000, output: 4_096 })
+  })
+
+  it('falls back to the defaults when the catalogue omits limits', () => {
+    expect(harnessLimits(undefined)).toEqual({ context: 128_000, output: 16_384 })
+  })
+})
+
+describe('readHarnessReasoningConfig', () => {
+  it('reads opencode v2 capabilities, counting toggle as "none"', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'paytaca-reasoning-'))
+    try {
+      const path = join(dir, 'opencode.json')
+      writeFileSync(
+        path,
+        JSON.stringify({
+          providers: {
+            'paytaca-ai': {
+              models: {
+                glm: {
+                  capabilities: {
+                    reasoning: { supported: true, effort: ['max', 'high', 'low'] },
+                  },
+                },
+                deepseek: {
+                  capabilities: {
+                    reasoning: { supported: true, effort: ['xhigh', 'high'], toggle: true },
+                  },
+                },
+                mimo: {},
+              },
+            },
+          },
+        })
+      )
+      expect(readHarnessReasoningConfig('opencode', { path })).toEqual({
+        coarse: false,
+        models: {
+          glm: { supported: true, efforts: ['max', 'high', 'low'] },
+          deepseek: { supported: true, efforts: ['xhigh', 'high', 'none'] },
+          mimo: { supported: false, efforts: null },
+        },
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('reads pi thinking efforts from models.json', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'paytaca-reasoning-'))
+    try {
+      writeFileSync(
+        join(dir, 'models.json'),
+        JSON.stringify({
+          providers: {
+            'paytaca-ai': {
+              models: [
+                {
+                  id: 'glm',
+                  reasoning: true,
+                  thinking: { mode: 'effort', efforts: ['max', 'high', 'low'] },
+                },
+                { id: 'mimo' },
+              ],
+            },
+          },
+        })
+      )
+      expect(readHarnessReasoningConfig('pi', { path: join(dir, 'mcp.json') })).toEqual({
+        coarse: false,
+        models: {
+          glm: { supported: true, efforts: ['max', 'high', 'low'] },
+          mimo: { supported: false, efforts: null },
+        },
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('detects a coarse omp reasoning directive', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'paytaca-reasoning-'))
+    try {
+      writeFileSync(
+        join(dir, 'models.yml'),
+        [
+          'providers:',
+          '  paytaca-ai:',
+          '    models:',
+          '      - id: glm',
+          '        thinking:',
+          '          mode: effort',
+        ].join('\n')
+      )
+      expect(readHarnessReasoningConfig('omp', { path: join(dir, 'mcp.json') })).toEqual({
+        coarse: true,
+        supportedAll: true,
+        models: {},
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('harnessConfigParseError', () => {
+  it('reports a corrupt json config instead of hiding it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'paytaca-parse-'))
+    try {
+      const path = join(dir, 'opencode.json')
+      writeFileSync(path, '{ "providers": ')
+      expect(harnessConfigParseError('opencode', { path })).toContain('could not be parsed')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('accepts jsonc and missing files', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'paytaca-parse-'))
+    try {
+      const path = join(dir, 'opencode.json')
+      writeFileSync(path, '{\n // comment\n "providers": {},\n}\n')
+      expect(harnessConfigParseError('opencode', { path })).toBeNull()
+      expect(harnessConfigParseError('opencode', { path: join(dir, 'absent.json') })).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('codex configuration', () => {
+  const bundled = {
+    models: [
+      {
+        slug: 'base-model',
+        display_name: 'Base',
+        description: 'Base',
+        visibility: 'list',
+        use_responses_lite: false,
+        model_messages: { instructions_template: 'You are Codex.' },
+        supported_reasoning_levels: [{ effort: 'low', description: 'low' }],
+      },
+    ],
+  }
+
+  const config: AiConfig = {
+    models: [
+      {
+        id: 'deepseek/deepseek-v4.1-flash',
+        display_name: 'DeepSeek V4.1 Flash',
+        price_tiers: [],
+        context_input_limit: 1_000_000,
+        max_output_tokens: 65_536,
+        reasoning_efforts: ['max', 'high', 'low', 'none'],
+        reasoning_default_effort: 'high',
+      },
+      {
+        id: 'xiaomi/mimo-v2.6-flash',
+        display_name: 'MiMo V2.6 Flash',
+        price_tiers: [],
+      },
+    ],
+    default_model: 'deepseek/deepseek-v4.1-flash',
+  }
+
+  it('clones the bundled catalogue entry for every Paytaca model', () => {
+    const catalog = buildCodexModelCatalog(config, bundled) as {
+      models: Record<string, any>[]
+    }
+    expect(catalog.models).toHaveLength(2)
+    expect(catalog.models[0]).toMatchObject({
+      slug: 'deepseek/deepseek-v4.1-flash',
+      display_name: 'DeepSeek V4.1 Flash',
+      description: 'deepseek/deepseek-v4.1-flash - via Paytaca AI',
+      visibility: 'list',
+      supported_in_api: true,
+      default_reasoning_level: 'high',
+      context_window: 128_000,
+      max_context_window: 128_000,
+      use_responses_lite: false,
+      tool_mode: 'direct',
+      model_messages: { instructions_template: 'You are Codex.' },
+    })
+    expect(catalog.models[0].supported_reasoning_levels.map((level: any) => level.effort)).toEqual([
+      'max',
+      'high',
+      'low',
+      'none',
+    ])
+    expect(catalog.models[1]).toMatchObject({
+      slug: 'xiaomi/mimo-v2.6-flash',
+      default_reasoning_level: null,
+      supported_reasoning_levels: [],
+    })
+  })
+
+  it('writes provider, model and MCP tables while preserving unrelated config', () => {
+    const existing = [
+      '# my codex config',
+      'model = "old-model"',
+      'approval_policy = "never"',
+      '',
+      '[model_providers.other]',
+      'name = "Other"',
+      '',
+      '[model_providers.paytaca-ai]',
+      'name = "Old"',
+      'base_url = "http://old"',
+      '',
+      '[mcp_servers.paytaca]',
+      'command = "old"',
+      '',
+      '[profiles.fast]',
+      'model = "mini"',
+    ].join('\n')
+    const toml = buildCodexConfigToml(existing, {
+      config,
+      apiKey: 'sk-test',
+      gatewayUrl: 'http://127.0.0.1:7475',
+      catalogPath: '/tmp/codex-models.json',
+    })
+    expect(toml).toContain('# my codex config')
+    expect(toml).toContain('approval_policy = "never"')
+    expect(toml).toContain('[model_providers.other]')
+    expect(toml).toContain('[profiles.fast]')
+    expect(toml).not.toContain('model = "old-model"')
+    expect(toml.match(/\[model_providers\.paytaca-ai\]/g)).toHaveLength(1)
+    expect(toml).toContain('model = "deepseek/deepseek-v4.1-flash"')
+    expect(toml).toContain('model_reasoning_effort = "high"')
+    expect(toml).toContain('model_context_window = 128000')
+    expect(toml).toContain('wire_api = "responses"')
+    expect(toml).toContain('base_url = "http://127.0.0.1:7475/v1"')
+    expect(toml).toContain('http_headers = { Authorization = "Bearer sk-test" }')
+    expect(toml).toContain('[mcp_servers.paytaca]')
+    expect(toml).toContain('args = ["mcp"]')
+  })
+
+  it('mcpOnly leaves an existing provider config untouched', () => {
+    const existing = [
+      'model = "deepseek/deepseek-v4.1-flash"',
+      '',
+      '[model_providers.paytaca-ai]',
+      'name = "Paytaca AI"',
+      'http_headers = { Authorization = "Bearer keep-me" }',
+      '',
+      '[mcp_servers.paytaca]',
+      'command = "old"',
+    ].join('\n')
+    const toml = buildCodexConfigToml(existing, { mcpOnly: true })
+    expect(toml).toContain('Authorization = "Bearer keep-me"')
+    expect(toml).toContain('command = "paytaca"')
+    expect(toml).not.toContain('command = "old"')
+  })
+
+  it('reads the API key, base URL, model and catalog path', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'paytaca-codex-'))
+    try {
+      const path = join(dir, 'config.toml')
+      writeFileSync(
+        path,
+        [
+          'model = "glm"',
+          'model_catalog_json = "/tmp/models.json"',
+          '',
+          '[model_providers.paytaca-ai]',
+          'base_url = "http://127.0.0.1:7475/v1"',
+          'http_headers = { Authorization = "Bearer sk-read" }',
+        ].join('\n')
+      )
+      expect(readCodexConfig(path)).toMatchObject({
+        apiKey: 'sk-read',
+        baseUrl: 'http://127.0.0.1:7475/v1',
+        model: 'glm',
+        catalogPath: '/tmp/models.json',
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('reports a malformed TOML table header', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'paytaca-codex-'))
+    try {
+      const path = join(dir, 'config.toml')
+      writeFileSync(path, '[mcp_servers.paytaca\ncommand = "paytaca"\n')
+      expect(harnessConfigParseError('codex', { path })).toContain('could not be parsed')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

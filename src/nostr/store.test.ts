@@ -85,7 +85,6 @@ describe('ChatStore', () => {
       expect(store.contacts).toEqual([])
       expect(store.rooms).toEqual([])
       expect(store.messages).toEqual({})
-      expect(store.sentMessages).toEqual({})
       expect(store.readMessageIds).toEqual({})
       expect(store.displayNameCache).toEqual({})
       expect(store.bchAddressCache).toEqual({})
@@ -109,6 +108,50 @@ describe('ChatStore', () => {
       expect(s.displayNameCache).toEqual({ bb: 'Bob' })
       expect(s.bchAddressCache).toEqual({ cc: 'bitcoincash:abc' })
       expect(s.readMessageIds).toEqual({ room1: { msg1: true } })
+    })
+
+    it('should load persisted messages in chronological order', () => {
+      memFs.set('/Users/joemartaganna/.paytaca', '')
+      memFs.set(
+        '/Users/joemartaganna/.paytaca/chat-state.json',
+        JSON.stringify({
+          contacts: [],
+          displayNameCache: {},
+          bchAddressCache: {},
+          readMessageIds: {},
+          messages: {
+            room1: [
+              { id: 'm2', content: 'second', sender: bobPub, created_at: 200 },
+              { id: 'm1', content: 'first', sender: alicePub, created_at: 100 },
+            ],
+          },
+        })
+      )
+      const s = new ChatStore()
+      expect(s.messages.room1.map(m => m.content)).toEqual(['first', 'second'])
+    })
+
+    it('should drop MLS control messages loaded from persisted state', () => {
+      memFs.set('/Users/joemartaganna/.paytaca', '')
+      memFs.set(
+        '/Users/joemartaganna/.paytaca/chat-state.json',
+        JSON.stringify({
+          contacts: [],
+          displayNameCache: {},
+          bchAddressCache: {},
+          readMessageIds: {},
+          messages: {
+            room1: [
+              { id: 'meta', content: '\u200bpaytaca:mls-meta:{}', sender: alicePub, created_at: 100 },
+              { id: 'join', content: '\u200bpaytaca:mls-join:', sender: alicePub, created_at: 110 },
+              { id: 'm1', content: 'hello', sender: bobPub, created_at: 120 },
+            ],
+          },
+        })
+      )
+      const s = new ChatStore()
+      expect(s.messages.room1).toHaveLength(1)
+      expect(s.messages.room1[0].content).toBe('hello')
     })
 
     it('should merge sent messages into messages in-memory', () => {
@@ -140,6 +183,17 @@ describe('ChatStore', () => {
       const parsed = JSON.parse(written)
       expect(parsed.contacts).toHaveLength(1)
       expect(parsed.contacts[0].name).toBe('Test')
+    })
+
+    it('should persist received messages', () => {
+      store.messages.room1 = [
+        { id: 'm1', content: 'hi', sender: bobPub, created_at: 100 },
+      ]
+      store.saveState()
+      const written = (fs.writeFileSync as any).mock.calls[0][1]
+      const parsed = JSON.parse(written)
+      expect(parsed.messages.room1).toHaveLength(1)
+      expect(parsed.messages.room1[0].content).toBe('hi')
     })
   })
 
@@ -342,15 +396,15 @@ describe('ChatStore', () => {
       await expect(store.sendMessage('nonexistent', 'hi')).rejects.toThrow('Room not found')
     })
 
-    it('should create message and save to sentMessages', async () => {
+    it('should create message and store it locally', async () => {
       store.rooms.push({ id: 'room1', type: 'private', name: 'Test', members: [mockPubKey, bobPub], subject: null, createdAt: 1, updatedAt: 1 })
 
       const result = await store.sendMessage('room1', 'hello world')
 
       expect(result.message.content).toBe('hello world')
       expect(result.message.sender).toBe(mockPubKey)
-      expect(store.sentMessages.room1).toHaveLength(1)
-      expect(store.sentMessages.room1[0].id).toBe(result.message.id)
+      expect(store.messages.room1).toHaveLength(1)
+      expect(store.messages.room1[0].id).toBe(result.message.id)
     })
   })
 

@@ -12,6 +12,10 @@ export class RelayService {
   private seenEventIds = new Set<string>()
   private resubscribeTimer: ReturnType<typeof setTimeout> | null = null
   private subscriptionCallbacks: { onEvent?: (event: NostrEvent) => void } | null = null
+  private mlsSubs: any[] = []
+  private mlsSeenEventIds = new Set<string>()
+  private mlsSubKey: string | null = null
+  private mlsSubscriptionCallbacks: { onEvent?: (event: NostrEvent) => void } | null = null
   private _isSubscribed = false
   private subscribedRelays: string[] = []
   private subscribedPubKey: string | null = null
@@ -56,7 +60,13 @@ export class RelayService {
       for (const sub of this.subs) {
         try { sub.close() } catch (_) {}
       }
+      for (const sub of this.mlsSubs) {
+        try { sub.close() } catch (_) {}
+      }
       this.subs = []
+      this.mlsSubs = []
+      this.mlsSubscriptionCallbacks = null
+      this.mlsSubKey = null
       this.pool = null
     }
     if (this.pollInterval) {
@@ -286,7 +296,13 @@ export class RelayService {
     for (const sub of this.subs) {
       try { sub.close() } catch (_) {}
     }
+    for (const sub of this.mlsSubs) {
+      try { sub.close() } catch (_) {}
+    }
     this.subs = []
+    this.mlsSubs = []
+    this.mlsSubscriptionCallbacks = null
+    this.mlsSubKey = null
     if (this.pollInterval) {
       clearInterval(this.pollInterval)
       this.pollInterval = null
@@ -344,6 +360,109 @@ export class RelayService {
       console.error('[relay] fetchBchAddress failed:', err)
       return null
     }
+  }
+
+  async fetchNipEeKeyPackage(relays: string[], pubKey: string): Promise<NostrEvent[]> {
+    const pool = this.getPool()
+    try {
+      const events = await pool.querySync(relays, { kinds: [443], authors: [pubKey], limit: 100 }, { maxWait: 10000 })
+      return ((events || []) as NostrEvent[]).sort((a, b) => b.created_at - a.created_at)
+    } catch (err) {
+      console.error('[relay] fetchNipEeKeyPackage failed:', err)
+      return []
+    }
+  }
+
+  async fetchOwnDeletionEventIds(relays: string[], pubKey: string): Promise<Set<string>> {
+    const pool = this.getPool()
+    const ids = new Set<string>()
+    try {
+      const events = await pool.querySync(relays, { kinds: [5], authors: [pubKey], limit: 200 }, { maxWait: 10000 })
+      for (const event of (events || []) as NostrEvent[]) {
+        for (const tag of event.tags || []) {
+          if (tag[0] === 'e' && tag[1]) ids.add(tag[1])
+        }
+      }
+    } catch (err) {
+      console.error('[relay] fetchOwnDeletionEventIds failed:', err)
+    }
+    return ids
+  }
+
+  async fetchMlsGroupEvents(relays: string[], nostrGroupIdHex: string, limit = 100): Promise<NostrEvent[]> {
+    const pool = this.getPool()
+    try {
+      const events = await pool.querySync(
+        relays,
+        { kinds: [445], '#h': [nostrGroupIdHex], limit },
+        { maxWait: 10000 }
+      )
+      return ((events || []) as NostrEvent[]).sort((a, b) => a.created_at - b.created_at)
+    } catch (err) {
+      console.error('[relay] fetchMlsGroupEvents failed:', err)
+      return []
+    }
+  }
+
+  subscribeMlsEvents(
+    relays: string[],
+    myPubKey: string,
+    nostrGroupHexes: string[],
+    callbacks: { onEvent?: (event: NostrEvent) => void } = {}
+  ): { close(): void } {
+    if (nostrGroupHexes.length === 0) return { close() {} }
+
+    const subKey = JSON.stringify([myPubKey, nostrGroupHexes, relays])
+    if (this.mlsSubKey === subKey) return { close() {} }
+
+    for (const sub of this.mlsSubs) {
+      try { sub.close() } catch (_) {}
+    }
+    this.mlsSubs = []
+    this.mlsSubscriptionCallbacks = callbacks
+    this.mlsSubKey = subKey
+
+    const pool = this.getPool()
+    const filter = { kinds: [445], '#h': nostrGroupHexes }
+
+    for (const relayUrl of relays) {
+      try {
+        const sub = pool.subscribeMany([relayUrl], filter, {
+          onevent: (event: any) => {
+            if (this.mlsSeenEventIds.has(event.id as string)) return
+            this.mlsSeenEventIds.add(event.id as string)
+            if (this.mlsSeenEventIds.size > RelayService.MAX_SEEN_EVENT_IDS) {
+              const toDelete = Array.from(this.mlsSeenEventIds).slice(
+                0,
+                this.mlsSeenEventIds.size - RelayService.MAX_SEEN_EVENT_IDS
+              )
+              for (const id of toDelete) this.mlsSeenEventIds.delete(id)
+            }
+            if (callbacks.onEvent) callbacks.onEvent(event as NostrEvent)
+          },
+          oneose() {
+          },
+        })
+        this.mlsSubs.push(sub)
+      } catch (err) {
+        console.error('[relay] subscribeMlsEvents failed:', err)
+      }
+    }
+
+    return {
+      close: () => {
+        for (const sub of this.mlsSubs) {
+          try { sub.close() } catch (_) {}
+        }
+        this.mlsSubs = []
+        this.mlsSubscriptionCallbacks = null
+        this.mlsSubKey = null
+      },
+    }
+  }
+
+  forgetMlsSeenEvent(eventId: string): void {
+    this.mlsSeenEventIds.delete(eventId)
   }
 
   async fetchHistoricalGiftWraps(
