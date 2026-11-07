@@ -1,3 +1,4 @@
+import { randomBytes, randomInt } from 'node:crypto'
 import { ExchangeLab } from '@cashlab/cauldron'
 import { PayoutAmountRuleType } from '@cashlab/common'
 import {
@@ -5,7 +6,11 @@ import {
   binToHex,
 } from '@cashlab/common/libauth.js'
 import { requireWallet, type WalletContext } from '../core/context.js'
-import { isValidBchAddress } from '../core/wallet.js'
+import {
+  buildBchPaymentUri,
+  buildTokenPaymentUri,
+  isValidBchAddress,
+} from '../core/wallet.js'
 import { LibauthHDWallet } from '../wallet/keys.js'
 import { X402Payer } from '../wallet/x402.js'
 import {
@@ -23,7 +28,10 @@ import {
   watchtowerUtxosToSpendableCoins,
   type WatchtowerUtxo,
 } from '../wallet/cauldron/transact.js'
-import { computePlatformFee } from '../wallet/cauldron/swap.js'
+import {
+  computePlatformFee,
+  estimateTokenNeededForBch,
+} from '../wallet/cauldron/swap.js'
 import { getBchUsdPrice } from '../utils/prices.js'
 import type { PaymentRequirements } from '../types/x402.js'
 import {
@@ -39,6 +47,47 @@ import { selectModel, selectTier, formatDuration } from './models.js'
 import { findSession, hasActiveCredits } from './credits.js'
 
 export type PaymentMethod = 'bch' | 'lift'
+export type PaymentSource = 'internal' | 'external'
+
+/** Payment details a user can hand to another wallet. */
+export interface ExternalPaymentDetails {
+  paymentMethod: PaymentMethod
+  /** Address to pay: the server's BCH address, or a token-aware LIFT address. */
+  address: string
+  /** BIP21 URI for BCH, or a PayPro-style token URI for LIFT. */
+  paymentUri: string
+  /** Exact amount requested for BCH (includes the payment tag). */
+  amountSats: number
+  /** Token details for LIFT payments (base units). */
+  tokenCategory?: string
+  tokenAmount?: string
+  tokenDecimals?: number
+  tokenSymbol?: string
+  /** Seconds until the underlying x402 quote expires. */
+  expiresInSeconds: number
+}
+
+/**
+ * An external payment request that has been quoted but not settled yet.
+ * `pendingId` is passed back to `settleExternalPayment` after the user pays.
+ */
+export interface ExternalPaymentPreparation {
+  success: boolean
+  kind: 'plan' | 'topup'
+  paymentSource: 'external'
+  pendingId?: string
+  paymentMethod?: PaymentMethod
+  priceSats?: number
+  model?: string
+  displayName?: string
+  minutes?: number
+  amountUsd?: number
+  balanceUsd?: number
+  topupPresets?: number[]
+  minTopupUsd?: number
+  external?: ExternalPaymentDetails
+  error?: string
+}
 
 export interface BuyPlanOptions {
   model: string
@@ -49,6 +98,12 @@ export interface BuyPlanOptions {
   backendUrl?: string
   skipProbe?: boolean
   skipActiveCreditGuard?: boolean
+  /** Where the funds come from. Defaults to the internal wallet. */
+  payFrom?: PaymentSource
+  /** Called with the payment request just before waiting for an external payment. */
+  onExternalPayment?: (
+    details: ExternalPaymentDetails
+  ) => void | Promise<void>
 }
 
 export interface BuyPlanResult {
@@ -59,6 +114,7 @@ export interface BuyPlanResult {
   minutes?: number
   priceSats?: number
   paymentMethod?: PaymentMethod
+  paymentSource?: PaymentSource
   txid?: string
   recipientAddress?: string
   status?: number
@@ -66,11 +122,23 @@ export interface BuyPlanResult {
   timeRemainingSeconds?: number
   data?: unknown
   error?: string
+  /** Present for external payments (also on timeouts, so the user can retry). */
+  paymentUri?: string
+  paymentAddress?: string
+  paymentAmountSats?: number
+  tokenAmount?: string
+  tokenSymbol?: string
+  tokenDecimals?: number
 }
 
 const PLAN_PROBE_SAMPLES = 3
 const PLAN_PROBE_SPACING_MS = 500
 const PLAN_PROBE_PRICE_DRIFT_TOLERANCE = 0.05
+
+// Ceiling (exclusive) for the random sats tag that makes an external BCH
+// payment identifiable at the shared server address. Widened from 1_000 so
+// concurrent payers rarely pick the same tagged amount.
+const EXTERNAL_BCH_TAG_RANGE = 10_000
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -143,7 +211,6 @@ function buildPlanRequest(
     'X-Plan-Probe': '1',
   }
   if (paymentMethod === 'lift') headers['X-Payment-Method'] = 'lift'
-
   return {
     url: `${apiUrl(baseUrl, '/v1/chat/completions')}?wallet_hash=${encodeURIComponent(
       walletHash
@@ -354,7 +421,383 @@ function resolveModelTier(
   return { model, tier }
 }
 
-export async function buyPlan(opts: BuyPlanOptions): Promise<BuyPlanResult> {
+// ── Shared x402 helpers ──────────────────────────────────────────────
+
+interface X402QuoteContext {
+  url: string
+  headers: Record<string, string>
+  body: string
+  requirements: PaymentRequirements
+  resourceUrl: string
+  isChipnet: boolean
+  paymentMethod: PaymentMethod
+}
+
+interface X402Payment {
+  txid: string
+  vout: number
+  /** Value reported as the funding UTXO amount in the payment payload. */
+  amount: string
+}
+
+function normalizePaymentSource(source: unknown): PaymentSource {
+  return source === 'external' ? 'external' : 'internal'
+}
+
+/** Quote lifetime from the server, minus a small margin to submit the claim. */
+function externalTimeoutMs(requirements: PaymentRequirements): number {
+  const maxSeconds = Number(requirements.maxTimeoutSeconds)
+  // The backend expires its payment reservation ~10 min after the quote, so a
+  // long fallback wait could invite a payment that lands on a dead address.
+  const fallbackSeconds = 5 * 60
+  const seconds =
+    Number.isFinite(maxSeconds) && maxSeconds > 0
+      ? Math.min(maxSeconds, fallbackSeconds)
+      : fallbackSeconds
+  return Math.max(30, seconds - 10) * 1000
+}
+
+function satsToBch(sats: number): string {
+  return (sats / 1e8).toFixed(8).replace(/0+$/, '').replace(/\.$/, '')
+}
+
+function watchtowerApi(ctx: WalletContext): any {
+  return (ctx.bch.watchtower as any).BCH._api
+}
+
+async function scanAddress(ctx: WalletContext, address: string): Promise<void> {
+  try {
+    await watchtowerApi(ctx).get(`utxo/address/${address}/scan/`)
+  } catch {
+    // Throttled or unsupported; the regular listing below still works.
+  }
+}
+
+async function listBchUtxos(
+  ctx: WalletContext,
+  address: string
+): Promise<WatchtowerUtxo[]> {
+  const res = await watchtowerApi(ctx).get(`utxo/bch/${address}/`)
+  return Array.isArray(res?.data?.utxos) ? res.data.utxos : []
+}
+
+async function listTokenUtxos(
+  ctx: WalletContext,
+  address: string
+): Promise<WatchtowerUtxo[]> {
+  const res = await watchtowerApi(ctx).get(
+    `utxo/ct/${address}/?is_cashtoken=true`
+  )
+  return Array.isArray(res?.data?.utxos) ? res.data.utxos : []
+}
+
+async function nextAddressIndex(ctx: WalletContext): Promise<number> {
+  try {
+    const last = await ctx.bch.getLastAddressIndex()
+    return typeof last === 'number' && last >= 0 ? last + 1 : 0
+  } catch {
+    return 0
+  }
+}
+
+interface ExternalMeta {
+  details: ExternalPaymentDetails
+  /** BCH UTXOs already at the shared server address before we started waiting. */
+  knownUtxos: string[]
+  /** Fresh LIFT address the user deposits to (LIFT only). */
+  depositAddress?: string
+}
+
+/**
+ * Build the external payment instructions shown to the user.
+ *
+ * `details.paymentUri` embeds a backend-supplied address, so it is only ever
+ * rendered as text (terminal output, MCP result text, Alpine `x-text`) or
+ * encoded into a QR image. Never interpolate it into HTML, markdown links, or
+ * anything else that would interpret the string as markup.
+ */
+async function buildExternalMeta(
+  ctx: WalletContext,
+  quote: Pick<
+    X402QuoteContext,
+    'requirements' | 'paymentMethod' | 'isChipnet'
+  >
+): Promise<ExternalMeta> {
+  const requiredSats = Number(quote.requirements.amount)
+  if (!Number.isInteger(requiredSats) || requiredSats <= 0) {
+    throw new Error('Server returned an invalid payment amount.')
+  }
+  const expiresInSeconds = Math.max(
+    1,
+    Math.round(externalTimeoutMs(quote.requirements) / 1000)
+  )
+
+  if (quote.paymentMethod === 'bch') {
+    if (!isValidBchAddress(quote.requirements.payTo, quote.isChipnet)) {
+      throw new Error('Server returned an invalid BCH payment address.')
+    }
+    // A unique amount makes the payment identifiable even though several users
+    // may share the same server address. The tag is added to the quoted amount,
+    // so keep its ceiling small (any extra sats remain a server credit) while
+    // staying wide enough that two concurrent payers rarely collide.
+    const tag = randomInt(1, EXTERNAL_BCH_TAG_RANGE)
+    const amountSats = requiredSats + tag
+    const utxos = await listBchUtxos(ctx, quote.requirements.payTo)
+    return {
+      details: {
+        paymentMethod: 'bch',
+        address: quote.requirements.payTo,
+        paymentUri: buildBchPaymentUri(
+          quote.requirements.payTo,
+          Number(satsToBch(amountSats))
+        ),
+        amountSats,
+        expiresInSeconds,
+      },
+      knownUtxos: utxos.map((utxo) => `${utxo.txid}:${utxo.vout}`),
+    }
+  }
+
+  if (quote.isChipnet) {
+    throw new Error('LIFT payments are not supported on chipnet.')
+  }
+  // Quote enough LIFT to cover the BCH amount plus the swap buffer and fees.
+  const estimate = await estimateTokenNeededForBch({
+    tokenId: LIFT_TOKEN_ID,
+    bchDemandSats: BigInt(requiredSats + 20_000),
+    isChipnet: false,
+  })
+  const tokenAmount = estimate.tokenAmount + estimate.tokenAmount / 50n
+  const index = await nextAddressIndex(ctx)
+  try {
+    await ctx.bch.getNewAddressSet(index)
+  } catch {
+    // Non-critical: the address is shown anyway.
+  }
+  const address = ctx.bch.getTokenAddressSetAt(index).receiving
+  return {
+    details: {
+      paymentMethod: 'lift',
+      address,
+      paymentUri: buildTokenPaymentUri(
+        address,
+        LIFT_TOKEN_ID,
+        Number(tokenAmount)
+      ),
+      amountSats: requiredSats,
+      tokenCategory: LIFT_TOKEN_ID,
+      tokenAmount: tokenAmount.toString(),
+      tokenDecimals: estimate.decimals,
+      tokenSymbol: estimate.symbol,
+      expiresInSeconds,
+    },
+    knownUtxos: [],
+    depositAddress: address,
+  }
+}
+
+function externalResultFields(
+  source: PaymentSource,
+  meta?: ExternalMeta
+): Partial<BuyPlanResult> {
+  if (!meta) return { paymentSource: source }
+  return {
+    paymentSource: source,
+    paymentUri: meta.details.paymentUri,
+    paymentAddress: meta.details.address,
+    paymentAmountSats: meta.details.amountSats,
+    tokenAmount: meta.details.tokenAmount,
+    tokenSymbol: meta.details.tokenSymbol,
+    tokenDecimals: meta.details.tokenDecimals,
+  }
+}
+
+/**
+ * Pick the UTXO that corresponds to our external payment amount.
+ *
+ * The paying wallet must send exactly `amountSats` (the plan amount plus our
+ * unique tag), so an exact match is unambiguous. If nothing matches exactly yet
+ * but the address holds a single new UTXO above the amount, that one is ours:
+ * the payer rounded or the tag differed. Two or more such UTXOs mean another
+ * user's payment landed on the shared server address in the same window, so we
+ * refuse to attribute either txid and keep polling for the exact amount.
+ */
+export function selectExternalBchPayment(
+  utxos: WatchtowerUtxo[],
+  known: Set<string>,
+  amountSats: number
+): { txid: string; vout: number; value: number } | null {
+  let candidate: { txid: string; vout: number; value: number } | null = null
+  let ambiguous = false
+  for (const utxo of utxos) {
+    if (known.has(`${utxo.txid}:${utxo.vout}`)) continue
+    const value = Number(utxo.value) || 0
+    if (value < amountSats) continue
+    if (value === amountSats) return { txid: utxo.txid, vout: utxo.vout, value }
+    if (candidate) ambiguous = true
+    else candidate = { txid: utxo.txid, vout: utxo.vout, value }
+  }
+  return ambiguous ? null : candidate
+}
+
+async function waitForExternalBch(
+  ctx: WalletContext,
+  payTo: string,
+  amountSats: number,
+  known: Set<string>,
+  timeoutMs: number
+): Promise<{ txid: string; vout: number; value: number } | null> {
+  const deadline = Date.now() + timeoutMs
+  let nextScan = Date.now() + 60_000
+  while (Date.now() < deadline) {
+    if (Date.now() >= nextScan) {
+      await scanAddress(ctx, payTo)
+      nextScan = Date.now() + 60_000
+    }
+    let utxos: WatchtowerUtxo[] = []
+    try {
+      utxos = await listBchUtxos(ctx, payTo)
+    } catch {
+      // Transient indexer error; try again.
+    }
+    const found = selectExternalBchPayment(utxos, known, amountSats)
+    if (found) return found
+    await sleep(5000)
+  }
+  return null
+}
+
+async function waitForLiftDeposit(
+  ctx: WalletContext,
+  address: string,
+  tokenId: string,
+  needed: bigint,
+  timeoutMs: number
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  let nextScan = Date.now() + 60_000
+  const lowerTokenId = tokenId.toLowerCase()
+  while (Date.now() < deadline) {
+    if (Date.now() >= nextScan) {
+      await scanAddress(ctx, address)
+      nextScan = Date.now() + 60_000
+    }
+    let utxos: WatchtowerUtxo[] = []
+    try {
+      utxos = await listTokenUtxos(ctx, address)
+    } catch {
+      // Transient indexer error; try again.
+    }
+    const total = utxos
+      .filter((utxo) => (utxo.tokenid || '').toLowerCase() === lowerTokenId)
+      .reduce((sum, utxo) => sum + BigInt(utxo.amount || 0), 0n)
+    if (total >= needed) return true
+    await sleep(5000)
+  }
+  return false
+}
+
+async function ensureLiftSpendable(
+  ctx: WalletContext,
+  needed: bigint
+): Promise<void> {
+  const deadline = Date.now() + 120_000
+  let nextScan = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    try {
+      const utxos = await ctx.bch.getUtxos({ category: LIFT_TOKEN_ID })
+      const total = (utxos || []).reduce(
+        (sum: bigint, utxo: WatchtowerUtxo) =>
+          sum + BigInt(utxo.amount || 0),
+        0n
+      )
+      if (total >= needed) return
+    } catch {
+      // Not indexed yet; retry.
+    }
+    if (Date.now() >= nextScan) {
+      try {
+        await ctx.bch.scanUtxos({ background: false })
+      } catch {
+        // Non-critical.
+      }
+      nextScan = Date.now() + 10_000
+    }
+    await sleep(3000)
+  }
+  throw new Error(
+    'The LIFT deposit was detected but is not spendable yet. Wait a moment and retry.'
+  )
+}
+
+async function submitPayment(
+  payer: X402Payer,
+  quote: X402QuoteContext,
+  payment: X402Payment,
+  timeoutMs: number
+): Promise<{ ok: boolean; status: number; data: any; timedOut?: string }> {
+  const paymentPayload = await payer.createPaymentPayload(
+    quote.requirements,
+    quote.resourceUrl,
+    payment.txid,
+    payment.vout,
+    payment.amount
+  )
+  const headers = {
+    ...quote.headers,
+    'PAYMENT-SIGNATURE': JSON.stringify(paymentPayload),
+  }
+  try {
+    const response = await fetch(quote.url, {
+      method: 'POST',
+      headers,
+      body: quote.body,
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    const text = await response.text()
+    let data: any
+    try {
+      data = JSON.parse(text)
+    } catch {
+      data = text
+    }
+    return { ok: response.ok, status: response.status, data }
+  } catch (err: any) {
+    return {
+      ok: false,
+      status: 0,
+      data: null,
+      timedOut: err?.message || String(err),
+    }
+  }
+}
+
+// ── Plan purchase ────────────────────────────────────────────────────
+
+interface PlanQuoteContext extends X402QuoteContext {
+  baseUrl: string
+  model: AiModelConfig
+  minutes: number
+  priceSats: number
+}
+
+function planResultBase(quote: PlanQuoteContext): Partial<BuyPlanResult> {
+  return {
+    model: quote.model.id,
+    displayName: quote.model.display_name,
+    minutes: quote.minutes,
+    priceSats: quote.priceSats,
+    paymentMethod: quote.paymentMethod,
+  }
+}
+
+async function quotePlan(
+  opts: BuyPlanOptions,
+  source: PaymentSource
+): Promise<
+  | { ok: true; ctx: WalletContext; quote: PlanQuoteContext }
+  | { ok: false; result: BuyPlanResult }
+> {
   const paymentMethod: PaymentMethod =
     opts.paymentMethod === 'lift' ? 'lift' : 'bch'
   const isChipnet = Boolean(opts.isChipnet)
@@ -363,10 +806,13 @@ export async function buyPlan(opts: BuyPlanOptions): Promise<BuyPlanResult> {
   const modelQuery = String(opts.model || '').trim()
   const minutes = Number(opts.minutes)
   if (!modelQuery) {
-    return { success: false, paid: false, error: 'Missing model.' }
+    return { ok: false, result: { success: false, paid: false, error: 'Missing model.' } }
   }
   if (!Number.isFinite(minutes) || minutes <= 0) {
-    return { success: false, paid: false, error: 'Missing or invalid minutes.' }
+    return {
+      ok: false,
+      result: { success: false, paid: false, error: 'Missing or invalid minutes.' },
+    }
   }
 
   let ctx: WalletContext
@@ -379,7 +825,15 @@ export async function buyPlan(opts: BuyPlanOptions): Promise<BuyPlanResult> {
     model = resolved.model
     tier = resolved.tier
   } catch (err: any) {
-    return { success: false, paid: false, error: err?.message || String(err) }
+    return {
+      ok: false,
+      result: {
+        success: false,
+        paid: false,
+        error: err?.message || String(err),
+        paymentSource: source,
+      },
+    }
   }
 
   const priceSats = Number(tier.price_sats) || 0
@@ -393,38 +847,50 @@ export async function buyPlan(opts: BuyPlanOptions): Promise<BuyPlanResult> {
         const session = findSession(status, model.id)
         const remaining = formatDuration(session?.time_remaining_seconds ?? 0)
         return {
-          success: false,
-          paid: false,
-          model: model.id,
-          displayName: model.display_name,
-          error: `${model.display_name || model.id} still has ${remaining} of active credits. A new plan cannot be purchased until they are used up or expire.`,
+          ok: false,
+          result: {
+            success: false,
+            paid: false,
+            model: model.id,
+            displayName: model.display_name,
+            paymentSource: source,
+            error: `${model.display_name || model.id} still has ${remaining} of active credits. A new plan cannot be purchased until they are used up or expire.`,
+          },
         }
       }
     } catch (err: any) {
       return {
-        success: false,
-        paid: false,
-        error: `Could not check existing credits before purchase: ${err?.message || err}`,
+        ok: false,
+        result: {
+          success: false,
+          paid: false,
+          paymentSource: source,
+          error: `Could not check existing credits before purchase: ${err?.message || err}`,
+        },
       }
     }
   }
 
-  if (paymentMethod === 'bch') {
+  if (source === 'internal' && paymentMethod === 'bch') {
     try {
       const balance = await ctx.bch.getBalance()
       const availableSats = Math.round(balance.spendable * 1e8)
       if (priceSats > 0 && availableSats < priceSats) {
         return {
-          success: false,
-          paid: false,
-          model: model.id,
-          displayName: model.display_name,
-          priceSats,
-          error: `Insufficient balance: ${(availableSats / 1e8).toFixed(
-            8
-          )} BCH available but the ${minutes}-minute plan costs ${(
-            priceSats / 1e8
-          ).toFixed(8)} BCH.`,
+          ok: false,
+          result: {
+            success: false,
+            paid: false,
+            model: model.id,
+            displayName: model.display_name,
+            priceSats,
+            paymentSource: source,
+            error: `Insufficient balance: ${(availableSats / 1e8).toFixed(
+              8
+            )} BCH available but the ${minutes}-minute plan costs ${(
+              priceSats / 1e8
+            ).toFixed(8)} BCH.`,
+          },
         }
       }
     } catch {
@@ -436,16 +902,18 @@ export async function buyPlan(opts: BuyPlanOptions): Promise<BuyPlanResult> {
     try {
       await probePlanStability(baseUrl, model.id, tier.minutes)
     } catch (err: any) {
-      return { success: false, paid: false, error: err?.message || String(err) }
+      return {
+        ok: false,
+        result: {
+          success: false,
+          paid: false,
+          paymentSource: source,
+          error: err?.message || String(err),
+        },
+      }
     }
   }
 
-  const hdWallet = new LibauthHDWallet(
-    ctx.mnemonic,
-    BCH_DERIVATION_PATH,
-    isChipnet ? 'chipnet' : 'mainnet'
-  )
-  const x402Payer = new X402Payer({ hdWallet, addressIndex: 0 })
   const { url, headers, body } = buildPlanRequest(
     baseUrl,
     ctx.walletHash,
@@ -463,7 +931,15 @@ export async function buyPlan(opts: BuyPlanOptions): Promise<BuyPlanResult> {
       signal: AbortSignal.timeout(240000),
     })
   } catch (err: any) {
-    return { success: false, paid: false, error: `Request failed: ${err?.message || err}` }
+    return {
+      ok: false,
+      result: {
+        success: false,
+        paid: false,
+        paymentSource: source,
+        error: `Request failed: ${err?.message || err}`,
+      },
+    }
   }
 
   const firstText = await firstResponse.text()
@@ -474,150 +950,362 @@ export async function buyPlan(opts: BuyPlanOptions): Promise<BuyPlanResult> {
     firstData = firstText
   }
 
+  const base = {
+    model: model.id,
+    displayName: model.display_name,
+    minutes: tier.minutes,
+    priceSats,
+    paymentMethod,
+    paymentSource: source,
+  }
+
   if (firstResponse.status !== 402) {
     return {
-      success: true,
-      paid: false,
-      model: model.id,
-      displayName: model.display_name,
-      minutes: tier.minutes,
-      priceSats,
-      paymentMethod,
-      status: firstResponse.status,
-      data: firstData,
-      error:
-        firstResponse.ok
+      ok: false,
+      result: {
+        success: true,
+        paid: false,
+        ...base,
+        status: firstResponse.status,
+        data: firstData,
+        error: firstResponse.ok
           ? 'No purchase made: the model already has active credits, so the request was served without payment.'
           : `Unexpected response (${firstResponse.status}).`,
+      },
     }
   }
 
   const paymentRequired = parsePaymentRequiredJson(firstData)
   if (!paymentRequired) {
     return {
-      success: false,
-      paid: false,
-      status: 402,
-      error: 'Could not parse PaymentRequired from 402 response body.',
+      ok: false,
+      result: {
+        success: false,
+        paid: false,
+        status: 402,
+        ...base,
+        error: 'Could not parse PaymentRequired from 402 response body.',
+      },
     }
   }
+
   const requirements = selectBchPaymentRequirements(
     paymentRequired,
     isChipnet ? 'chipnet' : 'mainnet'
   )
   if (!requirements) {
     return {
-      success: false,
-      paid: false,
-      status: 402,
-      error: 'Server does not accept BCH payment for this plan.',
+      ok: false,
+      result: {
+        success: false,
+        paid: false,
+        status: 402,
+        ...base,
+        error: 'Server does not accept BCH payment for this plan.',
+      },
     }
   }
 
-  if (!opts.confirmed) {
-    return {
-      success: false,
-      paid: false,
-      status: 402,
-      model: model.id,
-      displayName: model.display_name,
+  return {
+    ok: true,
+    ctx,
+    quote: {
+      url,
+      headers,
+      body,
+      requirements,
+      resourceUrl: paymentRequired.resource.url,
+      isChipnet,
+      paymentMethod,
+      baseUrl,
+      model,
       minutes: tier.minutes,
       priceSats,
-      paymentMethod,
-      recipientAddress: requirements.payTo,
-      error: 'Payment not confirmed.',
+    },
+  }
+}
+
+async function settlePlan(
+  ctx: WalletContext,
+  quote: PlanQuoteContext,
+  source: PaymentSource,
+  external?: ExternalMeta,
+  existingPayment?: X402Payment,
+  onPayment?: (payment: X402Payment) => void
+): Promise<BuyPlanResult> {
+  const base = planResultBase(quote)
+  const hdWallet = new LibauthHDWallet(
+    ctx.mnemonic,
+    BCH_DERIVATION_PATH,
+    quote.isChipnet ? 'chipnet' : 'mainnet'
+  )
+  // The x402 `from`/signature come from this wallet's index-0 key even when an
+  // external wallet sent the funds: the signature attests which wallet made the
+  // request, not which wallet moved the UTXO. The backend verifies the payment
+  // against the chain, so this is not a custody claim.
+  const payer = new X402Payer({ hdWallet, addressIndex: 0 })
+  const timeoutMs = externalTimeoutMs(quote.requirements)
+
+  let payment = existingPayment
+  if (!payment && source === 'external' && external) {
+    if (quote.paymentMethod === 'bch') {
+      const found = await waitForExternalBch(
+        ctx,
+        quote.requirements.payTo,
+        external.details.amountSats,
+        new Set(external.knownUtxos),
+        timeoutMs
+      )
+      if (!found) {
+        return {
+          success: false,
+          paid: false,
+          status: 402,
+          ...base,
+          ...externalResultFields(source, external),
+          error:
+            'No external BCH payment was detected before the quote expired. Check the amount and address, then request a new payment.',
+        }
+      }
+      payment = {
+        txid: found.txid,
+        vout: found.vout,
+        amount: String(found.value),
+      }
+    } else {
+      const needed = BigInt(external.details.tokenAmount || '0')
+      const detected = await waitForLiftDeposit(
+        ctx,
+        external.details.address,
+        external.details.tokenCategory || LIFT_TOKEN_ID,
+        needed,
+        timeoutMs
+      )
+      if (!detected) {
+        return {
+          success: false,
+          paid: false,
+          status: 402,
+          ...base,
+          ...externalResultFields(source, external),
+          error:
+            'No external LIFT deposit was detected before the quote expired. Check the amount and address, then request a new payment.',
+        }
+      }
+      try {
+        await ensureLiftSpendable(ctx, needed)
+        const paid = await payRequirements(
+          ctx,
+          hdWallet,
+          quote.requirements,
+          'lift',
+          quote.isChipnet
+        )
+        payment = {
+          txid: paid.txid,
+          vout: paid.vout,
+          amount: quote.requirements.amount,
+        }
+      } catch (err: any) {
+        return {
+          success: false,
+          paid: false,
+          status: 402,
+          ...base,
+          ...externalResultFields(source, external),
+          error: err?.message || String(err),
+        }
+      }
+    }
+    onPayment?.(payment)
+  } else if (!payment) {
+    try {
+      const paid = await payRequirements(
+        ctx,
+        hdWallet,
+        quote.requirements,
+        quote.paymentMethod,
+        quote.isChipnet
+      )
+      payment = {
+        txid: paid.txid,
+        vout: paid.vout,
+        amount: quote.requirements.amount,
+      }
+      onPayment?.(payment)
+    } catch (err: any) {
+      return {
+        success: false,
+        paid: false,
+        status: 402,
+        ...base,
+        ...externalResultFields(source),
+        error: err?.message || String(err),
+      }
     }
   }
 
-  let txid: string
-  let vout = 0
-  try {
-    const paid = await payRequirements(
-      ctx,
-      hdWallet,
-      requirements,
-      paymentMethod,
-      isChipnet
-    )
-    txid = paid.txid
-    vout = paid.vout
-  } catch (err: any) {
-    return { success: false, paid: false, status: 402, error: err?.message || String(err) }
+  const fields = {
+    ...base,
+    ...externalResultFields(source, external),
   }
 
-  const paymentPayload = await x402Payer.createPaymentPayload(
-    requirements,
-    paymentRequired.resource.url,
-    txid,
-    vout,
-    requirements.amount
-  )
-  const retryHeaders = {
-    ...headers,
-    'PAYMENT-SIGNATURE': JSON.stringify(paymentPayload),
-  }
-
-  let retryResponse: Response
-  try {
-    retryResponse = await fetch(url, {
-      method: 'POST',
-      headers: retryHeaders,
-      body,
-      signal: AbortSignal.timeout(240000),
-    })
-  } catch (err: any) {
+  const submitted = await submitPayment(payer, quote, payment, 240000)
+  if (submitted.timedOut) {
     return {
       success: true,
       paid: true,
-      model: model.id,
-      displayName: model.display_name,
-      minutes: tier.minutes,
-      priceSats,
-      paymentMethod,
-      txid,
-      recipientAddress: requirements.payTo,
-      error: `Payment was broadcast but the response timed out: ${err?.message || err}. Check credits with \`paytaca ai credits\`.`,
+      ...fields,
+      txid: payment.txid,
+      recipientAddress: quote.requirements.payTo,
+      error: `Payment was sent but the response timed out: ${submitted.timedOut}. Check credits with \`paytaca ai credits\`.`,
     }
-  }
-
-  const retryText = await retryResponse.text()
-  let retryData: any
-  try {
-    retryData = JSON.parse(retryText)
-  } catch {
-    retryData = retryText
   }
 
   let sessionActivated = false
   let timeRemainingSeconds: number | undefined
   try {
-    const status = await getWalletStatus(ctx.walletHash, { backendUrl: baseUrl })
-    const session = findSession(status, model.id)
-    sessionActivated = hasActiveCredits(status, model.id)
+    const status = await getWalletStatus(ctx.walletHash, {
+      backendUrl: quote.baseUrl,
+    })
+    const session = findSession(status, quote.model.id)
+    sessionActivated = hasActiveCredits(status, quote.model.id)
     timeRemainingSeconds = session?.time_remaining_seconds
   } catch {
     // Non-critical.
   }
 
   return {
-    success: retryResponse.ok,
+    success: submitted.ok,
     paid: true,
-    model: model.id,
-    displayName: model.display_name,
-    minutes: tier.minutes,
-    priceSats,
-    paymentMethod,
-    txid,
-    recipientAddress: requirements.payTo,
-    status: retryResponse.status,
+    ...fields,
+    txid: payment.txid,
+    recipientAddress: quote.requirements.payTo,
+    status: submitted.status,
     sessionActivated,
     timeRemainingSeconds,
-    data: retryData,
-    error: retryResponse.ok
+    data: submitted.data,
+    error: submitted.ok
       ? undefined
-      : `Payment broadcast (txid ${txid}) but the backend returned ${retryResponse.status}.`,
+      : `Payment broadcast (txid ${payment.txid}) but the backend returned ${submitted.status}.`,
   }
 }
+
+export async function buyPlan(opts: BuyPlanOptions): Promise<BuyPlanResult> {
+  const source = normalizePaymentSource(opts.payFrom)
+  const quoted = await quotePlan(opts, source)
+  if (!quoted.ok) return quoted.result
+
+  const { ctx, quote } = quoted
+
+  if (!opts.confirmed) {
+    return {
+      success: false,
+      paid: false,
+      status: 402,
+      ...planResultBase(quote),
+      ...externalResultFields(source),
+      recipientAddress: quote.requirements.payTo,
+      error: 'Payment not confirmed.',
+    }
+  }
+
+  if (source === 'external') {
+    let meta: ExternalMeta
+    try {
+      meta = await buildExternalMeta(ctx, quote)
+    } catch (err: any) {
+      return {
+        success: false,
+        paid: false,
+        status: 402,
+        ...planResultBase(quote),
+        ...externalResultFields(source),
+        error: err?.message || String(err),
+      }
+    }
+    try {
+      await opts.onExternalPayment?.(meta.details)
+    } catch (err: any) {
+      return {
+        success: false,
+        paid: false,
+        status: 402,
+        ...planResultBase(quote),
+        ...externalResultFields(source, meta),
+        error: `Could not present the external payment request: ${
+          err?.message || err
+        }`,
+      }
+    }
+    return settlePlan(ctx, quote, source, meta)
+  }
+
+  return settlePlan(ctx, quote, source)
+}
+
+export async function preparePlanPayment(
+  opts: BuyPlanOptions
+): Promise<ExternalPaymentPreparation> {
+  const quoted = await quotePlan({ ...opts, confirmed: true }, 'external')
+  if (!quoted.ok) {
+    const result = quoted.result
+    return {
+      success: false,
+      kind: 'plan',
+      paymentSource: 'external',
+      model: result.model,
+      displayName: result.displayName,
+      minutes: result.minutes,
+      priceSats: result.priceSats,
+      paymentMethod: result.paymentMethod,
+      error: result.error,
+    }
+  }
+
+  const { ctx, quote } = quoted
+  let meta: ExternalMeta
+  try {
+    meta = await buildExternalMeta(ctx, quote)
+  } catch (err: any) {
+    return {
+      success: false,
+      kind: 'plan',
+      paymentSource: 'external',
+      model: quote.model.id,
+      displayName: quote.model.display_name,
+      minutes: quote.minutes,
+      priceSats: quote.priceSats,
+      paymentMethod: quote.paymentMethod,
+      error: err?.message || String(err),
+    }
+  }
+
+  prunePendingPayments()
+  const pendingId = randomBytes(16).toString('hex')
+  pendingPayments.set(pendingId, {
+    id: pendingId,
+    kind: 'plan',
+    createdAt: Date.now(),
+    quote,
+    meta,
+  })
+
+  return {
+    success: true,
+    kind: 'plan',
+    paymentSource: 'external',
+    pendingId,
+    model: quote.model.id,
+    displayName: quote.model.display_name,
+    minutes: quote.minutes,
+    priceSats: quote.priceSats,
+    paymentMethod: quote.paymentMethod,
+    external: meta.details,
+  }
+}
+
+// ── Balance top-up ───────────────────────────────────────────────────
 
 export interface TopUpOptions {
   amountUsd?: number
@@ -625,6 +1313,12 @@ export interface TopUpOptions {
   isChipnet?: boolean
   confirmed?: boolean
   backendUrl?: string
+  /** Where the funds come from. Defaults to the internal wallet. */
+  payFrom?: PaymentSource
+  /** Called with the payment request just before waiting for an external payment. */
+  onExternalPayment?: (
+    details: ExternalPaymentDetails
+  ) => void | Promise<void>
 }
 
 export interface TopUpResult {
@@ -636,11 +1330,18 @@ export interface TopUpResult {
   minTopupUsd?: number
   priceSats?: number
   paymentMethod?: PaymentMethod
+  paymentSource?: PaymentSource
   txid?: string
   recipientAddress?: string
   status?: number
   data?: unknown
   error?: string
+  paymentUri?: string
+  paymentAddress?: string
+  paymentAmountSats?: number
+  tokenAmount?: string
+  tokenSymbol?: string
+  tokenDecimals?: number
 }
 
 function buildTopupRequest(
@@ -668,7 +1369,31 @@ function buildTopupRequest(
   }
 }
 
-export async function topUpBalance(opts: TopUpOptions): Promise<TopUpResult> {
+interface TopupQuoteContext extends X402QuoteContext {
+  baseUrl: string
+  amountUsd?: number
+  effectiveUsd?: number
+  balanceUsd?: number
+  topupPresets?: number[]
+  minTopupUsd?: number
+  priceSats: number
+}
+
+function topupResultBase(quote: TopupQuoteContext): Partial<TopUpResult> {
+  return {
+    amountUsd: quote.effectiveUsd ?? quote.amountUsd,
+    paymentMethod: quote.paymentMethod,
+    priceSats: quote.priceSats,
+  }
+}
+
+async function quoteTopup(
+  opts: TopUpOptions,
+  source: PaymentSource
+): Promise<
+  | { ok: true; ctx: WalletContext; quote: TopupQuoteContext }
+  | { ok: false; result: TopUpResult }
+> {
   const paymentMethod: PaymentMethod =
     opts.paymentMethod === 'lift' ? 'lift' : 'bch'
   const isChipnet = Boolean(opts.isChipnet)
@@ -686,15 +1411,17 @@ export async function topUpBalance(opts: TopUpOptions): Promise<TopUpResult> {
   try {
     ctx = requireWallet(isChipnet)
   } catch (err: any) {
-    return { success: false, paid: false, error: err?.message || String(err) }
+    return {
+      ok: false,
+      result: {
+        success: false,
+        paid: false,
+        paymentSource: source,
+        error: err?.message || String(err),
+      },
+    }
   }
 
-  const hdWallet = new LibauthHDWallet(
-    ctx.mnemonic,
-    BCH_DERIVATION_PATH,
-    isChipnet ? 'chipnet' : 'mainnet'
-  )
-  const x402Payer = new X402Payer({ hdWallet, addressIndex: 0 })
   const { url, headers, body } = buildTopupRequest(
     baseUrl,
     ctx.walletHash,
@@ -711,7 +1438,15 @@ export async function topUpBalance(opts: TopUpOptions): Promise<TopUpResult> {
       signal: AbortSignal.timeout(120000),
     })
   } catch (err: any) {
-    return { success: false, paid: false, error: `Request failed: ${err?.message || err}` }
+    return {
+      ok: false,
+      result: {
+        success: false,
+        paid: false,
+        paymentSource: source,
+        error: `Request failed: ${err?.message || err}`,
+      },
+    }
   }
 
   const firstText = await firstResponse.text()
@@ -727,28 +1462,38 @@ export async function topUpBalance(opts: TopUpOptions): Promise<TopUpResult> {
 
   if (firstResponse.status !== 402) {
     return {
-      success: firstResponse.ok,
-      paid: false,
-      amountUsd: quote?.topup_amount_usd ?? amountUsd,
-      balanceUsd: quote?.balance_usd,
-      topupPresets: quote?.topup_presets,
-      minTopupUsd: quote?.min_topup_usd,
-      paymentMethod,
-      status: firstResponse.status,
-      data: firstData,
-      error: firstResponse.ok
-        ? undefined
-        : (firstData as any)?.error || `Unexpected response (${firstResponse.status}).`,
+      ok: false,
+      result: {
+        success: firstResponse.ok,
+        paid: false,
+        amountUsd: quote?.topup_amount_usd ?? amountUsd,
+        balanceUsd: quote?.balance_usd,
+        topupPresets: quote?.topup_presets,
+        minTopupUsd: quote?.min_topup_usd,
+        paymentMethod,
+        paymentSource: source,
+        status: firstResponse.status,
+        data: firstData,
+        error: firstResponse.ok
+          ? undefined
+          : (firstData as any)?.error ||
+            `Unexpected response (${firstResponse.status}).`,
+      },
     }
   }
 
   const paymentRequired = parsePaymentRequiredJson(firstData)
   if (!paymentRequired) {
     return {
-      success: false,
-      paid: false,
-      status: 402,
-      error: 'Could not parse PaymentRequired from 402 response body.',
+      ok: false,
+      result: {
+        success: false,
+        paid: false,
+        status: 402,
+        paymentMethod,
+        paymentSource: source,
+        error: 'Could not parse PaymentRequired from 402 response body.',
+      },
     }
   }
   const requirements = selectBchPaymentRequirements(
@@ -757,107 +1502,448 @@ export async function topUpBalance(opts: TopUpOptions): Promise<TopUpResult> {
   )
   if (!requirements) {
     return {
-      success: false,
-      paid: false,
-      status: 402,
-      error: 'Server does not accept BCH payment for balance top-ups.',
+      ok: false,
+      result: {
+        success: false,
+        paid: false,
+        status: 402,
+        paymentMethod,
+        paymentSource: source,
+        error: 'Server does not accept BCH payment for balance top-ups.',
+      },
     }
   }
 
-  const effectiveUsd = quote?.topup_amount_usd
-  const priceSats = Number(requirements.amount) || 0
-
-  if (!opts.confirmed) {
-    return {
-      success: false,
-      paid: false,
-      status: 402,
-      amountUsd: effectiveUsd ?? amountUsd,
+  return {
+    ok: true,
+    ctx,
+    quote: {
+      url,
+      headers,
+      body,
+      requirements,
+      resourceUrl: paymentRequired.resource.url,
+      isChipnet,
+      paymentMethod,
+      baseUrl,
+      amountUsd,
+      effectiveUsd: quote?.topup_amount_usd,
       balanceUsd: quote?.balance_usd,
       topupPresets: quote?.topup_presets,
       minTopupUsd: quote?.min_topup_usd,
-      priceSats,
-      paymentMethod,
-      recipientAddress: requirements.payTo,
-      error: 'Payment not confirmed.',
+      priceSats: Number(requirements.amount) || 0,
+    },
+  }
+}
+
+async function settleTopup(
+  ctx: WalletContext,
+  quote: TopupQuoteContext,
+  source: PaymentSource,
+  external?: ExternalMeta,
+  existingPayment?: X402Payment,
+  onPayment?: (payment: X402Payment) => void
+): Promise<TopUpResult> {
+  const base = topupResultBase(quote)
+  const hdWallet = new LibauthHDWallet(
+    ctx.mnemonic,
+    BCH_DERIVATION_PATH,
+    quote.isChipnet ? 'chipnet' : 'mainnet'
+  )
+  // The x402 `from`/signature come from this wallet's index-0 key even when an
+  // external wallet sent the funds: the signature attests which wallet made the
+  // request, not which wallet moved the UTXO. The backend verifies the payment
+  // against the chain, so this is not a custody claim.
+  const payer = new X402Payer({ hdWallet, addressIndex: 0 })
+  const timeoutMs = externalTimeoutMs(quote.requirements)
+
+  let payment = existingPayment
+  if (!payment && source === 'external' && external) {
+    if (quote.paymentMethod === 'bch') {
+      const found = await waitForExternalBch(
+        ctx,
+        quote.requirements.payTo,
+        external.details.amountSats,
+        new Set(external.knownUtxos),
+        timeoutMs
+      )
+      if (!found) {
+        return {
+          success: false,
+          paid: false,
+          status: 402,
+          ...base,
+          ...externalResultFields(source, external),
+          error:
+            'No external BCH payment was detected before the quote expired. Check the amount and address, then request a new payment.',
+        }
+      }
+      payment = {
+        txid: found.txid,
+        vout: found.vout,
+        amount: String(found.value),
+      }
+    } else {
+      const needed = BigInt(external.details.tokenAmount || '0')
+      const detected = await waitForLiftDeposit(
+        ctx,
+        external.details.address,
+        external.details.tokenCategory || LIFT_TOKEN_ID,
+        needed,
+        timeoutMs
+      )
+      if (!detected) {
+        return {
+          success: false,
+          paid: false,
+          status: 402,
+          ...base,
+          ...externalResultFields(source, external),
+          error:
+            'No external LIFT deposit was detected before the quote expired. Check the amount and address, then request a new payment.',
+        }
+      }
+      try {
+        await ensureLiftSpendable(ctx, needed)
+        const paid = await payRequirements(
+          ctx,
+          hdWallet,
+          quote.requirements,
+          'lift',
+          quote.isChipnet
+        )
+        payment = {
+          txid: paid.txid,
+          vout: paid.vout,
+          amount: quote.requirements.amount,
+        }
+      } catch (err: any) {
+        return {
+          success: false,
+          paid: false,
+          status: 402,
+          ...base,
+          ...externalResultFields(source, external),
+          error: err?.message || String(err),
+        }
+      }
+    }
+    onPayment?.(payment)
+  } else if (!payment) {
+    try {
+      const paid = await payRequirements(
+        ctx,
+        hdWallet,
+        quote.requirements,
+        quote.paymentMethod,
+        quote.isChipnet
+      )
+      payment = {
+        txid: paid.txid,
+        vout: paid.vout,
+        amount: quote.requirements.amount,
+      }
+      onPayment?.(payment)
+    } catch (err: any) {
+      return {
+        success: false,
+        paid: false,
+        status: 402,
+        ...base,
+        ...externalResultFields(source),
+        error: err?.message || String(err),
+      }
     }
   }
 
-  let txid: string
-  let vout = 0
-  try {
-    const paid = await payRequirements(
-      ctx,
-      hdWallet,
-      requirements,
-      paymentMethod,
-      isChipnet
-    )
-    txid = paid.txid
-    vout = paid.vout
-  } catch (err: any) {
-    return { success: false, paid: false, status: 402, error: err?.message || String(err) }
+  const fields = {
+    ...base,
+    ...externalResultFields(source, external),
   }
 
-  const paymentPayload = await x402Payer.createPaymentPayload(
-    requirements,
-    paymentRequired.resource.url,
-    txid,
-    vout,
-    requirements.amount
-  )
-  const retryHeaders = {
-    ...headers,
-    'PAYMENT-SIGNATURE': JSON.stringify(paymentPayload),
-  }
-
-  let retryResponse: Response
-  try {
-    retryResponse = await fetch(url, {
-      method: 'POST',
-      headers: retryHeaders,
-      body,
-      signal: AbortSignal.timeout(120000),
-    })
-  } catch (err: any) {
+  const submitted = await submitPayment(payer, quote, payment, 120000)
+  if (submitted.timedOut) {
     return {
       success: true,
       paid: true,
-      amountUsd: effectiveUsd ?? amountUsd,
-      paymentMethod,
-      txid,
-      recipientAddress: requirements.payTo,
-      priceSats,
-      error: `Payment was broadcast but the response timed out: ${err?.message || err}. Check your balance with \`paytaca ai balance\`.`,
+      ...fields,
+      txid: payment.txid,
+      recipientAddress: quote.requirements.payTo,
+      error: `Payment was sent but the response timed out: ${submitted.timedOut}. Check your balance with \`paytaca ai balance\`.`,
     }
   }
 
-  const retryText = await retryResponse.text()
-  let retryData: any
-  try {
-    retryData = JSON.parse(retryText)
-  } catch {
-    retryData = retryText
-  }
-
+  const retryData = submitted.data
   const creditedUsd =
     retryData && typeof retryData === 'object' ? retryData.amount_usd : undefined
   const newBalance =
     retryData && typeof retryData === 'object' ? retryData.balance_usd : undefined
 
   return {
-    success: retryResponse.ok,
+    success: submitted.ok,
     paid: true,
-    amountUsd: creditedUsd ?? effectiveUsd ?? amountUsd,
+    ...fields,
+    amountUsd: creditedUsd ?? base.amountUsd,
     balanceUsd: newBalance,
-    paymentMethod,
-    txid,
-    recipientAddress: requirements.payTo,
-    priceSats,
-    status: retryResponse.status,
+    txid: payment.txid,
+    recipientAddress: quote.requirements.payTo,
+    status: submitted.status,
     data: retryData,
-    error: retryResponse.ok
+    error: submitted.ok
       ? undefined
-      : `Payment broadcast (txid ${txid}) but the backend returned ${retryResponse.status}.`,
+      : `Payment broadcast (txid ${payment.txid}) but the backend returned ${submitted.status}.`,
+  }
+}
+
+export async function topUpBalance(opts: TopUpOptions): Promise<TopUpResult> {
+  const source = normalizePaymentSource(opts.payFrom)
+  const quoted = await quoteTopup(opts, source)
+  if (!quoted.ok) return quoted.result
+
+  const { ctx, quote } = quoted
+
+  if (!opts.confirmed) {
+    return {
+      success: false,
+      paid: false,
+      status: 402,
+      ...topupResultBase(quote),
+      balanceUsd: quote.balanceUsd,
+      topupPresets: quote.topupPresets,
+      minTopupUsd: quote.minTopupUsd,
+      ...externalResultFields(source),
+      recipientAddress: quote.requirements.payTo,
+      error: 'Payment not confirmed.',
+    }
+  }
+
+  if (source === 'external') {
+    let meta: ExternalMeta
+    try {
+      meta = await buildExternalMeta(ctx, quote)
+    } catch (err: any) {
+      return {
+        success: false,
+        paid: false,
+        status: 402,
+        ...topupResultBase(quote),
+        balanceUsd: quote.balanceUsd,
+        ...externalResultFields(source),
+        error: err?.message || String(err),
+      }
+    }
+    try {
+      await opts.onExternalPayment?.(meta.details)
+    } catch (err: any) {
+      return {
+        success: false,
+        paid: false,
+        status: 402,
+        ...topupResultBase(quote),
+        ...externalResultFields(source, meta),
+        error: `Could not present the external payment request: ${
+          err?.message || err
+        }`,
+      }
+    }
+    return settleTopup(ctx, quote, source, meta)
+  }
+
+  const result = await settleTopup(ctx, quote, source)
+  return {
+    ...result,
+    balanceUsd: result.balanceUsd ?? quote.balanceUsd,
+    topupPresets: quote.topupPresets,
+    minTopupUsd: quote.minTopupUsd,
+  }
+}
+
+export async function prepareTopupPayment(
+  opts: TopUpOptions
+): Promise<ExternalPaymentPreparation> {
+  const quoted = await quoteTopup({ ...opts, confirmed: true }, 'external')
+  if (!quoted.ok) {
+    const result = quoted.result
+    return {
+      success: false,
+      kind: 'topup',
+      paymentSource: 'external',
+      amountUsd: result.amountUsd,
+      balanceUsd: result.balanceUsd,
+      topupPresets: result.topupPresets,
+      minTopupUsd: result.minTopupUsd,
+      priceSats: result.priceSats,
+      paymentMethod: result.paymentMethod,
+      error: result.error,
+    }
+  }
+
+  const { ctx, quote } = quoted
+  let meta: ExternalMeta
+  try {
+    meta = await buildExternalMeta(ctx, quote)
+  } catch (err: any) {
+    return {
+      success: false,
+      kind: 'topup',
+      paymentSource: 'external',
+      amountUsd: quote.effectiveUsd ?? quote.amountUsd,
+      balanceUsd: quote.balanceUsd,
+      topupPresets: quote.topupPresets,
+      minTopupUsd: quote.minTopupUsd,
+      priceSats: quote.priceSats,
+      paymentMethod: quote.paymentMethod,
+      error: err?.message || String(err),
+    }
+  }
+
+  prunePendingPayments()
+  const pendingId = randomBytes(16).toString('hex')
+  pendingPayments.set(pendingId, {
+    id: pendingId,
+    kind: 'topup',
+    createdAt: Date.now(),
+    quote,
+    meta,
+  })
+
+  return {
+    success: true,
+    kind: 'topup',
+    paymentSource: 'external',
+    pendingId,
+    amountUsd: quote.effectiveUsd ?? quote.amountUsd,
+    balanceUsd: quote.balanceUsd,
+    topupPresets: quote.topupPresets,
+    minTopupUsd: quote.minTopupUsd,
+    priceSats: quote.priceSats,
+    paymentMethod: quote.paymentMethod,
+    external: meta.details,
+  }
+}
+
+// ── Pending external payments ────────────────────────────────────────
+
+interface PendingExternalBase {
+  id: string
+  kind: 'plan' | 'topup'
+  createdAt: number
+  meta: ExternalMeta
+  /** Set once the external funds were found / our payment was broadcast. */
+  payment?: X402Payment
+  settling?: boolean
+}
+
+interface PendingExternalPlan extends PendingExternalBase {
+  kind: 'plan'
+  quote: PlanQuoteContext
+}
+
+interface PendingExternalTopup extends PendingExternalBase {
+  kind: 'topup'
+  quote: TopupQuoteContext
+}
+
+type PendingExternalPayment = PendingExternalPlan | PendingExternalTopup
+
+// Pending external payments live in memory only: a CLI/MCP/web restart between
+// prepare and settle loses the record, and the user has to start a new payment
+// (funds sent to the old quote are still credited server-side, but the local
+// settlement handle is gone).
+const pendingPayments = new Map<string, PendingExternalPayment>()
+// An unanswered request expires after 20 minutes. Matching a payment refreshes
+// the record's timestamp and triples the window, so a retry after a transient
+// submit failure can still finish. A failed retry does not delete the record -
+// only a successful settlement does, or the TTL on a later call.
+const PENDING_TTL_MS = 20 * 60_000
+
+function prunePendingPayments(): void {
+  const now = Date.now()
+  for (const [id, pending] of pendingPayments) {
+    const ttl = pending.payment ? PENDING_TTL_MS * 3 : PENDING_TTL_MS
+    if (now - pending.createdAt > ttl) pendingPayments.delete(id)
+  }
+}
+
+/**
+ * Finish an external payment prepared by `preparePlanPayment` or
+ * `prepareTopupPayment`. The pending record is removed once the backend
+ * confirms the payment; a failed attempt keeps it so it can be retried
+ * without asking the user to pay again.
+ */
+export async function settleExternalPayment(
+  pendingId: string,
+  expectedKind?: 'plan' | 'topup'
+): Promise<BuyPlanResult | TopUpResult> {
+  prunePendingPayments()
+  const pending = pendingPayments.get(String(pendingId || '').trim())
+  if (!pending) {
+    return {
+      success: false,
+      paid: false,
+      error:
+        'Unknown or expired external payment request. Start a new payment.',
+    }
+  }
+  if (expectedKind && pending.kind !== expectedKind) {
+    return {
+      success: false,
+      paid: false,
+      error:
+        pending.kind === 'plan'
+          ? 'This pending payment is for a plan purchase, not a balance top-up.'
+          : 'This pending payment is for a balance top-up, not a plan purchase.',
+    }
+  }
+  if (pending.settling) {
+    return {
+      success: false,
+      paid: false,
+      error: 'This external payment is already being finalized.',
+    }
+  }
+
+  pending.settling = true
+  try {
+    let ctx: WalletContext
+    try {
+      ctx = requireWallet(pending.quote.isChipnet)
+    } catch (err: any) {
+      return {
+        success: false,
+        paid: false,
+        error: err?.message || String(err),
+      }
+    }
+
+    const onPayment = (payment: X402Payment) => {
+      pending.payment = payment
+      pending.createdAt = Date.now()
+    }
+    const result =
+      pending.kind === 'plan'
+        ? await settlePlan(
+            ctx,
+            pending.quote,
+            'external',
+            pending.meta,
+            pending.payment,
+            onPayment
+          )
+        : await settleTopup(
+            ctx,
+            pending.quote,
+            'external',
+            pending.meta,
+            pending.payment,
+            onPayment
+          )
+
+    if (result.success && result.paid) {
+      pendingPayments.delete(pending.id)
+    }
+    return result
+  } finally {
+    pending.settling = false
   }
 }

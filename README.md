@@ -190,6 +190,8 @@ paytaca ai auto-refill --status     # Inspect; also --disable, --delete
 
 `ai configure` only writes configuration; fund usage separately with either a time plan (`paytaca ai purchase`) or a prepaid pay-as-you-go balance (`paytaca ai topup`) — the two are independent, and either one alone is enough to use a model. It accepts `--backend`, `--path`, `--api-key`, and `--chipnet`. `ai purchase` and `ai auto-refill` accept `--lift` to pay with LIFT tokens at a discount. Add `--json` to any `ai` subcommand for machine-readable output.
 
+By default `ai purchase` and `ai topup` spend from the active wallet. Pass `--pay-from external` (or answer `x` at the prompt) to pay from another wallet instead: the CLI prints the server's payment address as a BIP21 URI (BCH) or a PayPro-style token URI (LIFT, sent from the active wallet's token address and swapped to BCH), then waits for the payment to show up on chain before asking the backend to settle it. The quote expires after a few minutes, and a half-finished external payment is not saved across restarts — start a new one if the process died.
+
 If a model fails inside a harness — most commonly a `402` (`PAYMENT-SIGNATURE header is required`) or `Invalid API key` — run the doctor:
 
 ```bash
