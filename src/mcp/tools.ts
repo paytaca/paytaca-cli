@@ -462,7 +462,9 @@ function externalPaymentNext(
       : `${details?.amountSats ?? 0} sats`
   return (
     `Show the user this payment request: pay ${amount} to ${details?.address} ` +
-    `(${details?.paymentUri}). They must send it from another wallet. ` +
+    `(${details?.paymentUri}). They must send it from another wallet. Show the ` +
+    `address exactly as given - it is the payment address returned by the ` +
+    `configured backend, so do not substitute, shorten, or re-encode it. ` +
     `Then call settle_payment with pending_id "${prepared.pendingId}" and kind "${kind}" ` +
     `to wait for the payment and finish the ${
       kind === 'plan' ? 'plan purchase' : 'balance top-up'

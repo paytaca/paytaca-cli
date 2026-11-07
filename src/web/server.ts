@@ -457,9 +457,16 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
 
     async preparePayment(opts) {
       const paymentMethod = (opts.method as PaymentMethod) || 'bch'
-      if (opts.kind === 'topup') {
-        return prepareTopupPayment({
-          amountUsd: opts.amountUsd,
+      if (opts.kind === 'plan') {
+        const model = String(opts.model || '').trim()
+        const minutes = Number(opts.minutes)
+        if (!model) throw new Error('Missing model')
+        if (!Number.isFinite(minutes) || minutes <= 0) {
+          throw new Error('Invalid minutes')
+        }
+        return preparePlanPayment({
+          model,
+          minutes,
           paymentMethod,
           payFrom: 'external',
           isChipnet,
@@ -467,9 +474,8 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
           confirmed: true,
         })
       }
-      return preparePlanPayment({
-        model: opts.model || '',
-        minutes: Number(opts.minutes),
+      return prepareTopupPayment({
+        amountUsd: opts.amountUsd,
         paymentMethod,
         payFrom: 'external',
         isChipnet,

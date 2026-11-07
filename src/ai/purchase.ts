@@ -135,6 +135,11 @@ const PLAN_PROBE_SAMPLES = 3
 const PLAN_PROBE_SPACING_MS = 500
 const PLAN_PROBE_PRICE_DRIFT_TOLERANCE = 0.05
 
+// Ceiling (exclusive) for the random sats tag that makes an external BCH
+// payment identifiable at the shared server address. Widened from 1_000 so
+// concurrent payers rarely pick the same tagged amount.
+const EXTERNAL_BCH_TAG_RANGE = 10_000
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -503,6 +508,14 @@ interface ExternalMeta {
   depositAddress?: string
 }
 
+/**
+ * Build the external payment instructions shown to the user.
+ *
+ * `details.paymentUri` embeds a backend-supplied address, so it is only ever
+ * rendered as text (terminal output, MCP result text, Alpine `x-text`) or
+ * encoded into a QR image. Never interpolate it into HTML, markdown links, or
+ * anything else that would interpret the string as markup.
+ */
 async function buildExternalMeta(
   ctx: WalletContext,
   quote: Pick<
@@ -524,8 +537,10 @@ async function buildExternalMeta(
       throw new Error('Server returned an invalid BCH payment address.')
     }
     // A unique amount makes the payment identifiable even though several users
-    // may share the same server address. Any extra sats remain a server credit.
-    const tag = randomInt(1, 1000)
+    // may share the same server address. The tag is added to the quoted amount,
+    // so keep its ceiling small (any extra sats remain a server credit) while
+    // staying wide enough that two concurrent payers rarely collide.
+    const tag = randomInt(1, EXTERNAL_BCH_TAG_RANGE)
     const amountSats = requiredSats + tag
     const utxos = await listBchUtxos(ctx, quote.requirements.payTo)
     return {
@@ -597,16 +612,43 @@ function externalResultFields(
   }
 }
 
+/**
+ * Pick the UTXO that corresponds to our external payment amount.
+ *
+ * The paying wallet must send exactly `amountSats` (the plan amount plus our
+ * unique tag), so an exact match is unambiguous. If nothing matches exactly yet
+ * but the address holds a single new UTXO above the amount, that one is ours:
+ * the payer rounded or the tag differed. Two or more such UTXOs mean another
+ * user's payment landed on the shared server address in the same window, so we
+ * refuse to attribute either txid and keep polling for the exact amount.
+ */
+export function selectExternalBchPayment(
+  utxos: WatchtowerUtxo[],
+  known: Set<string>,
+  amountSats: number
+): { txid: string; vout: number; value: number } | null {
+  let candidate: { txid: string; vout: number; value: number } | null = null
+  let ambiguous = false
+  for (const utxo of utxos) {
+    if (known.has(`${utxo.txid}:${utxo.vout}`)) continue
+    const value = Number(utxo.value) || 0
+    if (value < amountSats) continue
+    if (value === amountSats) return { txid: utxo.txid, vout: utxo.vout, value }
+    if (candidate) ambiguous = true
+    else candidate = { txid: utxo.txid, vout: utxo.vout, value }
+  }
+  return ambiguous ? null : candidate
+}
+
 async function waitForExternalBch(
   ctx: WalletContext,
   payTo: string,
-  minSats: number,
+  amountSats: number,
   known: Set<string>,
   timeoutMs: number
 ): Promise<{ txid: string; vout: number; value: number } | null> {
   const deadline = Date.now() + timeoutMs
   let nextScan = Date.now() + 60_000
-  let closest: { txid: string; vout: number; value: number } | null = null
   while (Date.now() < deadline) {
     if (Date.now() >= nextScan) {
       await scanAddress(ctx, payTo)
@@ -618,16 +660,8 @@ async function waitForExternalBch(
     } catch {
       // Transient indexer error; try again.
     }
-    for (const utxo of utxos) {
-      if (known.has(`${utxo.txid}:${utxo.vout}`)) continue
-      const value = Number(utxo.value) || 0
-      if (value < minSats) continue
-      if (value === minSats) return { txid: utxo.txid, vout: utxo.vout, value }
-      if (!closest || value < closest.value) {
-        closest = { txid: utxo.txid, vout: utxo.vout, value }
-      }
-    }
-    if (closest) return closest
+    const found = selectExternalBchPayment(utxos, known, amountSats)
+    if (found) return found
     await sleep(5000)
   }
   return null
@@ -1005,6 +1039,10 @@ async function settlePlan(
     BCH_DERIVATION_PATH,
     quote.isChipnet ? 'chipnet' : 'mainnet'
   )
+  // The x402 `from`/signature come from this wallet's index-0 key even when an
+  // external wallet sent the funds: the signature attests which wallet made the
+  // request, not which wallet moved the UTXO. The backend verifies the payment
+  // against the chain, so this is not a custody claim.
   const payer = new X402Payer({ hdWallet, addressIndex: 0 })
   const timeoutMs = externalTimeoutMs(quote.requirements)
 
@@ -1512,6 +1550,10 @@ async function settleTopup(
     BCH_DERIVATION_PATH,
     quote.isChipnet ? 'chipnet' : 'mainnet'
   )
+  // The x402 `from`/signature come from this wallet's index-0 key even when an
+  // external wallet sent the funds: the signature attests which wallet made the
+  // request, not which wallet moved the UTXO. The backend verifies the payment
+  // against the chain, so this is not a custody claim.
   const payer = new X402Payer({ hdWallet, addressIndex: 0 })
   const timeoutMs = externalTimeoutMs(quote.requirements)
 
@@ -1804,7 +1846,15 @@ interface PendingExternalTopup extends PendingExternalBase {
 
 type PendingExternalPayment = PendingExternalPlan | PendingExternalTopup
 
+// Pending external payments live in memory only: a CLI/MCP/web restart between
+// prepare and settle loses the record, and the user has to start a new payment
+// (funds sent to the old quote are still credited server-side, but the local
+// settlement handle is gone).
 const pendingPayments = new Map<string, PendingExternalPayment>()
+// An unanswered request expires after 20 minutes. Matching a payment refreshes
+// the record's timestamp and triples the window, so a retry after a transient
+// submit failure can still finish. A failed retry does not delete the record -
+// only a successful settlement does, or the TTL on a later call.
 const PENDING_TTL_MS = 20 * 60_000
 
 function prunePendingPayments(): void {
