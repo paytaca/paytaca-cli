@@ -29,7 +29,14 @@ import {
   type CreditsSummary,
   type PurchaseHint,
 } from '../ai/credits.js'
-import { buyPlan, topUpBalance } from '../ai/purchase.js'
+import {
+  buyPlan,
+  topUpBalance,
+  preparePlanPayment,
+  prepareTopupPayment,
+  settleExternalPayment,
+  type ExternalPaymentPreparation,
+} from '../ai/purchase.js'
 import {
   fulfillImageOrder,
   getImageHistory,
@@ -440,6 +447,29 @@ function fail(err: unknown): ToolResult {
   return { content: [{ type: 'text', text: message }], isError: true }
 }
 
+/** Instructions returned with an external-wallet payment request. */
+function externalPaymentNext(
+  kind: 'plan' | 'topup',
+  prepared: ExternalPaymentPreparation
+): string {
+  if (!prepared.success || !prepared.pendingId) {
+    return 'Nothing was prepared. Fix the error above and try again.'
+  }
+  const details = prepared.external
+  const amount =
+    details?.paymentMethod === 'lift'
+      ? `${details.tokenAmount} base units of ${details.tokenSymbol || 'LIFT'}`
+      : `${details?.amountSats ?? 0} sats`
+  return (
+    `Show the user this payment request: pay ${amount} to ${details?.address} ` +
+    `(${details?.paymentUri}). They must send it from another wallet. ` +
+    `Then call settle_payment with pending_id "${prepared.pendingId}" and kind "${kind}" ` +
+    `to wait for the payment and finish the ${
+      kind === 'plan' ? 'plan purchase' : 'balance top-up'
+    }.`
+  )
+}
+
 /**
  * Turn a blocked media spend into a tool result. A user declining is not a
  * failure; a host without elicitation is (no spend can be approved there).
@@ -794,6 +824,7 @@ Paytaca AI:
   get_credits            Remaining AI time credits + pay-as-you-go balance
   buy_plan               Buy an AI plan with BCH or LIFT (spends funds)
   topup                  Add pay-as-you-go AI balance with BCH or LIFT (spends funds)
+  settle_payment         Finish an external-wallet plan/topup payment (waits)
   auto_refill            Arm/disarm/inspect automatic refills (plans or pay-as-you-go)
   await_refill           Wait for armed auto-refill, then continue (no new spend)
 
@@ -859,6 +890,12 @@ Notes:
   - send, buy_plan, and topup spend real funds from the active wallet; the MCP
     host is responsible for asking the user for approval before invoking them.
     Media generation tools enforce approval in the server instead.
+  - buy_plan and topup accept pay_from="external": instead of spending from the
+    active wallet they return a payment request (BIP21 for BCH, PayPro-style
+    token URI for LIFT) and a pendingId. Show the URI to the user, let them pay
+    from another wallet, then call settle_payment with the pendingId. With LIFT,
+    the quoted token address belongs to this wallet; the deposit is swapped to
+    BCH and paid to the server automatically once it arrives.
   - get_credits reports a pay-as-you-go "balance_usd" alongside plan sessions.
     When the balance covers usage, no purchaseHint is returned: the model is
     already usable, so just continue the task.
@@ -1198,11 +1235,12 @@ export function registerTools(
     {
       title: 'Buy an AI plan',
       description:
-        'Purchase an AI plan for a model and duration, paying with BCH or LIFT via x402. SPENDS REAL FUNDS. The MCP host must obtain user approval before calling this.',
+        'Purchase an AI plan for a model and duration, paying with BCH or LIFT via x402. SPENDS REAL FUNDS. The MCP host must obtain user approval before calling this. Set pay_from="external" to get a payment request (BIP21/PayPro URI) for another wallet instead: the result includes a pendingId to pass to settle_payment after the user pays.',
       inputSchema: {
         model: z.string(),
         minutes: z.number().int().positive(),
         payment_method: z.enum(['bch', 'lift']).optional(),
+        pay_from: z.enum(['internal', 'external']).optional(),
         chipnet: z.boolean().optional(),
         backend: z.string().optional(),
       },
@@ -1213,8 +1251,23 @@ export function registerTools(
         openWorldHint: true,
       },
     },
-    async ({ model, minutes, payment_method, chipnet, backend }) => {
+    async ({ model, minutes, payment_method, pay_from, chipnet, backend }) => {
       try {
+        if (pay_from === 'external') {
+          const prepared = await preparePlanPayment({
+            model,
+            minutes,
+            paymentMethod: payment_method ?? 'bch',
+            payFrom: 'external',
+            isChipnet: cn(chipnet),
+            backendUrl: backend,
+            confirmed: true,
+          })
+          return json({
+            ...prepared,
+            next: externalPaymentNext('plan', prepared),
+          })
+        }
         return json(
           await buyPlan({
             model,
@@ -1236,10 +1289,11 @@ export function registerTools(
     {
       title: 'Top up AI balance',
       description:
-        'Add prepaid USD balance for pay-as-you-go AI usage, paying with BCH or LIFT via x402. This is an alternative to buying a model-locked plan: the balance is charged per prompt by actual usage and works across all models. SPENDS REAL FUNDS. The MCP host must obtain user approval before calling this.',
+        'Add prepaid USD balance for pay-as-you-go AI usage, paying with BCH or LIFT via x402. This is an alternative to buying a model-locked plan: the balance is charged per prompt by actual usage and works across all models. SPENDS REAL FUNDS. The MCP host must obtain user approval before calling this. Set pay_from="external" to get a payment request (BIP21/PayPro URI) for another wallet instead: the result includes a pendingId to pass to settle_payment after the user pays.',
       inputSchema: {
         amount_usd: z.number().positive().optional(),
         payment_method: z.enum(['bch', 'lift']).optional(),
+        pay_from: z.enum(['internal', 'external']).optional(),
         chipnet: z.boolean().optional(),
         backend: z.string().optional(),
       },
@@ -1250,8 +1304,22 @@ export function registerTools(
         openWorldHint: true,
       },
     },
-    async ({ amount_usd, payment_method, chipnet, backend }) => {
+    async ({ amount_usd, payment_method, pay_from, chipnet, backend }) => {
       try {
+        if (pay_from === 'external') {
+          const prepared = await prepareTopupPayment({
+            amountUsd: amount_usd,
+            paymentMethod: payment_method ?? 'bch',
+            payFrom: 'external',
+            isChipnet: cn(chipnet),
+            backendUrl: backend,
+            confirmed: true,
+          })
+          return json({
+            ...prepared,
+            next: externalPaymentNext('topup', prepared),
+          })
+        }
         return json(
           await topUpBalance({
             amountUsd: amount_usd,
@@ -1261,6 +1329,32 @@ export function registerTools(
             confirmed: true,
           })
         )
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'settle_payment',
+    {
+      title: 'Finish an external-wallet payment',
+      description:
+        'Wait for (and finish) a plan purchase or balance top-up that buy_plan/topup quoted with pay_from="external". Polls the network for the user\'s payment, then submits the x402 claim and returns the same result as an internal purchase. Pass the pendingId returned by buy_plan/topup. Blocks until the payment is detected or the quote expires.',
+      inputSchema: {
+        pending_id: z.string(),
+        kind: z.enum(['plan', 'topup']).optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({ pending_id, kind }) => {
+      try {
+        return json(await settleExternalPayment(pending_id, kind))
       } catch (err) {
         return fail(err)
       }

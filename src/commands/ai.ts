@@ -7,6 +7,7 @@
 
 import { Command } from 'commander'
 import chalk from 'chalk'
+import qrcode from 'qrcode-terminal'
 import readline from 'readline'
 import { WalletNotConfiguredError } from '../core/context.js'
 import { loadWalletRef } from '../wallet/index.js'
@@ -40,7 +41,15 @@ import {
   paygBalanceUsd,
   paygEnabled,
 } from '../ai/credits.js'
-import { buyPlan, topUpBalance, type PaymentMethod } from '../ai/purchase.js'
+import {
+  buyPlan,
+  topUpBalance,
+  type BuyPlanResult,
+  type ExternalPaymentDetails,
+  type PaymentMethod,
+  type PaymentSource,
+  type TopUpResult,
+} from '../ai/purchase.js'
 import {
   listImageModels,
   getImageHistory,
@@ -178,6 +187,127 @@ async function promptConfirmation(message: string): Promise<boolean> {
       resolve(answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes')
     })
   })
+}
+
+async function promptPaymentSource(): Promise<PaymentSource> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  })
+  return new Promise((resolve) => {
+    rl.question(
+      chalk.bold(
+        '\n   Pay from the internal wallet or an external wallet?\n   [i]nternal / e[x]ternal (i/x): '
+      ),
+      (answer) => {
+        rl.close()
+        const value = answer.trim().toLowerCase()
+        resolve(
+          value === 'x' || value === 'external' ? 'external' : 'internal'
+        )
+      }
+    )
+  })
+}
+
+async function resolvePaymentSource(
+  value: string | undefined,
+  json: boolean,
+  skipPrompt = false
+): Promise<PaymentSource | null> {
+  if (value !== undefined) {
+    if (value === 'internal' || value === 'external') return value
+    const message = '--pay-from must be "internal" or "external".'
+    if (json) outputJson({ error: message })
+    else console.log(chalk.red(`\nError: ${message}\n`))
+    process.exitCode = 1
+    return null
+  }
+  if (!json && !skipPrompt && process.stdin.isTTY) return promptPaymentSource()
+  return 'internal'
+}
+
+function formatCountdown(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.round(totalSeconds))
+  const minutes = Math.floor(seconds / 60)
+  return `${minutes}:${String(seconds % 60).padStart(2, '0')}`
+}
+
+function printExternalPayment(
+  details: ExternalPaymentDetails,
+  json: boolean
+): () => void {
+  const out = json ? process.stderr : process.stdout
+  const lines: string[] = ['']
+  lines.push(chalk.bold('   Pay from an external wallet'))
+  if (details.paymentMethod === 'lift') {
+    const decimals = details.tokenDecimals ?? 0
+    const amount =
+      Number(details.tokenAmount || 0) / Math.pow(10, decimals)
+    lines.push(
+      `   Amount:  ${amount.toLocaleString('en-US')} ${
+        details.tokenSymbol || 'LIFT'
+      }`
+    )
+    lines.push(`   Token:   ${details.tokenCategory}`)
+  } else {
+    lines.push(`   Amount:  ${(details.amountSats / 1e8).toFixed(8)} BCH`)
+  }
+  lines.push(`   Address: ${details.address}`)
+  lines.push(`   URI:     ${details.paymentUri}`)
+  if (!json) {
+    let qr = ''
+    qrcode.generate(details.paymentUri, { small: true }, (rendered: string) => {
+      qr = rendered
+    })
+    if (qr) {
+      lines.push('')
+      lines.push(
+        qr
+          .split('\n')
+          .map((line) => `   ${line}`)
+          .join('\n')
+      )
+    }
+  }
+  const live = !json && Boolean((out as NodeJS.WriteStream).isTTY)
+  if (!live) {
+    lines.push(
+      chalk.dim(
+        `   Quote expires in ${Math.max(
+          1,
+          Math.round(details.expiresInSeconds / 60)
+        )} min. Waiting for the payment...`
+      )
+    )
+  }
+  lines.push('')
+  out.write(`${lines.join('\n')}\n`)
+  if (!live) return () => {}
+
+  let remaining = Math.max(0, Math.round(details.expiresInSeconds))
+  let finished = false
+  const render = () => {
+    out.write(
+      `\r   ${chalk.dim(
+        `Waiting for payment... ${formatCountdown(remaining)} left`
+      )}\x1b[K`
+    )
+  }
+  const finish = () => {
+    if (finished) return
+    finished = true
+    clearInterval(timer)
+    out.write('\r\x1b[K\n')
+  }
+  const timer = setInterval(() => {
+    remaining -= 1
+    render()
+    if (remaining <= 0) finish()
+  }, 1000)
+  timer.unref?.()
+  render()
+  return finish
 }
 
 function promptSecret(message: string): Promise<string> {
@@ -909,6 +1039,10 @@ export function registerAiCommands(program: Command): void {
     .requiredOption('--model <model>', 'Model id or display name')
     .requiredOption('--minutes <minutes>', 'Plan duration in minutes')
     .option('--lift', 'Pay with LIFT tokens (discount) instead of BCH')
+    .option(
+      '--pay-from <source>',
+      'Pay from the internal wallet or an external wallet (internal|external)'
+    )
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .option('--backend <url>', 'Override backend URL')
     .option('-y, --yes', 'Skip confirmation prompt')
@@ -944,6 +1078,13 @@ export function registerAiCommands(program: Command): void {
         return
       }
 
+      const payFrom = await resolvePaymentSource(
+        opts.payFrom,
+        json,
+        Boolean(opts.yes)
+      )
+      if (!payFrom) return
+
       let discountPercent = 0
       if (paymentMethod === 'lift') {
         discountPercent = config.lift_payment_discount_percent ?? 0
@@ -953,16 +1094,18 @@ export function registerAiCommands(program: Command): void {
       const effectiveSats = rawSats - discountSats
 
       const confirmed =
-        Boolean(opts.yes) ||
-        (json
-          ? false
-          : await promptConfirmation(
-              `Buy ${tier.minutes}-minute plan for ${model.display_name || model.id} for ${
-                (effectiveSats / 1e8).toFixed(8)
-              } BCH${paymentMethod === 'lift' ? ' (paid with LIFT)' : ''}?`
-            ))
+        payFrom === 'external'
+          ? true
+          : Boolean(opts.yes) ||
+            (json
+              ? false
+              : await promptConfirmation(
+                  `Buy ${tier.minutes}-minute plan for ${model.display_name || model.id} for ${
+                    (effectiveSats / 1e8).toFixed(8)
+                  } BCH${paymentMethod === 'lift' ? ' (paid with LIFT)' : ''}?`
+                ))
 
-      if (json && !opts.yes) {
+      if (payFrom === 'internal' && json && !opts.yes) {
         outputJson({
           error: 'Payment not confirmed. Re-run with --yes to execute.',
           model: model.id,
@@ -970,6 +1113,7 @@ export function registerAiCommands(program: Command): void {
           minutes: tier.minutes,
           priceSats: effectiveSats,
           paymentMethod,
+          paymentSource: payFrom,
         })
         process.exitCode = 1
         return
@@ -982,14 +1126,27 @@ export function registerAiCommands(program: Command): void {
         return
       }
 
-      const result = await buyPlan({
-        model: model.id,
-        minutes: tier.minutes,
-        paymentMethod,
-        isChipnet: Boolean(opts.chipnet),
-        backendUrl: opts.backend,
-        confirmed: true,
-      })
+      let stopExternalDisplay: (() => void) | undefined
+      let result: BuyPlanResult
+      try {
+        result = await buyPlan({
+          model: model.id,
+          minutes: tier.minutes,
+          paymentMethod,
+          payFrom,
+          isChipnet: Boolean(opts.chipnet),
+          backendUrl: opts.backend,
+          confirmed: true,
+          onExternalPayment:
+            payFrom === 'external'
+              ? (details) => {
+                  stopExternalDisplay = printExternalPayment(details, json)
+                }
+              : undefined,
+        })
+      } finally {
+        stopExternalDisplay?.()
+      }
 
       if (json) {
         outputJson(result)
@@ -1022,6 +1179,10 @@ export function registerAiCommands(program: Command): void {
     .description('Add prepaid balance for pay-as-you-go AI usage (x402 payment with BCH or LIFT)')
     .option('--amount <usd>', 'Amount in USD to add (defaults to the smallest preset)')
     .option('--lift', 'Pay with LIFT tokens (discount) instead of BCH')
+    .option(
+      '--pay-from <source>',
+      'Pay from the internal wallet or an external wallet (internal|external)'
+    )
     .option('--chipnet', 'Use chipnet (testnet) instead of mainnet')
     .option('--backend <url>', 'Override backend URL')
     .option('-y, --yes', 'Skip confirmation prompt')
@@ -1041,9 +1202,17 @@ export function registerAiCommands(program: Command): void {
         return
       }
 
+      const payFrom = await resolvePaymentSource(
+        opts.payFrom,
+        json,
+        Boolean(opts.yes)
+      )
+      if (!payFrom) return
+
       const quote = await topUpBalance({
         amountUsd,
         paymentMethod,
+        payFrom,
         isChipnet: Boolean(opts.chipnet),
         backendUrl: opts.backend,
         confirmed: false,
@@ -1065,6 +1234,7 @@ export function registerAiCommands(program: Command): void {
           amountUsd: effectiveUsd,
           priceSats,
           paymentMethod,
+          paymentSource: payFrom,
           recipientAddress: quote.recipientAddress,
           topupPresets: quote.topupPresets,
           minTopupUsd: quote.minTopupUsd,
@@ -1074,32 +1244,26 @@ export function registerAiCommands(program: Command): void {
         return
       }
 
-      const confirmed =
-        Boolean(opts.yes) ||
-        (json
-          ? false
-          : await promptConfirmation(
-              `Add ${
-                effectiveUsd !== null ? `$${effectiveUsd}` : 'balance'
-              } to your Paytaca AI balance for ${(priceSats / 1e8).toFixed(8)} BCH${
-                paymentMethod === 'lift' ? ' (paid with LIFT)' : ''
-              }?`
-            ))
-
-      if (!confirmed) {
-        if (json) outputJson({ error: 'Payment rejected by user.' })
-        else console.log(chalk.dim('\n   Top-up cancelled.\n'))
-        process.exitCode = 1
-        return
+      let stopExternalDisplay: (() => void) | undefined
+      let result: TopUpResult
+      try {
+        result = await topUpBalance({
+          amountUsd,
+          paymentMethod,
+          payFrom,
+          isChipnet: Boolean(opts.chipnet),
+          backendUrl: opts.backend,
+          confirmed: true,
+          onExternalPayment:
+            payFrom === 'external'
+              ? (details) => {
+                  stopExternalDisplay = printExternalPayment(details, json)
+                }
+              : undefined,
+        })
+      } finally {
+        stopExternalDisplay?.()
       }
-
-      const result = await topUpBalance({
-        amountUsd,
-        paymentMethod,
-        isChipnet: Boolean(opts.chipnet),
-        backendUrl: opts.backend,
-        confirmed: true,
-      })
 
       if (json) {
         outputJson(result)

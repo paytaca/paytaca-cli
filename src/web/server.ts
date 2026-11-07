@@ -39,6 +39,9 @@ import {
 import {
   buyPlan,
   topUpBalance as executeTopupBalance,
+  preparePlanPayment,
+  prepareTopupPayment,
+  settleExternalPayment,
   type PaymentMethod,
 } from '../ai/purchase.js'
 import {
@@ -144,6 +147,17 @@ export interface WebDeps {
     amountUsd?: number
     method: string
   }): Promise<object>
+  preparePayment(opts: {
+    kind: 'plan' | 'topup'
+    model?: string
+    minutes?: number
+    amountUsd?: number
+    method: string
+  }): Promise<object>
+  settlePayment(
+    pendingId: string,
+    kind?: 'plan' | 'topup'
+  ): Promise<object>
   quoteLiftNeeded(opts: { sats: number }): Promise<object>
   setAutoRefill(opts: {
     enabled: boolean
@@ -439,6 +453,33 @@ function defaultDeps(isChipnet: boolean, backendUrl?: string): WebDeps {
         backendUrl,
         confirmed: true,
       })
+    },
+
+    async preparePayment(opts) {
+      const paymentMethod = (opts.method as PaymentMethod) || 'bch'
+      if (opts.kind === 'topup') {
+        return prepareTopupPayment({
+          amountUsd: opts.amountUsd,
+          paymentMethod,
+          payFrom: 'external',
+          isChipnet,
+          backendUrl,
+          confirmed: true,
+        })
+      }
+      return preparePlanPayment({
+        model: opts.model || '',
+        minutes: Number(opts.minutes),
+        paymentMethod,
+        payFrom: 'external',
+        isChipnet,
+        backendUrl,
+        confirmed: true,
+      })
+    },
+
+    async settlePayment(pendingId, kind) {
+      return settleExternalPayment(pendingId, kind)
     },
 
     async quoteLiftNeeded(opts) {
@@ -1125,6 +1166,57 @@ export async function startWebServer(
           }
         }
         const result = await deps.topUpBalance({ amountUsd, method })
+        return json(res, 200, result)
+      }
+
+      if (pathname === '/api/ai/payment/prepare' && req.method === 'POST') {
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
+        if (req.headers['content-type'] !== 'application/json') {
+          return json(res, 400, { error: 'Content-Type must be application/json' })
+        }
+        const body = await readBody(req)
+        const kind = body.kind === 'topup' ? 'topup' : body.kind === 'plan' ? 'plan' : null
+        if (!kind) return json(res, 400, { error: 'Kind must be "plan" or "topup"' })
+        const method = String(body.method || 'bch')
+        if (method !== 'bch' && method !== 'lift') {
+          return json(res, 400, { error: 'Method must be "bch" or "lift"' })
+        }
+        const model = String(body.model || '')
+        const minutes = Number(body.minutes)
+        if (kind === 'plan') {
+          if (!model) return json(res, 400, { error: 'Missing model' })
+          if (!Number.isFinite(minutes) || minutes <= 0) {
+            return json(res, 400, { error: 'Invalid minutes' })
+          }
+        }
+        let amountUsd: number | undefined
+        if (body.amount != null && body.amount !== '') {
+          amountUsd = Number(body.amount)
+          if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+            return json(res, 400, { error: 'Invalid amount' })
+          }
+        }
+        const result = await deps.preparePayment({
+          kind,
+          model: kind === 'plan' ? model : undefined,
+          minutes: kind === 'plan' ? minutes : undefined,
+          amountUsd,
+          method,
+        })
+        return json(res, 200, result)
+      }
+
+      if (pathname === '/api/ai/payment/settle' && req.method === 'POST') {
+        if (!checkAuth(req)) return json(res, 401, { error: 'Unauthorized' })
+        if (req.headers['content-type'] !== 'application/json') {
+          return json(res, 400, { error: 'Content-Type must be application/json' })
+        }
+        const body = await readBody(req)
+        const pendingId = String(body.pendingId || body.pending_id || '')
+        if (!pendingId) return json(res, 400, { error: 'Missing pendingId' })
+        const kind =
+          body.kind === 'topup' ? 'topup' : body.kind === 'plan' ? 'plan' : undefined
+        const result = await deps.settlePayment(pendingId, kind)
         return json(res, 200, result)
       }
 

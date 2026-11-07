@@ -77,6 +77,14 @@ function fakeDeps(): WebDeps {
     }),
     swapExecute: async () => ({ success: true, txid: 'swap123' }),
     purchasePlan: async () => ({ success: true, paid: true, txid: 'pay123' }),
+    preparePayment: async (opts) => ({
+      success: true, kind: opts.kind, paymentSource: 'external', pendingId: 'pending123',
+      external: {
+        paymentMethod: 'bch', address: 'bitcoincash:qq...', paymentUri: 'bitcoincash:qq...?amount=0.001',
+        amountSats: 100000, expiresInSeconds: 290,
+      },
+    }),
+    settlePayment: async () => ({ success: true, paid: true, txid: 'ext123' }),
     topUpBalance: async (opts) => ({
       success: true, paid: true, amountUsd: opts.amountUsd ?? 1, balanceUsd: 5, txid: 'top123',
     }),
